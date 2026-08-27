@@ -1,0 +1,118 @@
+# Development compose file.
+#
+# The volumes here are not a convenience -- they model the three-zone
+# separation the design depends on, so that a mistake in a contract or a
+# transform cannot reach across a boundary that would be enforced in
+# production by separate buckets, IAM roles and KMS keys.
+#
+#   quarantine  read-only to every service. Nothing writes back to a drop.
+#   tiers       written by the pipeline, read by analysts.
+#   vault       reachable ONLY by the pipeline service. Never by analysis.
+#
+# This file is for synthetic data. It uses a file-backed key, which the
+# runtime image otherwise refuses -- see DEIDKIT_REQUIRE_MANAGED_KEY below.
+# Do not point it at PHI.
+
+name: deidkit-dev
+
+x-common: &common
+  image: deidkit:0.1.0
+  build:
+    context: .
+    args:
+      EXTRAS: "[all]"
+  environment:
+    # Overrides the image default. Legitimate here because the data is
+    # fabricated; in any real deployment this stays at 1 and the key comes
+    # from a KMS or Key Vault URI.
+    DEIDKIT_REQUIRE_MANAGED_KEY: "0"
+    DEIDKIT_KEY_URI: "file:/vault/dev-vault.key"
+  working_dir: /app
+
+services:
+  # ------------------------------------------------------------------
+  # One-shot: fabricate a study into the quarantine zone.
+  # ------------------------------------------------------------------
+  seed:
+    <<: *common
+    entrypoint: ["python", "/app/scripts/make_synthetic_study.py"]
+    command: ["/data/quarantine/study_demo"]
+    volumes:
+      - quarantine:/data/quarantine
+
+  # ------------------------------------------------------------------
+  # One-shot: provision a development vault key.
+  # ------------------------------------------------------------------
+  keygen:
+    <<: *common
+    command: ["keygen", "--key-uri", "file:/vault/dev-vault.key"]
+    volumes:
+      - vault:/vault
+
+  # ------------------------------------------------------------------
+  # Draft a contract. Reads quarantine, writes only the contract.
+  # ------------------------------------------------------------------
+  profile:
+    <<: *common
+    command:
+      - profile
+      - /data/quarantine/study_demo
+      - -o
+      - /data/tiers/contract.draft.yaml
+      - --review
+      - /data/tiers/steward_review.csv
+    volumes:
+      - quarantine:/data/quarantine:ro
+      - tiers:/data/tiers
+
+  # ------------------------------------------------------------------
+  # The pipeline. The ONLY service mounting the vault.
+  # ------------------------------------------------------------------
+  pipeline:
+    <<: *common
+    command:
+      - run
+      - /data/quarantine/study_demo
+      - -c
+      - /data/tiers/contract.draft.yaml
+      - -o
+      - /data/tiers/deidentified
+      - --vault
+      - /vault/study_demo.db
+      - --operator
+      - compose-dev
+      - --format
+      - csv
+    volumes:
+      - quarantine:/data/quarantine:ro
+      - tiers:/data/tiers
+      - vault:/vault
+
+  # ------------------------------------------------------------------
+  # Verify the published tier. No vault, no quarantine write access.
+  # ------------------------------------------------------------------
+  selfcheck:
+    <<: *common
+    entrypoint: ["python", "/app/scripts/selfcheck.py"]
+    command:
+      - /data/quarantine/study_demo
+      - /data/tiers/deidentified
+    volumes:
+      - quarantine:/data/quarantine:ro
+      - tiers:/data/tiers:ro
+
+  # ------------------------------------------------------------------
+  # Stand-in for an analyst: tiers only. No vault. No quarantine.
+  # If this service can reach either, the isolation is broken.
+  # ------------------------------------------------------------------
+  analyst:
+    <<: *common
+    entrypoint: ["python"]
+    command: ["-c", "print('analyst shell -- tiers only, no vault, no quarantine')"]
+    volumes:
+      - tiers:/data/tiers:ro
+
+volumes:
+  quarantine:
+  tiers:
+  vault:

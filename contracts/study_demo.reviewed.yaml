@@ -1,0 +1,226 @@
+contract_version: 1.0.0
+source: TIG-2026-001
+tier: deidentified
+anchor:
+  domain: DM
+  subject_column: USUBJID
+  date_column: RFSTDTC
+  convention: day1
+risk:
+  domain: DM
+  k_target: 5
+  sensitive_columns:
+  - ARM
+  fail_on_target_miss: false
+  l_target: 2
+domains:
+- name: AE
+  subject_key: USUBJID
+  retained_in_full: true
+  fields:
+  - column: STUDYID
+    treatment: retain
+  - column: DOMAIN
+    treatment: retain
+  - column: USUBJID
+    treatment: surrogate_id
+    note: 'random surrogate, not derived from the original: EDC subject IDs encode
+      country, site and enrolment order'
+    entity: subject
+    prefix: SUBJ
+  - column: AESEQ
+    treatment: retain
+  - column: AETERM
+    treatment: screen_freetext
+    note: 'screened, not rewritten: candidates go to a review queue and unflagged
+      rows publish as received; required for regulatory review in this domain'
+  - column: AEDECOD
+    treatment: retain
+  - column: AEBODSYS
+    treatment: retain
+  - column: AESEV
+    treatment: retain
+  - column: AESER
+    treatment: retain
+  - column: AEREL
+    treatment: retain
+  - column: AEOUT
+    treatment: retain
+  - column: AEACN
+    treatment: retain
+  - column: AESTDTC
+    treatment: date_to_study_day
+    note: 'reparameterisation, not redaction: intervals preserved'
+  - column: AEENDTC
+    treatment: date_to_study_day
+    note: 'reparameterisation, not redaction: intervals preserved'
+  - column: AEENRF
+    treatment: retain
+    note: 'REVIEW: unrecognised column'
+- name: DM
+  subject_key: USUBJID
+  fields:
+  - column: STUDYID
+    treatment: retain
+  - column: DOMAIN
+    treatment: retain
+  - column: USUBJID
+    treatment: surrogate_id
+    note: 'random surrogate, not derived from the original: EDC subject IDs encode
+      country, site and enrolment order'
+    entity: subject
+    prefix: SUBJ
+  - column: SUBJID
+    treatment: drop
+    note: redundant with USUBJID, and encodes site and enrolment order
+  - column: SITEID
+    treatment: surrogate_id
+    note: 'steward: retained as QI. Site 017 has a single subject; see determination
+      for the accepted risk'
+    entity: site
+    prefix: SITE
+    is_quasi_identifier: true
+  - column: INVNAM
+    treatment: drop
+  - column: BRTHDTC
+    treatment: drop
+    note: AGE is already present in this domain, so the date of birth adds nothing
+      analytically and is a direct identifier
+  - column: AGE
+    treatment: generalize_numeric
+    note: 'steward: banded to 10-year intervals to lift k; exact age is not required
+      by the planned analyses'
+    cap: 90
+    is_quasi_identifier: true
+    bins:
+    - 18
+    - 30
+    - 40
+    - 50
+    - 60
+    - 70
+    - 80
+    - 90
+  - column: AGEU
+    treatment: retain
+  - column: SEX
+    treatment: retain
+    is_quasi_identifier: true
+  - column: RACE
+    treatment: pool_rare
+    is_quasi_identifier: true
+    min_count: 10
+    pooled_value: OTHER
+    note: 'steward: categories under 10 subjects pooled -- outside MH/AE, rare demographic
+      values are pure re-id risk'
+  - column: ETHNIC
+    treatment: retain
+    is_quasi_identifier: true
+  - column: COUNTRY
+    treatment: retain
+    is_quasi_identifier: false
+    note: 'steward: single-valued in this study; contributes nothing to k'
+  - column: SITEZIP
+    treatment: drop
+    is_quasi_identifier: false
+    note: 'steward: this is the SITE postcode, not the subject''s. Redundant with
+      SITEID and inflates the QI space for no analytic gain'
+  - column: ARM
+    treatment: retain
+    note: 'REVIEW: unrecognised column'
+  - column: RFSTDTC
+    treatment: date_to_study_day
+    note: the anchor itself; becomes Day 1 by construction
+  - column: RFENDTC
+    treatment: date_to_study_day
+    note: 'reparameterisation, not redaction: intervals preserved'
+  - column: SUBJPHONE
+    treatment: drop
+- name: LB
+  subject_key: USUBJID
+  fields:
+  - column: STUDYID
+    treatment: retain
+  - column: DOMAIN
+    treatment: retain
+  - column: USUBJID
+    treatment: surrogate_id
+    note: 'random surrogate, not derived from the original: EDC subject IDs encode
+      country, site and enrolment order'
+    entity: subject
+    prefix: SUBJ
+  - column: LBSEQ
+    treatment: retain
+  - column: LBTESTCD
+    treatment: retain
+  - column: LBTEST
+    treatment: retain
+  - column: LBORRES
+    treatment: retain
+  - column: LBORRESU
+    treatment: retain
+  - column: VISITNUM
+    treatment: retain
+    note: 'REVIEW: unrecognised column'
+  - column: LBDTC
+    treatment: date_to_study_day
+    note: 'reparameterisation, not redaction: intervals preserved'
+- name: MH
+  subject_key: USUBJID
+  retained_in_full: true
+  fields:
+  - column: STUDYID
+    treatment: retain
+  - column: DOMAIN
+    treatment: retain
+  - column: USUBJID
+    treatment: surrogate_id
+    note: 'random surrogate, not derived from the original: EDC subject IDs encode
+      country, site and enrolment order'
+    entity: subject
+    prefix: SUBJ
+  - column: MHSEQ
+    treatment: retain
+  - column: MHTERM
+    treatment: screen_freetext
+    note: 'screened, not rewritten: candidates go to a review queue and unflagged
+      rows publish as received; required for regulatory review in this domain'
+  - column: MHDECOD
+    treatment: retain
+  - column: MHBODSYS
+    treatment: retain
+  - column: MHSTDTC
+    treatment: partial_date_to_year_offset
+    note: 71% of values are partial dates; converted at the granularity actually held,
+      no day imputed
+  - column: MHONGO
+    treatment: retain
+- name: VS
+  subject_key: USUBJID
+  fields:
+  - column: STUDYID
+    treatment: retain
+  - column: DOMAIN
+    treatment: retain
+  - column: USUBJID
+    treatment: surrogate_id
+    note: 'random surrogate, not derived from the original: EDC subject IDs encode
+      country, site and enrolment order'
+    entity: subject
+    prefix: SUBJ
+  - column: VSSEQ
+    treatment: retain
+  - column: VSTESTCD
+    treatment: retain
+  - column: VSTEST
+    treatment: retain
+  - column: VSORRES
+    treatment: retain
+  - column: VSORRESU
+    treatment: retain
+  - column: VISITNUM
+    treatment: retain
+    note: 'REVIEW: unrecognised column'
+  - column: VSDTC
+    treatment: date_to_study_day
+    note: 'reparameterisation, not redaction: intervals preserved'

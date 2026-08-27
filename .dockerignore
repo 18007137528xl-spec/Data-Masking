@@ -1,0 +1,10 @@
+out/
+.venv/
+*.db
+*.key
+*.blob
+*.destroyed.json
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.git/
