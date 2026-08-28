@@ -97,6 +97,15 @@ AE_TERMS_WITH_PHI = [
     ("Seen in ER at Northside Clinic, discharged same day", "Emergency room visit", "General disorders"),
 ]
 
+# Verbatim naming the study treatment. Relabelling ARM does nothing about
+# these, and free text is where a language model memorises -- so this is the
+# blinding leak that actually matters for a training corpus.
+AE_TERMS_UNBLINDING = [
+    ("Rash 3 days after pembrolizumab infusion", "Rash", "Skin disorders"),
+    ("Fatigue, subject asked to skip next Pembrolizumab 200 mg Q3W dose",
+     "Fatigue", "General disorders"),
+]
+
 MH_TERMS = [
     ("Hypertension", "Hypertension"),
     ("Type 2 diabetes", "Type 2 diabetes mellitus"),
@@ -129,7 +138,7 @@ def main(outdir: str) -> None:
     out.mkdir(parents=True, exist_ok=True)
 
     study = "TIG-2026-001"
-    dm_rows, ae_rows, mh_rows, lb_rows, vs_rows, cm_rows = [], [], [], [], [], []
+    dm_rows, ae_rows, mh_rows, lb_rows, vs_rows, cm_rows, ex_rows = [], [], [], [], [], [], []
 
     for i in range(1, N_SUBJECTS + 1):
         site = rng.choices(SITES, weights=SITE_WEIGHTS, k=1)[0]
@@ -175,8 +184,11 @@ def main(outdir: str) -> None:
 
         # --- adverse events ------------------------------------------
         for seq in range(1, rng.randrange(1, 6)):
-            if rng.random() < 0.06:
+            r = rng.random()
+            if r < 0.06:
                 verbatim, decod, soc = rng.choice(AE_TERMS_WITH_PHI)
+            elif r < 0.10:
+                verbatim, decod, soc = rng.choice(AE_TERMS_UNBLINDING)
             else:
                 verbatim, decod, soc = rng.choice(AE_TERMS)
             start = enrol + timedelta(days=rng.randrange(1, 300))
@@ -266,6 +278,28 @@ def main(outdir: str) -> None:
                 }
             )
 
+        # --- exposure: dose and regimen give the arm away ------------
+        dose, freq = {
+            "Placebo": (0, "Q3W"),
+            "Pembrolizumab 200 mg Q3W": (200, "Q3W"),
+            "Pembrolizumab 400 mg Q6W": (400, "Q6W"),
+        }[arm]
+        for seq in range(1, 4):
+            ex_rows.append(
+                {
+                    "STUDYID": study,
+                    "DOMAIN": "EX",
+                    "USUBJID": usubjid,
+                    "EXSEQ": seq,
+                    "EXTRT": arm.split(" ")[0],
+                    "EXDOSE": dose,
+                    "EXDOSU": "mg",
+                    "EXDOSFRQ": freq,
+                    "EXROUTE": "INTRAVENOUS",
+                    "EXSTDTC": iso(enrol + timedelta(days=21 * (seq - 1))),
+                }
+            )
+
         # --- labs and vitals: the analytic payload -------------------
         for visit_day in (1, 29, 57, 85):
             vdate = enrol + timedelta(days=visit_day - 1)
@@ -306,6 +340,7 @@ def main(outdir: str) -> None:
         ("lb", lb_rows),
         ("vs", vs_rows),
         ("cm", cm_rows),
+        ("ex", ex_rows),
     ):
         frame = pd.DataFrame(rows)
         frame.to_csv(out / f"{name}.csv", index=False)

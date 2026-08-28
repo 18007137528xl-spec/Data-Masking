@@ -166,7 +166,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         json.dumps(result.manifest, indent=2, default=str), manifest_path
     )
 
-    queue_path = args.review or f"{str(args.out).rstrip('/')}/review_queue.csv"
+    # The queue holds the ORIGINAL text of every flagged row -- unredacted PHI,
+    # and in a blinded study the compound name. It must not sit in the
+    # directory analysts read, so it goes to a sibling by default.
+    out_dir = str(args.out).rstrip("/")
+    queue_path = args.review or f"{out_dir}_review/review_queue.csv"
     if not result.review_queue.empty:
         dio.write_text(result.review_queue.to_csv(index=False), queue_path)
 
@@ -182,6 +186,22 @@ def cmd_run(args: argparse.Namespace) -> int:
             "Set 'verdict' to PASS or REDACT,\nthen: deidkit adjudicate "
             f"{args.out} --queue {queue_path} --out <final-dir>"
         )
+        print(
+            "\nThe queue contains the ORIGINAL text of each flagged row, which is "
+            "what makes\nit reviewable and also means it is unredacted PHI. Keep "
+            "it under the vault's\naccess controls, not the published tier's, and "
+            "delete it once adjudicated."
+        )
+    if result.blinding_report and not result.blinding_report.held:
+        print()
+        print(result.blinding_report.summary())
+        print(
+            "\nThe relabelling cannot reach these. Adjudicate the free-text "
+            "findings, and decide\nexplicitly about dose and regimen columns -- "
+            "pooling them protects the blind but\ncosts exposure-response "
+            "analysis."
+        )
+
     if result.risk_report and not result.risk_report.k_met:
         print(
             "\nNOTE: the k target was not met. For a small trial this is normal. "

@@ -165,6 +165,9 @@ _RETAIN_SUFFIXES = (
 #: about. A wrong-but-plausible rationale is worse than "unrecognised".
 _SEQUENCE_SUFFIXES = ("SEQ", "SPID", "REFID", "GRPID")
 
+#: Dose and regimen separate the arms even when the arm is relabelled.
+from .blinding import DOSE_COLUMNS as _DOSE_COLUMNS  # noqa: E402
+
 #: Columns naming the treatment. Relabelling ARM while EXTRT still spells out
 #: the compound achieves nothing, so these move together.
 _TREATMENT_EXACT = {
@@ -287,6 +290,20 @@ def suggest(
     if up in _DROP_EXACT or _DROP_PATTERN.search(up):
         return Suggestion(
             rule(Treatment.DROP), "high", "direct identifier, no analytic value"
+        )
+
+    # --- dose and regimen give the arm away ------------------------------
+    if blind_treatment and up in _DOSE_COLUMNS:
+        return Suggestion(
+            rule(
+                Treatment.RETAIN,
+                note="REVIEW: unblinding risk. EXDOSE 200 against EXDOSE 400 "
+                "separates the arms perfectly, whatever ARM says. Retained by "
+                "default because pooling dose destroys exposure-response "
+                "analysis -- a steward has to decide which matters more here.",
+            ),
+            "low",
+            "dose/regimen: retained, but it unblinds",
         )
 
     # --- treatment naming ----------------------------------------------

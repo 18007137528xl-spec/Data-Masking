@@ -137,7 +137,19 @@ def check(raw_dir: str, pub_dir: str) -> tuple[list[str], list[str]]:
             passed.append("joins intact: every domain resolves into DM's surrogates")
 
     # --- 7. screening produced a queue and changed nothing ---------------
-    queue_path = pub / "review_queue.csv"
+    # The queue lives BESIDE the published tier, not inside it: it holds the
+    # original text of every flagged row, so it is unredacted PHI and belongs
+    # under the vault's access controls rather than the analysts'.
+    candidates = [
+        pub.parent / f"{pub.name}_review" / "review_queue.csv",
+        pub / "review_queue.csv",  # older layout
+    ]
+    queue_path = next((p for p in candidates if p.exists()), candidates[0])
+    if (pub / "review_queue.csv").exists():
+        problems.append(
+            "the review queue is inside the published tier; it holds original "
+            "unredacted text and must not sit where analysts read"
+        )
     ae_raw = read(raw, "ae", dtype=str)
     if queue_path.exists() and ae_raw is not None:
         q = pd.read_csv(queue_path)
