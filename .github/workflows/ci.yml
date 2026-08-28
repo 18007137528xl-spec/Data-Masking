@@ -105,6 +105,16 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      # The installer's native-command handling, pinned. See the test's header
+      # for why this exists.
+      - name: Test the native-command helper (pwsh 7)
+        shell: pwsh
+        run: .\tests\test_setup_helper.ps1
+
+      - name: Test the native-command helper (Windows PowerShell 5.1)
+        shell: powershell
+        run: .\tests\test_setup_helper.ps1
+
       # Through setup.bat with the POSIX-style flags the README documents,
       # not setup.ps1 directly. Calling the .ps1 straight through is what let
       # a flag-translation bug ship: the launcher passed --core to PowerShell,
@@ -115,13 +125,27 @@ jobs:
           .\setup.bat --core --skip-model
           if errorlevel 1 exit /b 1
 
-      - name: Native PowerShell switches still work
+      # setup.bat launches whatever `powershell.exe` resolves to, which on a
+      # real user's machine is Windows PowerShell 5.1 -- NOT the pwsh 7 that
+      # `shell: pwsh` gives us. 5.1 treats native stderr as a terminating
+      # error under 'Stop'; 7 does not. Running only under pwsh is how a
+      # 5.1-fatal bug passed CI green. This step pins the shell users have.
+      - name: Run setup.ps1 under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          Remove-Item -Recurse -Force .venv, out -ErrorAction SilentlyContinue
+          .\setup.ps1 -Core -SkipModel
+          if ($LASTEXITCODE -ne 0) {
+              throw "setup.ps1 exited with $LASTEXITCODE under Windows PowerShell 5.1"
+          }
+
+      - name: Run setup.ps1 under PowerShell 7
         shell: pwsh
         run: |
           Remove-Item -Recurse -Force .venv, out -ErrorAction SilentlyContinue
           .\setup.ps1 -Core -SkipModel
           if ($LASTEXITCODE -ne 0) {
-              throw "setup.ps1 exited with $LASTEXITCODE"
+              throw "setup.ps1 exited with $LASTEXITCODE under pwsh 7"
           }
 
       - name: Run the suite in the created venv
