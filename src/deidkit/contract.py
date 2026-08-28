@@ -155,10 +155,24 @@ class FieldRule(BaseModel):
         default=False,
         description="Include the OUTPUT column in the k-anonymity QI set.",
     )
+    redundant_with: str | None = Field(
+        default=None,
+        description="For a 'drop': the column in this domain that already "
+        "carries this one's analytic content. Real SDTM ships AESTDY beside "
+        "AESTDTC, so dropping the date loses nothing. Naming the survivor "
+        "turns 'this drop is harmless' into a claim the contract checks, and "
+        "lets a retained-in-full domain accept the drop without weakening what "
+        "that declaration means.",
+    )
 
     @model_validator(mode="after")
     def _check_params(self) -> FieldRule:
         t = self.treatment
+        if self.redundant_with and t is not Treatment.DROP:
+            raise ValueError(
+                f"{self.column}: 'redundant_with' only means anything on a "
+                f"drop, not on {t.value}"
+            )
         if t is Treatment.SURROGATE_ID and not self.entity:
             raise ValueError(f"{self.column}: surrogate_id requires 'entity'")
         if t is Treatment.FAKER and not self.faker_provider:
@@ -232,24 +246,48 @@ class DomainContract(BaseModel):
                 )
             outs[out] = f.column
 
+        # A drop that names a surviving column loses nothing -- but only if
+        # that column really is in this domain and really does survive.
+        for f in self.fields:
+            if not f.redundant_with:
+                continue
+            survivor = next(
+                (x for x in self.fields if x.column == f.redundant_with), None
+            )
+            if survivor is None:
+                raise ValueError(
+                    f"{self.name}.{f.column}: declared redundant with "
+                    f"{f.redundant_with!r}, which has no rule in this domain"
+                )
+            if survivor.treatment is Treatment.DROP:
+                raise ValueError(
+                    f"{self.name}.{f.column}: declared redundant with "
+                    f"{f.redundant_with!r}, but that column is dropped too -- "
+                    "the content survives nowhere"
+                )
+
         if self.retained_in_full:
             # A domain declared "retained in full" may only reparameterise dates,
             # screen text, or pass through. Any value-destroying treatment is a
-            # contradiction between the declaration and the rules.
+            # contradiction between the declaration and the rules -- except a
+            # drop whose content demonstrably survives in a named sibling.
             allowed = NON_MUTATING | {
                 Treatment.DATE_TO_STUDY_DAY,
                 Treatment.PARTIAL_DATE_TO_YEAR_OFFSET,
                 Treatment.SURROGATE_ID,
             }
             bad = [
-                f.column for f in self.fields if f.treatment not in allowed
+                f.column
+                for f in self.fields
+                if f.treatment not in allowed and not f.redundant_with
             ]
             if bad:
                 raise ValueError(
                     f"{self.name}: declared retained_in_full but these columns use "
                     f"value-destroying treatments: {sorted(bad)}. Either change the "
-                    f"treatments or drop the retained_in_full declaration -- an "
-                    f"accepted risk and an unhandled omission must not look alike."
+                    f"treatments, name the column the content survives in via "
+                    f"'redundant_with', or drop the retained_in_full declaration -- "
+                    f"an accepted risk and an unhandled omission must not look alike."
                 )
         return self
 
