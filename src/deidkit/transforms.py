@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Literal
+from typing import Literal, Sequence
 
 import numpy as np
 import pandas as pd
@@ -251,6 +251,42 @@ def surrogate(
     )
     return pd.Series(
         [None if pd.isna(v) else mapping[str(v)] for v in values],
+        index=values.index,
+        dtype="string",
+    )
+
+
+def label_map(
+    values: pd.Series,
+    vault: Vault,
+    *,
+    entity: str,
+    prefix: str = "TRT",
+    keep_values: Sequence[str] = (),
+) -> pd.Series:
+    """Map distinct values to stable neutral labels: ``TRT A``, ``TRT B``.
+
+    Not a privacy control -- a treatment arm identifies nobody. This is for
+    blinding and commercial confidentiality, and it is only worth anything
+    applied across every column that names the treatment, which is why the
+    mapping lives in one vault namespace rather than per column.
+
+    Assignment order is random, so the labels do not leak the arms' order in
+    the protocol, and it is held in the vault, so unblinding is possible and
+    reversal is logged like any other re-identification.
+    """
+    keep = {str(k) for k in keep_values}
+    subject_values = sorted(
+        {str(v) for v in values.dropna().unique() if str(v) not in keep}
+    )
+    mapping = vault.label_map(entity, subject_values, prefix=prefix)
+    return pd.Series(
+        [
+            None
+            if pd.isna(v)
+            else (str(v) if str(v) in keep else mapping[str(v)])
+            for v in values
+        ],
         index=values.index,
         dtype="string",
     )

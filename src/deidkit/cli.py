@@ -99,6 +99,7 @@ def cmd_profile(args: argparse.Namespace) -> int:
         anchor_date_column=args.anchor_date,
         k_target=args.k_target,
         sdtm_conformant=args.sdtm,
+        blind_treatment=args.blind_treatment,
     )
 
     table = prof.suggestion_table(suggestions)
@@ -339,6 +340,14 @@ def build_parser() -> argparse.ArgumentParser:
         "per-subject offset instead of being replaced by study days, so --DTC "
         "survives as a valid ISO date. Use this whenever the deliverable is "
         "SDTM rather than an analysis dataset.",
+    )
+    sp.add_argument(
+        "--blind-treatment",
+        action="store_true",
+        help="relabel treatment names to TRT A / TRT B across ARM, ARMCD, "
+        "ACTARM and EXTRT. For blinding and commercial confidentiality, not "
+        "privacy -- an arm identifies nobody. Reversible via the vault; "
+        "Placebo passes through.",
     )
     sp.set_defaults(func=cmd_profile)
 
