@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import freetext, io as dio, profile as prof, risk as risk_mod
+from . import freetext, io as dio, profile as prof, risk as risk_mod, textcheck
 from .contract import Contract
 from .pipeline import ContractMismatch, DeidPipeline
 from .vault import Vault, VaultError
@@ -267,6 +267,48 @@ def cmd_risk(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_textcheck(args: argparse.Namespace) -> int:
+    frames, _ = dio.load_study(args.directory)
+    profiles = textcheck.characterise_study(frames)
+    if not profiles:
+        return _err("no --TERM / --TRT columns found")
+
+    print("Is each text column verbatim, or already controlled vocabulary?")
+    print()
+    print(f"  {'column':<22} {'verdict':<11} evidence")
+    print("  " + "-" * 96)
+    for p in profiles:
+        print(p.line())
+    print()
+    for p in profiles:
+        print(f"{p.domain}.{p.column}  ->  {p.verdict}")
+        for r in p.reasons:
+            print(f"    - {r}")
+        print()
+
+    verbatim = [p for p in profiles if p.verdict in ("verbatim", "mixed")]
+    if verbatim:
+        print(
+            "Columns reading as verbatim need screening and adjudication before\n"
+            "they enter a training corpus: a human typed them, so a human may\n"
+            "have typed an identifier into them."
+        )
+    else:
+        print(
+            "Every column looks like controlled vocabulary. The value space is\n"
+            "closed and nobody typed prose into it, so the free-text concern\n"
+            "largely does not apply -- treat them as coded fields.\n"
+            "Rare terms remain quasi-identifiers either way."
+        )
+    if args.out:
+        import json
+        Path(args.out).write_text(
+            json.dumps([p.to_dict() for p in profiles], indent=2), encoding="utf-8"
+        )
+        print(f"\nwrote {args.out}")
+    return 0
+
+
 def cmd_vault(args: argparse.Namespace) -> int:
     try:
         vault = _open_vault(args)
@@ -401,6 +443,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--k-target", type=int)
     sp.add_argument("-o", "--out")
     sp.set_defaults(func=cmd_risk)
+
+    # textcheck
+    sp = sub.add_parser(
+        "textcheck",
+        help="is a --TERM column verbatim text or already controlled vocabulary?",
+    )
+    sp.add_argument("directory")
+    sp.add_argument("-o", "--out", help="write the measurements as JSON")
+    sp.set_defaults(func=cmd_textcheck)
 
     # vault
     sp = sub.add_parser("vault", help="inspect the crosswalk")
