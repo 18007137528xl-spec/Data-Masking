@@ -98,6 +98,7 @@ def cmd_profile(args: argparse.Namespace) -> int:
         anchor_domain=args.anchor_domain,
         anchor_date_column=args.anchor_date,
         k_target=args.k_target,
+        sdtm_conformant=args.sdtm,
     )
 
     table = prof.suggestion_table(suggestions)
@@ -106,6 +107,10 @@ def cmd_profile(args: argparse.Namespace) -> int:
     print(f"profiled {len(frames)} domain(s): {', '.join(sorted(frames))}")
     print(f"drafted {len(table)} column rules")
     print(f"anchor: {contract.anchor.domain}.{contract.anchor.date_column}")
+    if args.sdtm:
+        print("dates : shifted per subject (SDTM-conformant; --DTC retained)")
+    else:
+        print("dates : converted to study days (--DTC dropped; NOT SDTM-conformant)")
     retained = [d.name for d in contract.domains if d.retained_in_full]
     if retained:
         print(f"retained in full: {', '.join(retained)}")
@@ -327,6 +332,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--anchor-domain")
     sp.add_argument("--anchor-date")
     sp.add_argument("--k-target", type=int, default=5)
+    sp.add_argument(
+        "--sdtm",
+        action="store_true",
+        help="the output must be conformant SDTM. Dates are shifted by a "
+        "per-subject offset instead of being replaced by study days, so --DTC "
+        "survives as a valid ISO date. Use this whenever the deliverable is "
+        "SDTM rather than an analysis dataset.",
+    )
     sp.set_defaults(func=cmd_profile)
 
     # run

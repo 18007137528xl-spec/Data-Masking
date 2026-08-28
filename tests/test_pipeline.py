@@ -501,3 +501,73 @@ def test_sequence_keys_are_not_called_clinical_content():
     lie, which is worse for a reviewer than an honest 'unrecognised'."""
     _, suggestions = draft_contract(_realish_sdtm(), source="REALISH")
     assert "sequence key" in suggestions["AE"]["AESEQ"].rationale
+
+
+# ----------------------------------------------------------------------
+# SDTM-conformant output
+# ----------------------------------------------------------------------
+def test_sdtm_mode_keeps_dtc_and_shifts_it(tmp_path):
+    """--DTC is a required SDTM variable. Replacing it with a study day gives
+    a dataset that will not validate, so the SDTM mode shifts it instead."""
+    frames = _realish_sdtm()
+    contract, _ = draft_contract(frames, source="S", sdtm_conformant=True)
+
+    ae = contract.domain("AE")
+    for col in ("AESTDTC", "AEENDTC"):
+        assert ae.rule(col).treatment is Treatment.DATE_SHIFT
+    # the derived study days stay, and stay correct
+    assert ae.rule("AESTDY").treatment is Treatment.RETAIN
+    # the anchor shifts too -- that is what keeps --DY valid
+    assert contract.domain("DM").rule("RFSTDTC").treatment is Treatment.DATE_SHIFT
+
+    with Vault(tmp_path / "v.db", key=Vault.generate_key()) as vault:
+        out = DeidPipeline(contract, vault).run(frames)
+
+    before, after = frames["AE"], out.frames["AE"]
+    assert "AESTDTC" in after.columns, "SDTM mode must keep --DTC"
+
+    for b, a in zip(before["AESTDTC"], after["AESTDTC"]):
+        assert a != b, "dates must actually move"
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(a)), f"not an ISO date: {a}"
+
+    # intervals survive the shift
+    for bs, be, as_, ae_ in zip(
+        before["AESTDTC"], before["AEENDTC"], after["AESTDTC"], after["AEENDTC"]
+    ):
+        d = [parse_dtc(x).to_date() for x in (bs, be, as_, ae_)]
+        if all(d):
+            assert (d[1] - d[0]).days == (d[3] - d[2]).days
+
+
+def test_default_mode_is_flagged_as_non_conformant():
+    """The study-day default removes a required variable. That trade-off has
+    to be visible in the contract, not discovered by a validator later."""
+    contract, _ = draft_contract(_realish_sdtm(), source="S")
+    note = contract.domain("AE").rule("AESTDTC").note or ""
+    assert "non-conformant" in note.lower() or "sdtm_conformant" in note
+
+
+def test_conmed_verbatim_is_screened_not_treated_as_coded():
+    """CMTRT is investigator-typed, and after AETERM it is the free-text field
+    most likely to carry an identifier. CMDECOD is the coded counterpart."""
+    cm = pd.DataFrame(
+        {
+            "STUDYID": ["S"] * 2, "DOMAIN": ["CM"] * 2,
+            "USUBJID": ["S-01-001", "S-01-002"], "CMSEQ": [1, 2],
+            "CMTRT": ["Lisinopril", "Insulin, started by Dr. Halvorsen at Riverside Clinic"],
+            "CMDECOD": ["LISINOPRIL", "INSULIN GLARGINE"],
+            "CMDOSE": [10, 20], "CMROUTE": ["ORAL", "SUBCUTANEOUS"],
+        }
+    )
+    frames = _realish_sdtm() | {"CM": cm}
+    contract, _ = draft_contract(frames, source="S")
+    assert contract.domain("CM").rule("CMTRT").treatment is Treatment.SCREEN_FREETEXT
+    assert contract.domain("CM").rule("CMDECOD").treatment is Treatment.RETAIN
+
+
+def test_drug_names_are_not_masked():
+    """A treatment arm is the exposure under study: identical for everyone in
+    it, and identifying nobody. Masking it would destroy the analysis."""
+    frames = _realish_sdtm()
+    contract, _ = draft_contract(frames, source="S")
+    assert contract.domain("DM").rule("ARM").treatment is Treatment.RETAIN
