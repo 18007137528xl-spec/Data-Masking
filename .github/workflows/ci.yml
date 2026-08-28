@@ -105,9 +105,20 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Run setup.ps1
+      # Through setup.bat with the POSIX-style flags the README documents,
+      # not setup.ps1 directly. Calling the .ps1 straight through is what let
+      # a flag-translation bug ship: the launcher passed --core to PowerShell,
+      # which does not understand it, and CI never exercised that path.
+      - name: Run setup.bat with the documented flags
+        shell: cmd
+        run: |
+          .\setup.bat --core --skip-model
+          if errorlevel 1 exit /b 1
+
+      - name: Native PowerShell switches still work
         shell: pwsh
         run: |
+          Remove-Item -Recurse -Force .venv, out -ErrorAction SilentlyContinue
           .\setup.ps1 -Core -SkipModel
           if ($LASTEXITCODE -ne 0) {
               throw "setup.ps1 exited with $LASTEXITCODE"
