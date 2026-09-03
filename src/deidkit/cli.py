@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -101,6 +102,9 @@ def cmd_profile(args: argparse.Namespace) -> int:
         sdtm_conformant=args.sdtm,
         blind_treatment=args.blind_treatment,
         keep_dates=args.keep_dates,
+        raw_edc=args.raw,
+        join_key_template=args.offset_key,
+        subject_id_template=args.id_template,
     )
 
     table = prof.suggestion_table(suggestions)
@@ -109,7 +113,65 @@ def cmd_profile(args: argparse.Namespace) -> int:
     print(f"profiled {len(frames)} domain(s): {', '.join(sorted(frames))}")
     print(f"drafted {len(table)} column rules")
     print(f"anchor: {contract.anchor.domain}.{contract.anchor.date_column}")
-    if args.keep_dates:
+    if args.raw:
+        print(
+            "dates : shifted per subject, written format preserved "
+            "(raw side of a raw -> SDTM pair)"
+        )
+        if args.offset_key:
+            example = next(
+                (
+                    args.offset_key.format(
+                        **{
+                            c: str(frames[d][c].iloc[0])
+                            for c in re.findall(r"{(\w+)}", args.offset_key)
+                            if c in frames[d].columns
+                        }
+                    )
+                    for d in frames
+                    if all(
+                        c in frames[d].columns
+                        for c in re.findall(r"{(\w+)}", args.offset_key)
+                    )
+                    and len(frames[d])
+                ),
+                None,
+            )
+            print(f"offset key: {args.offset_key}")
+            if example:
+                print(
+                    f"        first row resolves to {example!r} -- this must be "
+                    "byte-identical to the key the SDTM side used"
+                )
+        else:
+            print(
+                "        NO --offset-key given: offsets are keyed on each "
+                "table's subject column as-is. Correct only if the raw and "
+                "SDTM sides spell the subject identifier identically."
+            )
+        unresolved = [
+            f"{d.name}.{f.column}"
+            for d in contract.domains
+            for f in d.fields
+            if f.treatment.value == "date_shift_raw"
+            and f.date_order is None
+            and "AMBIGUOUS" in (f.note or "")
+        ]
+        if unresolved:
+            print(
+                f"        {len(unresolved)} column(s) have an UNRESOLVED "
+                "day/month order and will halt the run until date_order is set:"
+            )
+            for c in unresolved:
+                print(f"          {c}")
+        keyless = [d.name for d in contract.domains if not d.subject_key]
+        if keyless:
+            print(
+                "        no subject key found in: "
+                f"{', '.join(keyless)} -- set subject_key in the contract, or "
+                "their dates cannot be shifted"
+            )
+    elif args.keep_dates:
         print("dates : retained as recorded -- tier forced to 'lds'")
     elif args.sdtm:
         print("dates : shifted per subject (SDTM-conformant; --DTC retained)")
@@ -415,6 +477,35 @@ def build_parser() -> argparse.ArgumentParser:
         "conversion. Forces tier: lds, because HIPAA enumerates dates as "
         "identifiers and only a Limited Data Set may carry them -- an LDS "
         "remains PHI, needs a DUA, and cannot feed a training corpus.",
+    )
+    sp.add_argument(
+        "--raw",
+        action="store_true",
+        help="this drop is raw EDC, the input side of a raw -> SDTM training "
+        "pair. Date columns are found by their values rather than a --DTC "
+        "suffix, and shifted with their written form intact (19/03/2025 stays "
+        "d/m/y) -- the conversion to ISO is what the model has to learn, so "
+        "normalising it here would delete the task. Point this and the SDTM "
+        "drop at the SAME vault: the offset is per subject, so both sides move "
+        "together and the mapping between them holds exactly.",
+    )
+    sp.add_argument(
+        "--offset-key",
+        help="how to build the date-offset key from each table's own columns, "
+        "e.g. 'TIG-2026-001-US-{SUBJECT}'. Needed when the two sides of a pair "
+        "identify subjects differently -- SDTM keys on USUBJID, a raw extract "
+        "usually holds only the site-subject number. Both sides must resolve "
+        "to the SAME string or they get unrelated offsets and the pair breaks "
+        "while both files still look correct.",
+    )
+    sp.add_argument(
+        "--id-template",
+        help="rebuild the subject identifier around its surrogate, e.g. "
+        "'{STUDYID}-US-{value}'. For the SDTM side of a pair: USUBJID really "
+        "is the study, the country and the raw subject number joined together, "
+        "and a derivation model should learn that. Without it both sides "
+        "publish the same bare surrogate and the corpus teaches "
+        "'USUBJID = SUBJECT', which is true of no real study.",
     )
     sp.add_argument(
         "--blind-treatment",

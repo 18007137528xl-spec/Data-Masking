@@ -20,14 +20,16 @@ rates, risk metrics achieved, input checksums, operator, timestamp.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
 
-from . import blinding, freetext, risk as risk_mod, transforms as tf
+from . import blinding, freetext, rawdates, risk as risk_mod, transforms as tf
 from .contract import (
+    NEEDS_ANCHOR,
     NEEDS_VAULT,
     Contract,
     DomainContract,
@@ -60,6 +62,10 @@ class DomainResult:
     treatments: dict[str, str] = field(default_factory=dict)
     pooled_categories: dict[str, list[str]] = field(default_factory=dict)
     unconverted_dates: dict[str, int] = field(default_factory=dict)
+    #: DATE_SHIFT_RAW: per-column report from the format-preserving shift.
+    #: Recorded in the manifest, because "how many raw dates went through
+    #: unshifted" is a privacy fact about the output, not a debug statistic.
+    raw_date_reports: dict[str, dict[str, object]] = field(default_factory=dict)
     retained_in_full: bool = False
 
 
@@ -152,11 +158,25 @@ class DeidPipeline:
     # ------------------------------------------------------------------
     def anchor_map(self, frames: dict[str, pd.DataFrame]) -> dict[str, str]:
         spec = self.contract.anchor
+        # An anchor is only required by the treatments that measure from it.
+        # A raw EDC extract has no RFSTDTC to be the reference start, and when
+        # every date is being shifted rather than converted to a study day,
+        # nothing reads the anchor -- so demanding one would block a run on a
+        # column it never touches.
+        needed = any(
+            f.treatment in NEEDS_ANCHOR
+            for d in self.contract.domains
+            for f in d.fields
+        )
         if spec.domain not in frames:
+            if not needed:
+                return {}
             raise MissingAnchor(f"anchor domain {spec.domain!r} not in data")
         src = frames[spec.domain]
         for col in (spec.subject_column, spec.date_column):
             if col not in src.columns:
+                if not needed:
+                    return {}
                 raise MissingAnchor(
                     f"anchor column {col!r} not in {spec.domain}"
                 )
@@ -180,6 +200,32 @@ class DeidPipeline:
             return frame[key].astype("string")
         return None
 
+    def _offset_key_series(
+        self, frame: pd.DataFrame, dom: DomainContract, subjects: pd.Series | None
+    ) -> pd.Series | None:
+        """The string each row's date offset is looked up under.
+
+        Normally the subject identifier itself. A domain with an
+        ``join_key_template`` builds it from its own columns instead, which
+        is how the raw side of a pair reaches the same vault entry as the SDTM
+        side despite holding a shorter identifier.
+        """
+        tmpl = dom.join_key_template
+        if not tmpl:
+            return subjects
+        needed = set(re.findall(r"{(\w+)}", tmpl))
+        missing = sorted(needed - set(map(str, frame.columns)))
+        if missing:
+            raise ContractMismatch(
+                f"{dom.name}: join_key_template {tmpl!r} references "
+                f"column(s) not in the data: {missing}. The offset key must be "
+                "built from columns this table actually has, or the two sides "
+                "of the pair will not meet in the vault."
+            )
+        return frame.apply(
+            lambda row: tmpl.format(**{c: str(row[c]) for c in needed}), axis=1
+        ).astype("string")
+
     def transform_domain(
         self,
         frame: pd.DataFrame,
@@ -195,6 +241,7 @@ class DeidPipeline:
         )
 
         subjects = self._subject_series(frame, dom)
+        offset_keys = self._offset_key_series(frame, dom, subjects)
         anchor_series = (
             subjects.map(lambda s: anchors.get(str(s)))
             if subjects is not None
@@ -209,7 +256,9 @@ class DeidPipeline:
                 result.treatments[rule.column] = "drop"
                 continue
 
-            self._apply_rule(rule, frame, out, subjects, anchor_series, result, dom)
+            self._apply_rule(
+                rule, frame, out, subjects, anchor_series, result, dom, offset_keys
+            )
 
         result.frame = out
         return result
@@ -223,6 +272,7 @@ class DeidPipeline:
         anchors: pd.Series,
         result: DomainResult,
         dom: DomainContract,
+        offset_keys: pd.Series | None = None,
     ) -> None:
         col = frame[rule.column]
         name = rule.resolved_output()
@@ -235,10 +285,20 @@ class DeidPipeline:
             out[name] = col
 
         elif t is Treatment.SURROGATE_ID:
+            entity = rule.entity or "subject"
+            # A subject surrogate follows the join key for the same reason the
+            # offset does: the two sides of a pair have to reach the same vault
+            # entry, or they publish unrelated identifiers for one person and
+            # no pair can be assembled from them.
+            lookup = (
+                offset_keys
+                if entity == "subject" and offset_keys is not None
+                else col
+            )
             out[name] = tf.surrogate(
-                col,
+                lookup,
                 self.vault,
-                entity=rule.entity or "subject",
+                entity=entity,
                 prefix=rule.prefix or "",
             )
 
@@ -271,9 +331,60 @@ class DeidPipeline:
                     f"{dom.name}.{rule.column}: date_shift needs the domain's "
                     "subject_key to be set"
                 )
-            out[name] = tf.shift_dates(
-                col, subjects, self.vault, entity=rule.entity or "subject"
+            shifted = tf.shift_dates(
+                col,
+                offset_keys if offset_keys is not None else subjects,
+                self.vault,
+                entity=rule.entity or "subject",
             )
+            out[name] = shifted
+            lost = int(shifted.isna().sum() - col.isna().sum())
+            if lost > 0:
+                # A value shift_dates could not read becomes null. Silent loss
+                # in a column the contract says is retained is worth recording.
+                result.unconverted_dates[rule.column] = lost
+
+        elif t is Treatment.DATE_SHIFT_RAW:
+            if subjects is None:
+                raise ContractMismatch(
+                    f"{dom.name}.{rule.column}: date_shift_raw needs the "
+                    "domain's subject_key to be set"
+                )
+            rawshift = rawdates.shift_preserving_format(
+                col,
+                offset_keys if offset_keys is not None else subjects,
+                self.vault,
+                entity=rule.entity or "subject",
+                order=rule.date_order,
+            )
+            shifted, report = rawshift.values, rawshift.report
+            leaked = int(report["passed_through"])  # type: ignore[arg-type]
+            if leaked and rule.on_unparsed == "fail":
+                samples = report["passed_through_samples"]
+                raise ContractMismatch(
+                    f"{dom.name}.{rule.column}: {leaked} value(s) were not "
+                    f"shifted and would be published as recorded: {samples}.\n"
+                    f"  formats seen : {report['formats']}\n"
+                    f"  day/month order: {report['order']}\n"
+                    "An unshifted value in a date column is a real date in the "
+                    "output, so this halts rather than warns. Fix the cause "
+                    "(declare date_order if the order is 'unknown', or extend "
+                    "the format list), or decide it explicitly on the rule: "
+                    "on_unparsed: redact to null them, on_unparsed: pass to "
+                    "publish them and record the count in the manifest."
+                )
+            if leaked and rule.on_unparsed == "redact":
+                shifted = shifted.mask(rawshift.passed_through)
+                report["redacted"] = leaked
+            out[name] = shifted
+            # The samples are original, unshifted date values. They belong in
+            # the halt message an operator reads, not in the manifest, which
+            # ships inside the published tier -- writing them there would put
+            # real dates in the one file whose whole job is to attest that
+            # none survived.
+            result.raw_date_reports[rule.column] = {
+                k: v for k, v in report.items() if k != "passed_through_samples"
+            }
 
         elif t is Treatment.ZIP3:
             out[name] = tf.zip3(col)
@@ -321,6 +432,29 @@ class DeidPipeline:
 
         else:  # pragma: no cover - Treatment is exhaustive
             raise ContractMismatch(f"unhandled treatment {t!r}")
+
+        if rule.output_template and name in out.columns:
+            tmpl = rule.output_template
+            cols = set(re.findall(r"{(\w+)}", tmpl)) - {"value"}
+            missing = sorted(cols - set(map(str, frame.columns)))
+            if missing:
+                raise ContractMismatch(
+                    f"{dom.name}.{rule.column}: output_template {tmpl!r} "
+                    f"references column(s) not in the data: {missing}"
+                )
+            treated = out[name]
+            out[name] = pd.Series(
+                [
+                    None
+                    if pd.isna(v)
+                    else tmpl.format(
+                        value=v, **{c: str(frame.at[idx, c]) for c in cols}
+                    )
+                    for idx, v in treated.items()
+                ],
+                index=treated.index,
+                dtype="string",
+            )
 
     # ------------------------------------------------------------------
     # blinding
@@ -479,6 +613,7 @@ class DeidPipeline:
                     "treatments": d.treatments,
                     "pooled_categories": d.pooled_categories,
                     "dates_unconverted": d.unconverted_dates,
+                    "raw_dates": d.raw_date_reports,
                     "output_columns": list(d.frame.columns),
                 }
                 for name, d in results.items()

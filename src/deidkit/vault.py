@@ -377,6 +377,28 @@ class Vault:
         )
         return offset
 
+    def known_offset_keys(
+        self, originals: Iterable[str], *, entity: str = "subject"
+    ) -> set[str]:
+        """Which of these keys already have an offset issued.
+
+        Asked before minting, so a caller can tell "this subject was seen when
+        the other side of the pair ran" from "this key is new". On a raw ->
+        SDTM pair that distinction is the whole ballgame: if the raw drop's
+        subject keys do not match the strings the SDTM drop used, every key is
+        new, both sides get unrelated offsets, and the pairing is broken while
+        every individual file still looks correct.
+        """
+        found: set[str] = set()
+        for o in originals:
+            row = self._db.execute(
+                "SELECT 1 FROM date_offset WHERE entity = ? AND lookup = ?",
+                (entity, self._lookup(entity, o)),
+            ).fetchone()
+            if row is not None:
+                found.add(o)
+        return found
+
     def offset_map(
         self, originals: Iterable[str], *, entity: str = "subject", **kw
     ) -> dict[str, int]:

@@ -77,6 +77,13 @@ jobs:
           print('manifest ok:', m['contract']['contract_version'])
           "
 
+      # The pair is a separate guarantee from the single-tier run: two
+      # directories can each be correctly de-identified while the mapping
+      # between them is broken, and nothing in either file shows it. This
+      # script checks the correspondence arithmetically and exits non-zero.
+      - name: Verify the raw -> SDTM pair still maps
+        run: .venv/bin/python scripts/demo_pair.py
+
       - name: Upload the run artefacts
         if: always()
         uses: actions/upload-artifact@v4
