@@ -12,6 +12,7 @@ halts the run. Unknown columns are never emitted.
 from __future__ import annotations
 
 from enum import Enum
+from pathlib import Path
 from typing import Any, Literal
 
 import yaml
@@ -466,6 +467,9 @@ class Contract(BaseModel):
         # Reorder so the decisions a human makes come first.
         order = ["contract_version", "source", "tier", "anchor", "risk", "domains"]
         data = {k: data[k] for k in order if k in data}
+        parent = Path(path).parent
+        if str(parent) not in ("", "."):
+            parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as fh:
             yaml.safe_dump(data, fh, sort_keys=False, allow_unicode=True)
 
