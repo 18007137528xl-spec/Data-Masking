@@ -90,6 +90,31 @@ def parse_dtc(value: object) -> ParsedDate:
     return ParsedDate(y, None, None, "year")
 
 
+def shift_partial(
+    year: int, month: int | None, offset: int
+) -> tuple[int, int | None]:
+    """Move a partial date by whole days, then truncate back to its own grain.
+
+    A partial date names an interval, not a day, so it cannot be moved by a
+    day count directly. It can be moved by shifting a representative point
+    inside that interval -- mid-month, mid-year -- and then discarding the
+    precision again, which is what this does. Nothing is invented: a
+    month-granularity value comes back month-granularity.
+
+    This is the single rule both date paths call, and it has to be, because on
+    a raw -> SDTM training pair the same underlying partial date arrives in two
+    different formats and must land on the same shifted value. If ``Mar-2025``
+    on the raw side and ``2025-03`` on the SDTM side moved by different rules,
+    every partial date in the corpus would teach the model a mapping that is
+    not true.
+    """
+    if month is None:
+        moved = date(year, 7, 1) + timedelta(days=offset)
+        return moved.year, None
+    moved = date(year, month, 15) + timedelta(days=offset)
+    return moved.year, moved.month
+
+
 def study_day(event: date, anchor: date, convention: str = "day1") -> int:
     """CDISC study day.
 
@@ -183,10 +208,12 @@ def shift_dates(
         d = p.to_date()
         off = offsets.get(str(subj))
         if d is None or off is None:
-            # Partial dates cannot be shifted by whole days without inventing
-            # precision; emit the year-only value moved by whole years instead.
+            # A partial date keeps its own granularity: shifted through a
+            # representative point and truncated back, so 2015-03 stays
+            # month-granularity instead of collapsing to a year.
             if p.year is not None and off is not None:
-                out.append(str(p.year + round(off / 365.25)))
+                y, mo = shift_partial(p.year, p.month, off)
+                out.append(f"{y:04d}-{mo:02d}" if mo else f"{y:04d}")
             else:
                 out.append(None)
         else:
