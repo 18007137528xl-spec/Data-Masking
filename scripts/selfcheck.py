@@ -43,8 +43,19 @@ def check(raw_dir: str, pub_dir: str) -> tuple[list[str], list[str]]:
                 return pd.read_parquet(p)
         return None
 
-    # --- 1. no absolute date survives anywhere --------------------------
-    leaked: list[str] = []
+    # --- 0. what did this run claim to be? ------------------------------
+    # The date check depends on the tier, so read it first. An LDS may carry
+    # full dates (164.514(e)); a de-identified tier may not.
+    manifest_path = pub / "manifest.json"
+    manifest: dict = {}
+    if manifest_path.exists():
+        import json
+
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    tier = manifest.get("tier", "deidentified")
+
+    # --- 1. dates match what the tier promises --------------------------
+    dated: list[str] = []
     checked = 0
     for dom in DOMAINS:
         frame = read(pub, dom, dtype=str)
@@ -54,11 +65,24 @@ def check(raw_dir: str, pub_dir: str) -> tuple[list[str], list[str]]:
         for col in frame.columns:
             joined = " ".join(frame[col].dropna().astype(str).head(400))
             if ISO_DATE.search(joined):
-                leaked.append(f"{dom.upper()}.{col}")
-    if leaked:
-        problems.append(f"absolute dates survived in {leaked}")
-    elif checked:
-        passed.append(f"no absolute dates survived any of {checked} domains")
+                dated.append(f"{dom.upper()}.{col}")
+
+    if tier == "lds":
+        if dated:
+            passed.append(
+                f"tier=lds: calendar dates retained in {len(dated)} column(s), "
+                "which is what an LDS is for -- and why it stays PHI"
+            )
+        elif checked:
+            problems.append(
+                "tier=lds but no calendar dates found; if the dates were "
+                "converted anyway, the tier should be 'deidentified'"
+            )
+    else:
+        if dated:
+            problems.append(f"tier={tier} but calendar dates survived in {dated}")
+        elif checked:
+            passed.append(f"no absolute dates survived any of {checked} domains")
 
     # --- 2. MH / AE clinical content byte-identical ---------------------
     modified: list[str] = []
@@ -164,12 +188,39 @@ def check(raw_dir: str, pub_dir: str) -> tuple[list[str], list[str]]:
     elif ae_raw is not None:
         problems.append("no review queue was produced; screening did not run")
 
-    # --- 8. manifest carries determination evidence ---------------------
-    manifest = pub / "manifest.json"
-    if manifest.exists():
-        import json
+    # --- 7b. treatment names masked, where blinding was asked for -------
+    terms = (manifest.get("blinding") or {}).get("terms_checked") or []
+    if terms:
+        import re as _re
 
-        m = json.loads(manifest.read_text(encoding="utf-8"))
+        arm_leaks: list[str] = []
+        for dom in ("dm", "ex"):
+            frame = read(pub, dom, dtype=str)
+            if frame is None:
+                continue
+            for col in ("ARM", "ACTARM", "ARMCD", "ACTARMCD", "EXTRT"):
+                if col not in frame.columns:
+                    continue
+                joined = " ".join(frame[col].dropna().astype(str).head(400))
+                for t in terms:
+                    if _re.search(r"\b" + _re.escape(t) + r"\b", joined, _re.I):
+                        arm_leaks.append(f"{dom.upper()}.{col}")
+                        break
+        if arm_leaks:
+            problems.append(
+                f"treatment columns still name the compound: {sorted(set(arm_leaks))}"
+            )
+        else:
+            held = (manifest.get("blinding") or {}).get("held")
+            note = "" if held else " (free text or dose columns still leak -- see the run output)"
+            passed.append(
+                f"treatment relabelled in every arm column, {len(terms)} term(s) "
+                f"checked{note}"
+            )
+
+    # --- 8. manifest carries determination evidence ---------------------
+    if manifest:
+        m = manifest
         required = [
             ("tier", m.get("tier")),
             ("contract version", m.get("contract", {}).get("contract_version")),

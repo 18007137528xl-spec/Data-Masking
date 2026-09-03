@@ -162,8 +162,12 @@ ok "removed the previous tier, review directory and draft contract"
 info "keeping .venv and out/dev-vault.key: both are reused on purpose"
 
 step "Profiling the drop and drafting a contract"
+# --keep-dates and --blind-treatment are the configuration this project
+# asked for: dates retained as recorded, treatment names relabelled. Dates
+# force tier: lds, which the run output states.
 "$VENV_PY" -m deidkit.cli profile out/quarantine/study_demo \
-    -o contracts/demo.yaml --review out/steward_review.csv 2>&1 | sed 's/^/         /'
+    -o contracts/demo.yaml --review out/steward_review.csv \
+    --keep-dates --blind-treatment 2>&1 | sed 's/^/         /'
 ok "contract draft at contracts/demo.yaml"
 
 step "Running the pipeline"
