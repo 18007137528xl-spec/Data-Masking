@@ -171,8 +171,13 @@ step "Profiling the drop and drafting a contract"
 ok "contract draft at contracts/demo.yaml"
 
 step "Running the pipeline"
+# --unreviewed: nobody has signed off this contract, and on real data the run
+# would refuse. The manifest records "reviewed": false so this output cannot be
+# mistaken for a published tier. The real path is:
+#   deidkit profile <dir> --decisions plan.csv   (fill in the decision column)
+#   deidkit approve plan.csv -c <draft> --data <dir> -o approved.yaml
 "$VENV_PY" -m deidkit.cli run out/quarantine/study_demo \
-    -c contracts/demo.yaml -o out/tier_deidentified \
+    -c contracts/demo.yaml -o out/tier_deidentified --unreviewed \
     --vault out/vault/demo.db --operator "${USER:-unknown}" --format csv 2>&1 |
     sed 's/^/         /'
 ok "published tier at out/tier_deidentified"

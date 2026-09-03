@@ -170,6 +170,7 @@ def main() -> int:
         "-o", str(OUT / "tier_sdtm"),
         "--vault", str(vault),
         "--operator", "demo",
+        "--unreviewed",   # synthetic data; the manifest records that nobody reviewed it
         "--format", "csv",
     )
     ok(f"{(OUT / 'tier_sdtm').relative_to(ROOT)}")
@@ -181,6 +182,7 @@ def main() -> int:
         "-o", str(OUT / "tier_raw"),
         "--vault", str(vault),
         "--operator", "demo",
+        "--unreviewed",   # synthetic data; the manifest records that nobody reviewed it
         "--format", "csv",
     )
     ok(f"{(OUT / 'tier_raw').relative_to(ROOT)}")

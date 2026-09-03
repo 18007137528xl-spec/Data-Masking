@@ -70,21 +70,31 @@ Optional extras and what you lose without them:
 # 0. one vault key, held in a KMS -- never beside the vault file
 export DEIDKIT_VAULT_KEY=$(deidkit keygen)
 
-# 1. profile a drop and draft a contract
+# 1. profile a drop; draft a contract and a decision sheet
 deidkit profile data/quarantine/study_abc \
+    -o contracts/study_abc.draft.yaml \
+    --decisions out/plan.csv
+
+# 2. a steward opens out/plan.csv and records a decision on EVERY row
+#      decision = OK      accept the proposed treatment
+#      decision = CHANGE  overrule it, and say what in decision_treatment
+#    Lowest confidence is at the top. A blank row blocks the run.
+
+# 3. sign it off: the CSV becomes a contract with a signature over these rules
+deidkit approve out/plan.csv \
+    -c contracts/study_abc.draft.yaml \
+    --data data/quarantine/study_abc \
     -o contracts/study_abc.yaml \
-    --review out/steward_review.csv
+    --approved-by xiaofeng.li@example.com
 
-# 2. a data steward reviews EVERY rule, then the contract is committed
-
-# 3. transform, screen, measure, publish
+# 4. transform, screen, measure, publish
 deidkit run data/quarantine/study_abc \
     -c contracts/study_abc.yaml \
     -o tiers/deidentified \
     --vault vault/study_abc.db \
     --operator xli
 
-# 4. adjudicate the free-text queue, then publish the final tier
+# 5. adjudicate the free-text queue, then publish the final tier
 deidkit adjudicate tiers/deidentified \
     --queue tiers/deidentified/review_queue.csv \
     -o tiers/deidentified_final
@@ -94,9 +104,90 @@ deidkit reverse SUBJ-8F3K2P --vault vault/study_abc.db \
     -j "SAE-2026-0031 expedited safety report"
 ```
 
-The profiler's output is a **draft**. Suggestions come from SDTM naming
-convention plus content heuristics, not from understanding your study. Rules it
-is unsure about are printed as low-confidence and must be reviewed.
+## Nothing runs until a steward signs it
+
+The profiler assigns a treatment to every column automatically, and those
+suggestions come from naming convention plus content heuristics — not from
+understanding your study. So a drafted contract is a machine's guess, and
+`deidkit run` refuses to execute one:
+
+```
+error: contracts/study_abc.draft.yaml has not been approved.
+```
+
+The round trip is a CSV, because that is what a steward can actually work in:
+
+| decision sheet (`plan.csv`) | |
+|---|---|
+| `proposed_treatment` / `proposed_params` | what the tool will do, and with which parameters |
+| `confidence` / `why` / `detail` | how sure it is, and on what basis |
+| **`decision`** | `OK` to accept, `CHANGE` to overrule — **blank blocks the run** |
+| **`decision_treatment`** / **`decision_params`** | what it should be instead (`cap=90`, `date_order=dmy`) |
+| **`steward_note`** | your reasoning; it is carried into the rule and the manifest |
+
+Rows are ordered lowest-confidence first. 55 rules do not deserve equal
+attention — the ones the profiler is unsure about are the ones a human can
+improve, so they are not scattered through three screens of correct guesses.
+
+Four things `approve` enforces:
+
+- **Coverage.** The sheet must describe this drop exactly — no missing rows, no
+  extra rows, no duplicates. With `--data` it is checked against the dataset
+  itself, which is the only way to catch a sheet approved against a different
+  extract.
+- **No blanks.** One unreviewed row out of 55 is still a refusal. A blank row
+  is a column nobody formed a view about, and an approval covering it would
+  make the manifest claim something untrue.
+- **The signature covers the rules, not the file.** A SHA-256 digest over every
+  rule and parameter is stored with the approval and re-checked on every load.
+  Edit one treatment afterwards and the contract stops loading — everywhere,
+  in every command.
+- **A steward can overrule the suggestion, not the invariants.** An override
+  goes through the same validators as anything else, so a de-identified tier
+  that retains dates is still refused — whoever asked for it.
+
+Everything is recorded in the manifest, including its absence:
+
+```json
+"review": {
+  "reviewed": true,
+  "approved_by": "xiaofeng.li@example.com",
+  "approved_at": "2026-09-03T17:40:37+00:00",
+  "rules_fingerprint": "sha256:b45bdf3a…",
+  "decisions_accepted": 53,
+  "decisions_changed": 2
+}
+```
+
+`--unreviewed` exists for synthetic data, development and CI. It runs, and the
+manifest records `"reviewed": false` — development convenience must never
+depend on a check being easy to forget.
+
+**The second drop of a study needs no CSV round trip.** The approved contract
+is committed and reused; schema drift halts the run because an undeclared
+column always does. When you do re-profile, `--carry-forward` pre-fills every
+decision that still matches, so only genuinely new or changed columns come
+back blank:
+
+```bash
+deidkit profile data/quarantine/study_abc_v2 \
+    -o contracts/v2.draft.yaml --decisions out/plan_v2.csv \
+    --carry-forward contracts/study_abc.yaml
+# carried 53 decision(s) forward; 2 still need one
+```
+
+**What this does not do.** It cannot stop someone dragging `OK` down the whole
+column. What it guarantees is that blanks block, that the approval names a
+person and is bound to exact rules, and that the sheet puts the rows worth
+thinking about at the top. Whether they were thought about is a process
+question, and no tool answers it.
+
+Two sheets, easily confused — different scope, different time:
+
+| | scope | when |
+|---|---|---|
+| `plan.csv` | per **column** — how to treat it | **before** the run |
+| `review_queue.csv` | per **row** — is this free text PHI | **after** the run |
 
 ## Training a model to derive SDTM from raw EDC
 
