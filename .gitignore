@@ -9,3 +9,10 @@ __pycache__/
 # control -- the real control is that these live outside the repo entirely.
 *.blob
 dev-vault.key
+
+# Contracts the installer and demos generate. Regenerated on every run, so a
+# committed copy is only ever stale -- and demo.approved.yaml carries a real
+# approval signature over synthetic rules, which is precisely the thing that
+# must not be sitting in a repo looking like someone's sign-off.
+contracts/demo.yaml
+contracts/demo.approved.yaml

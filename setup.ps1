@@ -305,12 +305,19 @@ Write-Step "Profiling the drop and drafting a contract"
 # forces tier: lds, which the run output states.
 $r = Invoke-Native $venvPython @('-m','deidkit.cli','profile','out\quarantine\study_demo',
     '-o','contracts\demo.yaml','--review','out\steward_review.csv',
+    '--decisions','out\plan.csv',
     '--keep-dates','--blind-treatment')
 $r.Output | ForEach-Object { Write-Info $_ }
 if (-not $r.Ok) { Write-Fail "profile failed"; exit 1 }
 Write-Ok "contract draft at contracts\demo.yaml"
+Write-Ok "decision sheet at out\plan.csv -- one row per column, open it"
 
-Write-Step "Running the pipeline"
+Write-Step "Running the pipeline -- WITHOUT a steward's approval"
+Write-Warn "nobody has signed off contracts\demo.yaml, so this runs with --unreviewed"
+Write-Info "An installer cannot stop and wait for a person, so it takes the escape"
+Write-Info "hatch. On real data 'deidkit run' REFUSES an unapproved contract, and the"
+Write-Info "manifest below records reviewed: false. The last section shows the two"
+Write-Info "commands that do the real round trip -- try them on this synthetic study."
 
 $operator = if ($env:USERNAME) { $env:USERNAME } else { 'unknown' }
 # --unreviewed: nobody has signed off this contract, and on real data the run
@@ -356,11 +363,29 @@ Write-Host "  Free-text detector : $detector"
 Write-Host "  Published tier     : out\tier_deidentified"
 Write-Host "  Manifest           : out\tier_deidentified\manifest.json"
 Write-Host "  Review queue       : out\tier_deidentified\review_queue.csv"
-Write-Host "  Steward sheet      : out\steward_review.csv"
+Write-Host "  Decision sheet     : out\plan.csv"
+Write-Host "  Reviewed           : NO -- this ran with --unreviewed" -ForegroundColor Yellow
 Write-Host ""
-Write-Host "  Next: open out\steward_review.csv. Every rule needs a steward's" -ForegroundColor DarkGray
-Write-Host "  confirmation before the contract is committed -- the suggestions" -ForegroundColor DarkGray
-Write-Host "  come from naming convention, not from understanding your study." -ForegroundColor DarkGray
+Write-Host "  The tier above is a demonstration, not a publishable output: no" -ForegroundColor DarkGray
+Write-Host "  steward approved the rules it used. To do it properly:" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "  1. open out\plan.csv -- one row per column, lowest confidence first"
+Write-Host "     put OK in the decision column to accept a proposal, or CHANGE"
+Write-Host "     plus a decision_treatment to overrule it."
+Write-Host "     A blank row blocks the run. That is the whole point."
+Write-Host ""
+Write-Host "  2. sign it off, and run again against the approved contract:"
+Write-Host ""
+Write-Host "     .venv\Scripts\python.exe -m deidkit.cli approve out\plan.csv ``" -ForegroundColor DarkGray
+Write-Host "         -c contracts\demo.yaml --data out\quarantine\study_demo ``" -ForegroundColor DarkGray
+Write-Host "         -o contracts\demo.approved.yaml --approved-by you@example.com" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "     .venv\Scripts\python.exe -m deidkit.cli run out\quarantine\study_demo ``" -ForegroundColor DarkGray
+Write-Host "         -c contracts\demo.approved.yaml -o out\tier_reviewed ``" -ForegroundColor DarkGray
+Write-Host "         --vault out\vault\demo.db --format csv" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "  The second command has no --unreviewed, and it will only work" -ForegroundColor DarkGray
+Write-Host "  because of the first." -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "  To use the tools directly in a new shell:" -ForegroundColor DarkGray
 Write-Host "    .venv\Scripts\Activate.ps1        (then: deidkit --help)" -ForegroundColor DarkGray
