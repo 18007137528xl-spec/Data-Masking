@@ -378,3 +378,47 @@ def test_an_approved_contract_runs_and_the_manifest_names_the_approver(
     assert manifest["review"]["reviewed"] is True
     assert manifest["review"]["approved_by"] == "steward@example.com"
     assert manifest["review"]["rules_fingerprint"].startswith("sha256:")
+
+
+# ----------------------------------------------------------------------
+# the treatment reference
+# ----------------------------------------------------------------------
+def test_every_treatment_is_documented():
+    """The reference and the enum cannot drift.
+
+    A steward who follows a reference that is missing a treatment, or that
+    lists one the code does not have, hits a failure the reference caused.
+    """
+    from deidkit.contract import Treatment
+    from deidkit.decisions import TREATMENT_HELP
+
+    assert {t.value for t in Treatment} == set(TREATMENT_HELP)
+
+
+def test_documented_requirements_match_the_validators():
+    """Each treatment's 'requires' list must be exactly what FieldRule
+    enforces -- documented-but-optional teaches a steward to omit something
+    that will be rejected, and the reverse hides a real requirement."""
+    from deidkit.contract import FieldRule, Treatment
+    from deidkit.decisions import TREATMENT_HELP
+
+    samples = {
+        "entity": "subject",
+        "faker_provider": "name",
+        "cap": 90,
+        "bins": [0.0, 50.0],
+        "min_count": 5,
+    }
+    for name, meta in TREATMENT_HELP.items():
+        required = set(meta["requires"])
+        # With everything it asks for, the rule must build.
+        FieldRule(
+            column="X",
+            treatment=Treatment(name),
+            **{k: samples[k] for k in required},
+        )
+        # With any one of them missing, it must not.
+        for drop in required:
+            kw = {k: samples[k] for k in required - {drop}}
+            with pytest.raises(Exception):
+                FieldRule(column="X", treatment=Treatment(name), **kw)
