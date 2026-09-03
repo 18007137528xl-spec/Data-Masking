@@ -473,3 +473,80 @@ def test_carry_forward_refuses_an_unapproved_source(drafted):
     _, contract, sheet = drafted
     with pytest.raises(dec.DecisionError, match="unapproved"):
         dec.carry_forward(sheet, contract)
+
+
+# ----------------------------------------------------------------------
+# the file is open in Excel
+# ----------------------------------------------------------------------
+def test_a_locked_output_is_refused_before_any_work(tmp_path, study, monkeypatch):
+    """The ordinary Windows failure, and the one the tool handles worst.
+
+    A steward is told to open the decision sheet, opens it in Excel, Excel
+    takes an exclusive lock, and the next run profiles every domain, prints a
+    summary ending in "contract draft written", and then dies in a pandas
+    traceback about errno 13. So this asserts three things: the command fails,
+    it fails with a message naming the actual cause, and it fails BEFORE
+    writing anything.
+    """
+    import builtins
+
+    from deidkit import cli
+
+    plan = tmp_path / "plan.csv"
+    plan.write_text("locked", encoding="utf-8")
+    contract_out = tmp_path / "draft.yaml"
+
+    real_open = builtins.open
+
+    def locked(file, *a, **kw):
+        if str(file) == str(plan):
+            raise PermissionError(13, "Permission denied")
+        return real_open(file, *a, **kw)
+
+    monkeypatch.setattr(builtins, "open", locked)
+
+    args = cli.build_parser().parse_args(
+        [
+            "profile",
+            str(study),
+            "-o",
+            str(contract_out),
+            "--decisions",
+            str(plan),
+        ]
+    )
+    rc = cli.cmd_profile(args)
+
+    assert rc == 1
+    assert not contract_out.exists(), "the draft was written despite the failure"
+
+
+def test_the_lock_message_names_excel(tmp_path, monkeypatch):
+    import builtins
+
+    from deidkit import cli
+
+    target = tmp_path / "plan.csv"
+    target.write_text("x", encoding="utf-8")
+    real_open = builtins.open
+
+    def locked(file, *a, **kw):
+        if str(file) == str(target):
+            raise PermissionError(13, "Permission denied")
+        return real_open(file, *a, **kw)
+
+    monkeypatch.setattr(builtins, "open", locked)
+
+    msg = cli._check_writable(str(target))
+    assert msg is not None
+    assert "Excel" in msg
+    assert "Nothing has been changed" in msg
+
+
+def test_a_writable_path_passes_and_leaves_nothing_behind(tmp_path):
+    from deidkit import cli
+
+    fresh = tmp_path / "sub" / "dir" / "plan.csv"
+    assert cli._check_writable(str(fresh)) is None
+    assert fresh.parent.is_dir(), "the parent should be created, ready to write"
+    assert not fresh.exists(), "a pre-flight check must not leave a stub file"
