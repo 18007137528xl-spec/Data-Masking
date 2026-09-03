@@ -79,6 +79,7 @@ deidkit profile data/quarantine/study_abc \
 #      decision = OK      accept the proposed treatment
 #      decision = CHANGE  overrule it, and say what in decision_treatment
 #    Lowest confidence is at the top. A blank row blocks the run.
+deidkit treatments        # what CHANGE may be set to, and what each needs
 
 # 3. sign it off: the CSV becomes a contract with a signature over these rules
 deidkit approve out/plan.csv \
@@ -165,15 +166,30 @@ depend on a check being easy to forget.
 
 **The second drop of a study needs no CSV round trip.** The approved contract
 is committed and reused; schema drift halts the run because an undeclared
-column always does. When you do re-profile, `--carry-forward` pre-fills every
-decision that still matches, so only genuinely new or changed columns come
-back blank:
+column always does.
+
+When you do re-profile, `--carry-forward` brings the standing decisions over:
+a proposal that matches what was approved comes back `OK`, a proposal the
+steward already overruled comes back `CHANGE` carrying that override, and only
+a column nobody has ever ruled on comes back blank. So what needs attention is
+exactly what is new:
 
 ```bash
-deidkit profile data/quarantine/study_abc_v2 \
-    -o contracts/v2.draft.yaml --decisions out/plan_v2.csv \
+deidkit profile data/quarantine/study_abc \
+    -o out/v2.draft.yaml --decisions out/plan_v2.csv \
     --carry-forward contracts/study_abc.yaml
-# carried 53 decision(s) forward; 2 still need one
+# carried 83 decision(s) forward from contracts/study_abc.yaml; 0 still need one
+```
+
+The four overrides from the run above come back as overrides, with both what
+the profiler proposed and what was decided visible side by side:
+
+```
+domain  column   proposed_treatment  decision_treatment  decision_params
+DM      AGE      cap_numeric         generalize_numeric  bins=0,18,40,65,90; is_quasi_identifier=True
+DM      RACE     retain              pool_rare           min_count=5
+DM      SITEZIP  zip3                drop
+EX      EXDOSE   retain              pool_rare           min_count=10
 ```
 
 **What this does not do.** It cannot stop someone dragging `OK` down the whole
@@ -252,23 +268,75 @@ python scripts/demo_pair.py
 
 ## Field treatments
 
-| Treatment | Use | Analytic cost |
-|---|---|---|
-| `retain` | Coded clinical content, measurements, MH/AE | None |
-| `drop` | Direct identifiers with no analytic value | None |
-| `surrogate_id` | Join keys — random, non-derived, vaulted | None; joins preserved |
-| `faker` | Direct identifiers whose column must persist | None |
-| `date_to_study_day` | All event dates | **None** — intervals preserved |
-| `partial_date_to_year_offset` | Frequently-partial dates (MH start) | None; no day imputed |
-| `dob_to_age` | Date of birth | Negligible |
-| `cap_numeric` | Age — exact below 90, one `90+` band above | Negligible |
-| `date_shift` | SDTM output, or where seasonality is analysed | Approximate |
-| `date_shift_raw` | The raw side of a raw → SDTM pair; keeps the written format | Approximate |
-| `zip3` | Postal geography, low-population prefixes suppressed | Low |
-| `generalize_numeric` | Band a quasi-identifier to lift *k* | Moderate |
-| `pool_rare` | Low-frequency categories **outside** MH/AE | Minor |
-| `screen_freetext` | Verbatim clinical text — **queue, no rewrite** | None |
-| `redact_freetext` | Available, not the default for verbatim | High |
+This is the vocabulary of `decision_treatment`: what a steward may write in the
+sheet to overrule a proposal. The same table is available at the terminal, and
+that copy is generated from the code, so it cannot drift:
+
+```bash
+deidkit treatments
+```
+
+**Requires** is enforced, not advisory — a rule missing one of these is
+rejected, and so is a parameter the treatment does not take.
+
+| Treatment | Use | Requires | Analytic cost |
+|---|---|---|---|
+| `retain` | Coded clinical content, measurements, MH/AE | — | None |
+| `drop` | Direct identifiers with no analytic value | — | Total, unless `redundant_with` names a surviving column |
+| `surrogate_id` | Join keys — random, non-derived, vaulted | `entity` | None; joins and reversibility preserved |
+| `faker` | Direct identifiers whose column must persist | `faker_provider` | The real value is **not recoverable** — unlike `surrogate_id`, nothing is written to the vault |
+| `date_to_study_day` | All event dates | — | **None** for intervals; the calendar goes, and so does `--DTC` |
+| `partial_date_to_year_offset` | Frequently-partial dates (MH start) | — | Low; no day imputed |
+| `dob_to_age` | Date of birth | — (`cap` defaults to 90) | Negligible |
+| `date_shift` | SDTM output, or where seasonality is analysed | `entity` | Approximate; `--DTC` stays valid |
+| `date_shift_raw` | The raw side of a raw → SDTM pair; keeps the written format | `entity` | Approximate |
+| `cap_numeric` | Age — exact below the cap, one band above | `cap` | Negligible; only the tail loses precision |
+| `generalize_numeric` | Band a quasi-identifier to lift *k* | `bins` | Moderate; every value loses precision |
+| `zip3` | Postal geography, low-population prefixes suppressed | — | Low |
+| `pool_rare` | Low-frequency categories **outside** MH/AE | `min_count` | Minor overall, total for the rare categories |
+| `label_map` | Treatment arms → `TRT A` / `TRT B`, reversible | `entity` | None analytically — this is blinding, not privacy |
+| `screen_freetext` | Verbatim clinical text — **queue, no rewrite** | — | None — and note it publishes every value as received; the protection is the adjudication step |
+| `redact_freetext` | Available, not the default for verbatim | — | High — destroys content regulatory review needs |
+
+### decision_params
+
+`key=value`, separated by `;`, in one spreadsheet cell:
+
+```
+cap=90                     one band at 90 and above
+bins=0,18,40,65,90         band edges for generalize_numeric
+min_count=5                pool_rare threshold
+entity=subject             which surrogate namespace
+keep_values=Placebo        label_map: pass these through unchanged
+date_order=dmy             date_shift_raw: 03/04/2025 is 3 April
+on_unparsed=redact         date_shift_raw: null what will not parse
+redundant_with=AESTDY      drop: the column the content survives in
+is_quasi_identifier=true   count this column in the k measurement
+```
+
+A worked override, and one that is correctly refused:
+
+```
+DM.AGE     CHANGE  generalize_numeric  bins=0,18,40,65,90  ->  AGE becomes 18-39 / 40-64 / 65-89
+DM.SITEZIP CHANGE  drop                                    ->  column gone
+AE.AETERM  CHANGE  redact_freetext                         ->  REFUSED
+```
+
+```
+the decisions do not make a valid contract.
+  domains: AE: declared retained_in_full but these columns use
+  value-destroying treatments: ['AETERM'] ...
+A steward can overrule a suggestion, but not the checks.
+```
+
+`AE` is a domain retained in full by decision, so a value-destroying treatment
+inside it is a contradiction between the declaration and the rules. The
+override is refused whoever asks — which is the declaration doing its job.
+
+**A rule applied is not the same as data changed.** Both `pool_rare` overrides
+above ran and pooled nothing: with 120 subjects every category was already
+above the threshold. What actually happened is in the manifest's
+`pooled_categories`, not in the contract.
 
 ## What the contract enforces
 
