@@ -619,6 +619,10 @@ class DeidPipeline:
                 for name, d in results.items()
             },
             "freetext_screening": screen_summary,
+            # Counts and the distribution, not the quasi-identifier values of
+            # the most exposed subjects: the manifest travels, and away from
+            # the data those values are a list of who is easiest to
+            # re-identify. The steward copy beside the review queue has them.
             "risk": report.to_dict() if report else None,
             "notes": [
                 "Surrogate identifiers are randomly generated, not derived from "

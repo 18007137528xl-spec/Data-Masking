@@ -8,6 +8,7 @@ reproduce, and reverse lookups are always logged.
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
@@ -832,3 +833,34 @@ def test_arm_and_product_columns_get_separate_label_namespaces(tmp_path):
     # two arms, one compound: the labels no longer imply a third arm
     assert len(arms - {"Placebo"}) == 2
     assert len(prods - {"Placebo"}) == 1
+
+
+# ----------------------------------------------------------------------
+# what the manifest may say about the most exposed subjects
+# ----------------------------------------------------------------------
+def test_the_manifest_reports_exposure_without_naming_the_exposed(result):
+    """The manifest is the artifact that travels.
+
+    It gets attached to a determination, pasted into a ticket, mailed to a
+    reviewer. The quasi-identifier values of the smallest equivalence classes
+    are already in the published table, so this is not about secrecy -- it is
+    that away from the data, a ranked list of who is unique on the QI set is a
+    targeting aid living in the one file whose purpose is to attest the release
+    is safe. Counts and the distribution say everything a determination needs.
+    """
+    risk = result.manifest["risk"]
+    assert "smallest_classes" not in risk
+    assert "class_size_histogram" in risk
+    assert risk["n_classes_below_k"] >= 0
+    # nothing anywhere in the risk block should be a QI value
+    blob = json.dumps(risk)
+    for value in ("WHITE", "NOT HISPANIC OR LATINO", "SITE-"):
+        assert value not in blob, f"{value!r} leaked into the manifest risk block"
+
+
+def test_the_steward_copy_keeps_the_values(result):
+    """The same report, asked for explicitly, still carries what a human needs
+    to decide what to generalise."""
+    detail = result.risk_report.to_dict(include_class_values=True)
+    assert detail["smallest_classes"]
+    assert "values" in detail["smallest_classes"][0]

@@ -12,6 +12,7 @@ install at real data.
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -174,6 +175,31 @@ def check(raw_dir: str, pub_dir: str) -> tuple[list[str], list[str]]:
             "the review queue is inside the published tier; it holds original "
             "unredacted text and must not sit where analysts read"
         )
+    if (pub / "risk_detail.json").exists():
+        problems.append(
+            "the risk detail is inside the published tier; it lists the "
+            "quasi-identifier values of the most exposed subjects, which is a "
+            "targeting aid and belongs beside the review queue"
+        )
+
+    # --- 7b. the manifest must not carry the exposed subjects' QI values ----
+    # The manifest is the artifact that travels: attached to a determination,
+    # pasted into a ticket, mailed to a reviewer. Away from the data, a ranked
+    # list of who is unique on the quasi-identifier set is exactly what an
+    # attacker would want and the opposite of what the manifest is for.
+    mf = pub / "manifest.json"
+    if mf.exists():
+        risk = json.loads(mf.read_text(encoding="utf-8")).get("risk") or {}
+        if "smallest_classes" in risk:
+            problems.append(
+                "the manifest carries smallest_classes with quasi-identifier "
+                "values; it should carry the distribution and counts only"
+            )
+        elif risk:
+            passed.append(
+                f"manifest risk is counts only: {risk.get('n_classes_below_k')} "
+                f"class(es) below k, values held in the review sibling"
+            )
     ae_raw = read(raw, "ae", dtype=str)
     if queue_path.exists() and ae_raw is not None:
         q = pd.read_csv(queue_path)

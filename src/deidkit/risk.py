@@ -69,7 +69,37 @@ class RiskReport:
     answer for a small trial.
     """
 
-    def to_dict(self) -> dict[str, object]:
+    def class_size_histogram(self) -> dict[str, int]:
+        """How many equivalence classes there are at each size.
+
+        The distribution answers what the manifest needs to attest -- how
+        concentrated the exposure is -- without naming who is in the exposed
+        classes.
+        """
+        hist: dict[str, int] = {}
+        for c in self.smallest_classes:
+            key = str(c["size"])
+            hist[key] = hist.get(key, 0) + 1
+        return dict(sorted(hist.items(), key=lambda kv: int(kv[0])))
+
+    def to_dict(self, *, include_class_values: bool = False) -> dict[str, object]:
+        """Serialise for the manifest.
+
+        ``smallest_classes`` carries the quasi-identifier VALUES of the most
+        exposed subjects -- the exact combinations that make one person unique
+        in this release. That belongs in a steward's working copy, and not in
+        the manifest, for a reason that has nothing to do with the values being
+        secret: they are already in the published table beside it. It is that
+        the manifest is the artifact that travels. It gets attached to a
+        determination, pasted into a ticket, mailed to a reviewer -- and once
+        it is away from the data it is a ranked list of who is easiest to
+        re-identify, in a file whose whole purpose is to attest that the
+        release is safe.
+
+        So the default is the distribution and the counts. Pass
+        ``include_class_values=True`` for the steward copy, which is written
+        beside the review queue and inherits its access controls.
+        """
         d = {
             "domain": self.domain,
             "quasi_identifiers": self.quasi_identifiers,
@@ -82,10 +112,15 @@ class RiskReport:
             "fraction_below_k": self.fraction_below_k,
             "prosecutor_risk_max": self.prosecutor_risk_max,
             "marketer_risk_mean": self.marketer_risk_mean,
-            "smallest_classes": self.smallest_classes,
+            "class_size_histogram": self.class_size_histogram(),
+            "n_classes_below_k": sum(
+                1 for c in self.smallest_classes if int(c["size"]) < self.k_target
+            ),
             "blocking_quasi_identifiers": self.blocking,
             "reduction_path": self.reduction_path,
         }
+        if include_class_values:
+            d["smallest_classes"] = self.smallest_classes
         if self.l_target is not None:
             d |= {
                 "l_min": self.l_min,
