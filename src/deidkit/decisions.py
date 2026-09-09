@@ -90,11 +90,15 @@ SETTABLE = (
     "date_order",
     "on_unparsed",
     "redundant_with",
+    "screen_policy",
 )
 
 _INT_PARAMS = {"cap", "min_count"}
 _BOOL_PARAMS = {"is_quasi_identifier", "is_date"}
 _LIST_PARAMS = {"bins", "keep_values"}
+#: Written as PERSON:redact|DATE_IN_TEXT:pass -- one cell, no nested commas
+#: fighting the CSV.
+_MAP_PARAMS = {"screen_policy"}
 
 
 #: What a steward can write in ``decision_treatment``, and what each one needs.
@@ -195,7 +199,7 @@ TREATMENT_HELP: dict[str, dict[str, object]] = {
     "screen_freetext": {
         "does": "detect PHI candidates into a review queue; DATA UNCHANGED",
         "requires": (),
-        "optional": (),
+        "optional": ("screen_policy",),
         "cost": "none -- and note that it publishes every value as received; "
         "the protection is the adjudication step, not this rule",
     },
@@ -240,6 +244,12 @@ def treatment_reference() -> str:
         "  date_order=dmy             date_shift_raw: 03/04/2025 is 3 April",
         "  on_unparsed=redact         date_shift_raw: null what will not parse",
         "  redundant_with=AESTDY      drop: the column the content survives in",
+        "  screen_policy=PERSON:redact|DATE_IN_TEXT:pass",
+        "                             screen_freetext: per-entity-type policy;",
+        "                             pass, redact or queue. The default passes",
+        "                             what is not PHI, redacts identifiers with",
+        "                             no clinical reading, and escalates names,",
+        "                             facilities and in-text dates to a person.",
         "  is_quasi_identifier=true   count this column in the k measurement",
         "",
         "A parameter the treatment does not take is rejected by name, and a",
@@ -306,6 +316,11 @@ def encode_params(rule: FieldRule) -> str:
             continue
         if key == "on_unparsed" and value == "fail":
             continue
+        if isinstance(value, dict):
+            bits.append(
+                f"{key}=" + "|".join(f"{k}:{v}" for k, v in sorted(value.items()))
+            )
+            continue
         if isinstance(value, list):
             # 0,18,40 rather than 0.0,18.0,40.0 -- band edges are read by a
             # person in a spreadsheet cell, and both parse back the same.
@@ -346,6 +361,20 @@ def decode_params(text: str, *, where: str) -> dict[str, Any]:
                 out[key] = int(raw)
             elif key in _BOOL_PARAMS:
                 out[key] = raw.strip().lower() in {"true", "yes", "y", "1"}
+            elif key in _MAP_PARAMS:
+                mapping: dict[str, str] = {}
+                for pair in raw.split("|"):
+                    if not pair.strip():
+                        continue
+                    ent, _, action = pair.partition(":")
+                    if not action:
+                        raise DecisionError(
+                            f"{where}: screen_policy {pair!r} -- write it as "
+                            "ENTITY:action, joined with '|', e.g. "
+                            "'PERSON:redact|DATE_IN_TEXT:pass'"
+                        )
+                    mapping[ent.strip().upper()] = action.strip().lower()
+                out[key] = mapping
             elif key in _LIST_PARAMS:
                 parts = [p.strip() for p in raw.split(",") if p.strip()]
                 out[key] = [float(p) for p in parts] if key == "bins" else parts
@@ -674,6 +703,7 @@ def apply_sheet(
                 approved_by=approved_by,
                 approved_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 rules_fingerprint=approved.rules_digest(),
+                digest_scheme=approved.DIGEST_SCHEME,
                 decisions_accepted=accepted,
                 decisions_changed=changed,
                 plan_file=Path(plan_file).name if plan_file else None,

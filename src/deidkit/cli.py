@@ -549,10 +549,25 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"  wrote review queue -> {queue_path}")
     if risk_detail_path:
         print(f"  wrote risk detail  -> {risk_detail_path}")
+        pol = (result.manifest.get("freetext_screening") or {}).get("policy") or {}
+        needs = int(pol.get("needs_human", len(result.review_queue)))
+        decided = len(result.review_queue) - needs
         print(
-            f"\n{len(result.review_queue)} free-text row(s) need adjudication. "
-            "Set 'verdict' to PASS or REDACT,\nthen: deidkit adjudicate "
-            f"{args.out} --queue {queue_path} --out <final-dir>"
+            f"\nfree-text queue: {len(result.review_queue)} flagged row(s), "
+            f"{needs} need a person."
+        )
+        if decided:
+            print(
+                f"  {decided} were settled by policy "
+                f"(auto-pass {pol.get('auto_pass', 0)}, "
+                f"auto-redact {pol.get('auto_redact', 0)}) and are pre-filled "
+                "with a verdict\n  you can overrule. The rows needing judgment "
+                "are at the TOP of the sheet."
+            )
+        print(
+            "Set 'verdict' to PASS or REDACT on the blank rows, then:\n"
+            f"  deidkit adjudicate {args.out} --queue {queue_path} "
+            "--out <final-dir>"
         )
         print(
             "\nThe queue contains the ORIGINAL text of each flagged row, which is "
