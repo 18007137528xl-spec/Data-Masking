@@ -165,12 +165,39 @@ step "Profiling the drop and drafting a contract"
 # --keep-dates and --blind-treatment are the configuration this project
 # asked for: dates retained as recorded, treatment names relabelled. Dates
 # force tier: lds, which the run output states.
+# If a decision sheet already carries decisions, someone has reviewed it, and
+# re-profiling would overwrite an afternoon's work that exists in exactly one
+# place. So the sheet is left alone and only the draft is refreshed.
+FILLED=0
+if [ -f out/plan.csv ]; then
+    FILLED=$("$VENV_PY" - <<'PY' 2>/dev/null || echo 0
+import pandas as pd
+try:
+    f = pd.read_csv("out/plan.csv", dtype=str, keep_default_na=False,
+                    encoding="utf-8-sig")
+    print(int((f.get("decision", pd.Series(dtype=str)).astype(str).str.strip() != "").sum()))
+except Exception:
+    print(0)
+PY
+)
+fi
+
+DECISION_ARGS=(--decisions out/plan.csv)
+if [ "${FILLED:-0}" -gt 0 ]; then
+    DECISION_ARGS=()
+    warn "out/plan.csv already has $FILLED decision(s): leaving it untouched"
+    info "Re-profiling would overwrite a review that exists in one place only."
+    info "To use it:  .venv/bin/python -m deidkit.cli approve out/plan.csv \\"
+    info "              -c contracts/demo.yaml --data out/quarantine/study_demo \\"
+    info "              -o contracts/demo.approved.yaml --approved-by you@example.com"
+fi
+
 "$VENV_PY" -m deidkit.cli profile out/quarantine/study_demo \
     -o contracts/demo.yaml --review out/steward_review.csv \
-    --decisions out/plan.csv \
+    "${DECISION_ARGS[@]}" \
     --keep-dates --blind-treatment 2>&1 | sed 's/^/         /'
 ok "contract draft at contracts/demo.yaml"
-ok "decision sheet at out/plan.csv -- one row per column, open it"
+[ "${FILLED:-0}" -gt 0 ] || ok "decision sheet at out/plan.csv -- one row per column, open it"
 
 step "Running the pipeline -- WITHOUT a steward's approval"
 warn "nobody has signed off contracts/demo.yaml, so this runs with --unreviewed"
@@ -223,11 +250,11 @@ printf "     put ${C}OK${N} in the decision column to accept a proposal, or\n"
 printf "     ${C}CHANGE${N} plus a decision_treatment to overrule it.\n"
 printf "     A blank row blocks the run. That is the whole point.\n\n"
 printf "  2. sign it off, and run again against the approved contract:\n\n"
-printf "     ${D}.venv/bin/python -m deidkit.cli approve out/plan.csv \\${N}\n"
-printf "     ${D}    -c contracts/demo.yaml --data out/quarantine/study_demo \\${N}\n"
+printf "     ${D}%s${N}\n" '.venv/bin/python -m deidkit.cli approve out/plan.csv \'
+printf "     ${D}%s${N}\n" '    -c contracts/demo.yaml --data out/quarantine/study_demo \'
 printf "     ${D}    -o contracts/demo.approved.yaml --approved-by you@example.com${N}\n\n"
-printf "     ${D}.venv/bin/python -m deidkit.cli run out/quarantine/study_demo \\${N}\n"
-printf "     ${D}    -c contracts/demo.approved.yaml -o out/tier_reviewed \\${N}\n"
+printf "     ${D}%s${N}\n" '.venv/bin/python -m deidkit.cli run out/quarantine/study_demo \'
+printf "     ${D}%s${N}\n" '    -c contracts/demo.approved.yaml -o out/tier_reviewed \'
 printf "     ${D}    --vault out/vault/demo.db --format csv${N}\n\n"
 printf "  ${D}The second command has no --unreviewed, and it will only work${N}\n"
 printf "  ${D}because of the first.${N}\n\n"
