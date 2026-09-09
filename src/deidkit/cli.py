@@ -21,6 +21,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -41,6 +42,10 @@ from .vault import Vault, VaultError
 # ----------------------------------------------------------------------
 # helpers
 # ----------------------------------------------------------------------
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
 def _err(msg: str) -> int:
     print(f"error: {msg}", file=sys.stderr)
     return 1
@@ -576,26 +581,93 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_adjudicate(args: argparse.Namespace) -> int:
+    out_dir = str(args.out).rstrip("/").rstrip("\\")
+    manifest_path = args.manifest or f"{out_dir}/manifest.json"
+    if problem := _check_writable(manifest_path):
+        return _err(problem)
+
     paths = dio.discover(args.directory)
     frames = {n: dio.read_table(p) for n, p in paths.items()}
     queue = pd.read_csv(args.queue)
 
     out_frames, stats = freetext.apply_adjudication(frames, queue)
+
+    pending = int(stats["rows_unreviewed"]) + int(stats["rows_unknown_verdict"])
+    # This is the tier meant for release. A row nobody ruled on is published
+    # exactly as recorded, which for a flagged row means possible PHI in the
+    # output -- so it halts here for the same reason a blank decision sheet
+    # halts the run, and the escape hatch is explicit and recorded.
+    if pending and not args.allow_pending:
+        return _err(
+            f"{stats['rows_unreviewed']} row(s) have no verdict"
+            + (
+                f" and {stats['rows_unknown_verdict']} have one that is not "
+                "PASS or REDACT"
+                if stats["rows_unknown_verdict"]
+                else ""
+            )
+            + ".\n\nAn unruled row is published as recorded, and these rows "
+            "were flagged as possible\nPHI, so this is the last place to catch "
+            "it. Set 'verdict' to PASS or REDACT\nfor every row, or pass "
+            "--allow-pending to publish the remainder unchanged --\nwhich is "
+            "recorded in the manifest as a known gap, not hidden."
+        )
+
     written = dio.write_study(out_frames, args.out, fmt=args.format)
 
+    # The tier that gets released is the one that most needs a manifest, and
+    # until now it was the only one without one: the data was written, the
+    # counts went to the console, and nothing durable recorded who adjudicated
+    # what. The chain of evidence broke at the last step.
+    source_manifest = Path(args.directory) / "manifest.json"
+    manifest: dict[str, Any] = {}
+    if source_manifest.exists():
+        try:
+            manifest = json.loads(source_manifest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            manifest = {}
+    passed = (
+        len(queue)
+        - int(stats["redactions_applied"])
+        - int(stats["rows_unreviewed"])
+        - int(stats["rows_unknown_verdict"])
+    )
+    manifest["adjudication"] = {
+        "required": True,
+        "complete": pending == 0,
+        "pending_rows": pending,
+        "queue_rows": len(queue),
+        "redactions_applied": int(stats["redactions_applied"]),
+        "rows_passed": passed,
+        "rows_unreviewed": int(stats["rows_unreviewed"]),
+        "rows_unknown_verdict": int(stats["rows_unknown_verdict"]),
+        "adjudicated_by": _operator(args),
+        "adjudicated_at": _now_iso(),
+        "source_tier": str(args.directory),
+        "published_with_pending_rows": bool(pending and args.allow_pending),
+    }
+    manifest["inputs"] = {
+        "source_tier": str(args.directory),
+        "checksums_sha256": {n: dio.checksum(p) for n, p in written.items()},
+    }
+    dio.write_text(json.dumps(manifest, indent=2, default=str), manifest_path)
+
     print(f"redactions applied : {stats['redactions_applied']}")
-    print(f"rows passed        : {len(queue) - stats['redactions_applied'] - stats['rows_unreviewed'] - stats['rows_unknown_verdict']}")
+    print(f"rows passed        : {passed}")
     print(f"rows unreviewed    : {stats['rows_unreviewed']}")
     if stats["rows_unknown_verdict"]:
         print(f"rows with an unrecognised verdict: {stats['rows_unknown_verdict']}")
-    if stats["rows_unreviewed"]:
-        print(
-            "\nUnreviewed rows were left unchanged -- they are neither passed nor\n"
-            "redacted. Publish only once the queue is empty, or record the\n"
-            "remainder as a known gap."
-        )
     for name, p in written.items():
         print(f"  wrote {name:<6} -> {p}")
+    print(f"  wrote manifest -> {manifest_path}")
+    if pending:
+        print(
+            "\n  PUBLISHED WITH A KNOWN GAP: "
+            f"{pending} flagged row(s) went out unruled.\n"
+            "  The manifest records it. Close the queue and re-run to remove it."
+        )
+    else:
+        print("\n  Queue closed: every flagged row has a verdict.")
     return 0
 
 
@@ -898,6 +970,17 @@ def build_parser() -> argparse.ArgumentParser:
     # adjudicate
     sp = sub.add_parser("adjudicate", help="apply a reviewed free-text queue")
     sp.add_argument("directory")
+    sp.add_argument("--manifest", help="where to write the final tier's manifest")
+    sp.add_argument(
+        "--allow-pending",
+        action="store_true",
+        help="publish even though some flagged rows have no verdict. They go "
+        "out exactly as recorded, and the manifest records the gap rather than "
+        "hiding it.",
+    )
+    sp.add_argument(
+        "--operator", help="who adjudicated; recorded in the final manifest"
+    )
     sp.add_argument("--queue", required=True)
     sp.add_argument("-o", "--out", required=True)
     sp.add_argument("--format", choices=["parquet", "csv"], default="parquet")
