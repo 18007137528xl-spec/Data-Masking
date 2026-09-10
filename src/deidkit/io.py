@@ -79,6 +79,41 @@ def _open(path: str | Path, mode: str = "rb"):
     return open(path, mode)
 
 
+_EXCEL_DATETIME = re.compile(
+    r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2}(?:\.\d+)?)$"
+)
+
+
+def _fix_excel_datetimes(frame: pd.DataFrame) -> pd.DataFrame:
+    """Drop the midnight Excel adds to a date-only column.
+
+    A CRF date field stored in a workbook becomes a real Excel datetime, and
+    reading it back as text gives "2025-04-20 00:00:00". The clock is Excel's,
+    not the coordinator's -- nobody recorded midnight -- and carrying it
+    forward means every date value in the tier is a datetime that was never
+    collected.
+
+    So the decision is made per COLUMN and only on evidence: the time is
+    dropped when EVERY non-null value in that column is exactly midnight. One
+    real time of day anywhere in the column and the whole column keeps its
+    times, because then the field genuinely holds times and removing them
+    would delete data.
+    """
+    for col in frame.columns:
+        text = frame[col].dropna().astype(str)
+        if text.empty:
+            continue
+        parts = text.str.extract(_EXCEL_DATETIME)
+        if parts[0].isna().any():
+            continue  # not a whole column of datetimes
+        if not (parts[1].str.startswith("00:00:00")).all():
+            continue  # a real time of day lives here
+        frame[col] = frame[col].astype("string").str.replace(
+            _EXCEL_DATETIME, r"\1", regex=True
+        )
+    return frame
+
+
 def sheet_split(path: str | Path) -> tuple[str, str | None]:
     """Split ``workbook.xlsx::SheetName`` into the file and the sheet."""
     text = str(path)
@@ -119,10 +154,11 @@ def read_table(path: str | Path) -> pd.DataFrame:
         # will have already turned 2015-03 into a datetime and eaten the
         # leading zero off site 002 before this tool ever sees the file. What
         # is read here cannot undo that -- it can only avoid adding to it.
-        return pd.read_excel(
+        frame = pd.read_excel(
             text, sheet_name=sheet or 0, dtype=str, keep_default_na=True,
             engine="openpyxl",
         )
+        return _fix_excel_datetimes(frame)
 
     # pandas resolves s3:// / az:// / gs:// itself when the fsspec backend is
     # installed, so remote and local take the same path for these formats.

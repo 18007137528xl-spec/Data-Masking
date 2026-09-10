@@ -398,3 +398,64 @@ def test_day_month_order_is_inferred_per_column_not_per_study(published):
     vs = raw.frames["VITALS"]["VISIT_DT"].dropna()
     assert any(int(v.split("/")[0]) > 12 for v in ae)
     assert any(int(v.split("/")[1]) > 12 for v in vs)
+
+
+# ----------------------------------------------------------------------
+# dates that arrive through Excel
+# ----------------------------------------------------------------------
+def test_a_datetime_is_parsed_and_its_time_survives():
+    """An Excel cell typed as a datetime reads back as
+    "2025-04-20 00:00:00", and the raw patterns accepted only a bare date --
+    so 2853 real dates counted as UNPARSED and halted the run."""
+    for value, tail in [
+        ("2025-04-20 00:00:00", "00:00:00"),
+        ("2025-04-20T14:30:00", "14:30:00"),
+        ("2025-04-20 14:30", "14:30"),
+    ]:
+        p = rawdates.parse(value, "dmy")
+        assert p is not None, value
+        assert (p.year, p.month, p.day) == (2025, 4, 20)
+        assert p.tail == tail
+
+
+def test_a_numeric_date_with_a_clock_is_still_ambiguous():
+    """A time tells you nothing about day/month order. Naming those groups
+    d and m would hardcode d/m/y and put 03/04/2025 08:15 in the wrong month
+    -- the exact mistake this module exists to refuse."""
+    assert rawdates.parse("03/04/2025 08:15:00") is None
+    assert rawdates.parse("03/04/2025 08:15:00", "dmy").month == 4
+    assert rawdates.parse("03/04/2025 08:15:00", "mdy").month == 3
+
+
+def test_shifting_a_datetime_keeps_the_time_of_day(vault):
+    values = pd.Series(["2025-04-20 14:30:00", "2025-04-20 00:00:00"])
+    out = rawdates.shift_preserving_format(
+        values, pd.Series(["S1", "S1"]), vault
+    ).values
+    assert out.iloc[0].endswith(" 14:30:00")
+    assert out.iloc[1].endswith(" 00:00:00")
+    assert not any(a == b for a, b in zip(values, out))
+
+
+def test_excel_midnight_is_dropped_per_column_on_evidence(tmp_path):
+    """The clock Excel adds to a date-only field is Excel's, not the
+    coordinator's -- nobody recorded midnight. But one real time anywhere in
+    the column and the whole column keeps its times, because then the field
+    genuinely holds times."""
+    pytest.importorskip("openpyxl")
+    from deidkit.io import read_table
+
+    path = tmp_path / "ex.xlsx"
+    pd.DataFrame(
+        {
+            "EXSTDAT": pd.to_datetime(["2025-04-20", "2025-05-19"]),
+            "EXSTDTM": pd.to_datetime(
+                ["2025-04-20 14:30:00", "2025-05-19 00:00:00"]
+            ),
+        }
+    ).to_excel(path, index=False)
+    frame = read_table(path)
+    assert frame["EXSTDAT"].iloc[0] == "2025-04-20"
+    assert frame["EXSTDTM"].iloc[0] == "2025-04-20 14:30:00"
+    # the midnight in a column that has real times is data, not an artifact
+    assert frame["EXSTDTM"].iloc[1] == "2025-05-19 00:00:00"
