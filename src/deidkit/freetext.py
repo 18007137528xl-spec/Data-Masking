@@ -67,6 +67,24 @@ CLINICAL_ALLOWLIST: frozenset[str] = frozenset(
         "Marfan", "Turner", "Klinefelter", "Down", "Gilbert", "Meniere",
         "Tourette", "Asperger", "Bright", "Pott", "Colles", "Murphy",
         "Babinski", "Romberg", "Homan", "Chvostek", "Trousseau",
+        # Severe cutaneous and immune reactions. Stevens-Johnson was missing,
+        # which is the worst possible omission in this list: it is one of the
+        # AEs a safety reviewer most needs to read, and a detector calling it
+        # a person's name put it in front of a reviewer 13 times with REDACT
+        # as an available answer.
+        "Stevens", "Johnson", "Lyell", "Sweet", "Still", "Quincke",
+        "Henoch", "Schonlein", "Wegener", "Goodpasture", "Churg", "Strauss",
+        "Takayasu", "Buerger", "Behcet", "Hashimoto", "Graves", "Riedel",
+        "Lambert", "Eaton", "Guillain", "Miller", "Fisher", "Devic",
+        "Wernicke", "Korsakoff", "Creutzfeldt", "Jakob", "Gehrig",
+        "Mallory", "Weiss", "Boerhaave", "Budd", "Chiari", "Zollinger",
+        "Ellison", "Peutz", "Jeghers", "Lynch", "Gardner", "Cowden",
+        "Fanconi", "Wiskott", "Aldrich", "DiGeorge", "Prader", "Willi",
+        "Angelman", "Rett", "Brugada", "Wolff", "White", "Torsades",
+        "Raynaud", "Sheehan", "Conn", "Nelson", "Meigs", "Ortner",
+        # more scales and criteria
+        "Barthel", "Rankin", "Fugl", "Meyer", "Berg", "Tinetti", "Epworth",
+        "Zubrod", "Lansky", "Cornell", "Yesavage", "Katz", "Lawton",
         # scales, scores, criteria
         "Glasgow", "Karnofsky", "Ashworth", "Braden", "Norton", "Apgar",
         "Ramsay", "Hamilton", "Beck", "Montgomery", "Asberg", "Bristol",
@@ -174,12 +192,70 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str], float], ...] = (
 )
 
 
+#: WHO International Nonproprietary Name stems. The INN system exists so that
+#: a drug name announces its class in its ending, which makes it the one
+#: category of clinical vocabulary that can be recognised without a
+#: dictionary -- and an NER model has no idea: Presidio read "Adalimumab" as a
+#: person's name 21 times in one 188-row concomitant-medication table.
+#:
+#: Enumerating drugs is hopeless; enumerating their endings is not.
+_INN_STEMS: tuple[str, ...] = (
+    # biologics
+    "mab", "cept", "kin", "ase", "tide", "parin",
+    # small molecules by class
+    "nib", "ciclib", "rafenib", "tinib", "zomib", "prazole", "statin",
+    "cillin", "mycin", "micin", "cycline", "oxacin", "penem", "cephalo",
+    "ceph", "cef", "olol", "pril", "sartan", "dipine", "azepam", "zolam",
+    "barbital", "caine", "vir", "navir", "ovir", "fungin", "conazole",
+    "azole", "setron", "triptan", "glitazone", "gliptin", "flozin",
+    "formin", "sulin", "limus", "sporin", "profen", "coxib", "dronate",
+    "trexate", "platin", "rubicin", "taxel", "tecan", "citabine", "fenac",
+)
+
+#: Short words that end in a stem by accident. "Case" is not an enzyme.
+_INN_FALSE_FRIENDS = frozenset(
+    {"case", "base", "phase", "release", "disease", "increase", "decrease",
+     "please", "cease", "nurse", "course", "worse", "dose", "close"}
+)
+
+
+def _looks_like_drug_name(token: str) -> bool:
+    """Recognise an INN by its ending rather than by a dictionary."""
+    low = token.lower()
+    if len(low) < 6 or low in _INN_FALSE_FRIENDS:
+        return False
+    return any(low.endswith(stem) for stem in _INN_STEMS)
+
+
+#: Entity types the clinical allowlist may suppress. It exists to stop a
+#: NER model calling "Adalimumab" a person, so it applies to the types that
+#: mistake can produce -- and to nothing else.
+#:
+#: STUDY_DRUG is deliberately absent, and that is not a detail: a study-drug
+#: finding IS a drug name, so an allowlist keyed on drug morphology would
+#: suppress every one of them. That finding is the blinding audit's input,
+#: on a different axis from PHI entirely, and silently deleting it would
+#: leave the compound name in the corpus with nothing reporting it.
+_ALLOWLISTABLE: frozenset[str] = frozenset(
+    {"PERSON", "LOCATION", "ORGANIZATION", "FACILITY", "NRP", "GPE"}
+)
+
+
+def _suppressed(entity_type: str, text: str) -> bool:
+    """Is this finding a clinical term a detector mistook for an identifier?"""
+    if entity_type not in _ALLOWLISTABLE:
+        return False
+    return _allowlisted(text)
+
+
 def _allowlisted(text: str) -> bool:
     """True when every alphabetic token is medical vocabulary."""
     toks = [t for t in re.findall(r"[A-Za-z]+", text) if len(t) > 1]
     if not toks:
         return False
-    return all(t.lower() in CLINICAL_ALLOWLIST for t in toks)
+    return all(
+        t.lower() in CLINICAL_ALLOWLIST or _looks_like_drug_name(t) for t in toks
+    )
 
 
 class PatternDetector:
@@ -234,7 +310,7 @@ class PresidioDetector:  # pragma: no cover - optional dependency
                 self.name,
             )
             for r in res
-            if not _allowlisted(text[r.start : r.end])
+            if not _suppressed(r.entity_type, text[r.start : r.end])
         ]
         # Presidio's NER is strong on names and weak on study-specific ID
         # formats; run both and merge rather than choosing.
@@ -307,9 +383,24 @@ DEFAULT_SCREEN_POLICY: dict[str, str] = {
     "FACILITY": "queue",
     "LOCATION": "queue",
     "ORGANIZATION": "queue",
-    "DATE_IN_TEXT": "queue",
     "NRP": "queue",
     "AGE": "queue",
+    # The same finding under two names. The built-in detector calls it
+    # DATE_IN_TEXT and Presidio calls it DATE_TIME, and a policy that knows
+    # only one of them is a policy that works on whichever detector it was
+    # written against -- which was the weaker one. Every entity name below
+    # has to cover both vocabularies or the table is decorative.
+    "DATE_IN_TEXT": "queue",
+    "DATE_TIME": "queue",
+    # Presidio's spellings for identifiers the fallback names differently.
+    "US_BANK_NUMBER": "redact",
+    "US_ITIN": "redact",
+    "UK_NHS": "redact",
+    "CRYPTO": "redact",
+    "AU_TFN": "redact",
+    "AU_MEDICARE": "redact",
+    "IN_AADHAAR": "redact",
+    "SG_NRIC_FIN": "redact",
 }
 
 #: Anything the policy does not name is escalated. A detector version that

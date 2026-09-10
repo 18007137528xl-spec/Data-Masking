@@ -1136,3 +1136,63 @@ def test_an_old_scheme_approval_is_told_apart_from_a_tampered_one(contract):
     payload["approval"]["rules_fingerprint"] = "sha256:" + "0" * 64
     with pytest.raises(ValidationError, match="edited after it was approved"):
         Contract.model_validate(payload)
+
+
+# ----------------------------------------------------------------------
+# the detector's vocabulary, and the clinician's
+# ----------------------------------------------------------------------
+def test_the_policy_covers_both_detectors_entity_names():
+    """The built-in detector says DATE_IN_TEXT, Presidio says DATE_TIME.
+
+    A policy written against one vocabulary silently degrades to
+    escalate-everything on the other -- which is what happened: on the
+    Presidio install the policy settled 11 of 67 rows instead of 17 of 33,
+    because every date hit fell through to the unknown-entity rule.
+    """
+    from deidkit.freetext import DEFAULT_SCREEN_POLICY as P
+
+    for pair in [("DATE_IN_TEXT", "DATE_TIME")]:
+        assert {P.get(n) for n in pair} == {"queue"}, pair
+    # identifier types both detectors can emit
+    for name in ("EMAIL_ADDRESS", "PHONE_NUMBER", "US_SSN", "IP_ADDRESS"):
+        assert P[name] == "redact"
+
+
+def test_a_drug_name_is_not_a_person():
+    """Presidio read "Adalimumab" as a person 21 times in one 188-row
+    concomitant-medication table. Enumerating drugs is hopeless; the INN
+    stem system means enumerating their endings is not."""
+    from deidkit.freetext import _suppressed
+
+    for drug in (
+        "Adalimumab", "Pembrolizumab", "Infliximab", "Imatinib",
+        "Atorvastatin", "Amoxicillin", "Omeprazole", "Lisinopril",
+    ):
+        assert _suppressed("PERSON", drug), drug
+
+
+def test_an_eponymous_condition_is_not_a_person():
+    """Stevens-Johnson syndrome is one of the AEs a safety reviewer most
+    needs to read, and it was reaching the queue as a person's name with
+    REDACT available as an answer."""
+    from deidkit.freetext import _suppressed
+
+    for term in ("Stevens-Johnson", "Guillain-Barre", "Crohn", "Hashimoto"):
+        assert _suppressed("PERSON", term), term
+
+
+def test_a_real_name_still_gets_through():
+    from deidkit.freetext import _suppressed
+
+    for name in ("Almeida", "Dr Whitfield", "Sorensen", "Raghunathan"):
+        assert not _suppressed("PERSON", name), name
+
+
+def test_the_allowlist_never_suppresses_a_study_drug_finding():
+    """A study-drug finding IS a drug name, so an allowlist keyed on drug
+    morphology would delete every one of them -- and those findings are the
+    blinding audit's input, on a different axis from PHI entirely."""
+    from deidkit.freetext import _suppressed
+
+    assert not _suppressed("STUDY_DRUG", "Pembrolizumab")
+    assert not _suppressed("STUDY_DRUG", "Adalimumab")
