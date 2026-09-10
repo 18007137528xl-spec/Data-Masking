@@ -1370,3 +1370,36 @@ def test_a_subject_key_is_found_without_usubjid():
     frame = pd.DataFrame({"SUBJID": ["002-0001"], "EXDOSE": ["200"]})
     contract, _ = draft_contract({"EX": frame}, source="T")
     assert contract.domain("EX").subject_key == "SUBJID"
+
+
+def test_an_xlsx_tier_round_trips_without_excel_reinterpreting_it(tmp_path, result):
+    """A CSV tier opened in Excel is a tier Excel gets to reinterpret on the
+    way in: 2015-03 becomes a date, site 002 loses its zero, a long subject
+    number turns into scientific notation. The de-identification survives
+    that; the data does not.
+
+    Cells written as text are read back as text, so the values a steward
+    approved are the values the analyst sees.
+    """
+    pytest.importorskip("openpyxl")
+    from deidkit.io import load_study, write_study
+
+    out = tmp_path / "tier"
+    written = write_study(result.frames, str(out), fmt="xlsx")
+    assert len(written) == len(result.frames)
+    book = out / "tier.xlsx"
+    assert book.exists(), "one workbook, one sheet per domain"
+
+    frames, _ = load_study(out)
+    assert set(frames) == set(result.frames)
+    before, after = result.frames["DM"], frames["DM"]
+    assert list(after.columns) == list(before.columns)
+    for col in ("SITEZIP", "RFSTDTC", "AGE"):
+        if col in before.columns:
+            assert str(after[col].iloc[0]) == str(before[col].iloc[0]), col
+
+    import openpyxl
+
+    ws = openpyxl.load_workbook(book)["DM"]
+    cells = [c.number_format for row in ws.iter_rows(min_row=2, max_row=2) for c in row]
+    assert set(cells) == {"@"}, "every cell must be text so Excel stops guessing"
