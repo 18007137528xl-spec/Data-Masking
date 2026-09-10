@@ -459,3 +459,36 @@ def test_excel_midnight_is_dropped_per_column_on_evidence(tmp_path):
     assert frame["EXSTDTM"].iloc[0] == "2025-04-20 14:30:00"
     # the midnight in a column that has real times is data, not an artifact
     assert frame["EXSTDTM"].iloc[1] == "2025-05-19 00:00:00"
+
+
+def test_pandas_own_missing_markers_count_as_missing():
+    """One dtype change upstream was enough to turn empty cells into a halt.
+
+    "isinstance(v, float) and isna(v)" covered numpy's NaN and nothing else,
+    so pd.NA and pd.NaT fell through to str() -- which renders them "<NA>"
+    and "NaT" -- and 63 empty cells were reported as dates in an
+    unrecognised format.
+    """
+    import numpy as np
+
+    from deidkit.rawdates import _blank
+    from deidkit.transforms import parse_dtc
+
+    for missing in (None, np.nan, pd.NA, pd.NaT, "", "  ", "NA", "<NA>", "NaT", "N/A"):
+        assert _blank(missing), repr(missing)
+        assert parse_dtc(missing).year is None, repr(missing)
+    assert not _blank("2025-04-20")
+    assert parse_dtc("2025-04-20").year == 2025
+
+
+def test_a_string_column_with_pd_na_shifts_without_halting(vault):
+    """The exact shape that failed: a StringDtype column holding pd.NA."""
+    values = pd.Series(
+        ["2025-04-20", pd.NA, "2025-05-19", pd.NA], dtype="string"
+    )
+    shift = rawdates.shift_preserving_format(
+        values, pd.Series(["S1"] * 4), vault
+    )
+    assert shift.report["passed_through"] == 0, shift.report
+    assert shift.report["shifted"] == 2
+    assert shift.values.isna().sum() == 2

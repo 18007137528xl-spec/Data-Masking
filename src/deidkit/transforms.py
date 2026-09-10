@@ -70,12 +70,22 @@ _EMPTY = ParsedDate(None, None, None, "none")
 
 def parse_dtc(value: object) -> ParsedDate:
     """Parse one ISO 8601 / SDTM ``--DTC`` value."""
-    if value is None or (isinstance(value, float) and np.isnan(value)):
+    # pd.NA and pd.NaT are neither None nor float, and str() renders them
+    # "<NA>" and "NaT" -- which no date parser matches and every date parser
+    # would report as a bad value rather than a missing one.
+    if value is None:
         return _EMPTY
+    try:
+        if pd.isna(value):
+            return _EMPTY
+    except (TypeError, ValueError):  # pragma: no cover - array-like input
+        pass
     if isinstance(value, date):
         return ParsedDate(value.year, value.month, value.day, "day")
     text = str(value).strip()
-    if not text or text.upper() in {"NA", "NAN", "NONE", "UNK", "UNKNOWN", "."}:
+    if not text or text.upper() in {
+        "NA", "NAN", "NONE", "UNK", "UNKNOWN", ".", "<NA>", "NAT", "N/A"
+    }:
         return _EMPTY
     m = _ISO.match(text)
     if not m:
