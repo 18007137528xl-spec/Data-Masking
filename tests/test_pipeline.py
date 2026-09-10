@@ -1196,3 +1196,38 @@ def test_the_allowlist_never_suppresses_a_study_drug_finding():
 
     assert not _suppressed("STUDY_DRUG", "Pembrolizumab")
     assert not _suppressed("STUDY_DRUG", "Adalimumab")
+
+
+def test_the_stems_do_not_swallow_surnames():
+    """Missing a drug costs one queue row. Matching a surname costs a piece
+    of PHI that never reaches the queue -- so the error directions are not
+    symmetric, and the stems must be long enough not to collide.
+
+    The first list collided: bare "kin" (for the interleukins) took Larkin,
+    Rankin, Watkin, Jenkin, Perkin, Deakin, Hopkin and Simpkin; bare "vir"
+    took Tanvir and Ranvir.
+    """
+    from deidkit.freetext import _looks_like_drug_name
+
+    for name in (
+        "Larkin", "Rankin", "Watkin", "Jenkin", "Perkin", "Deakin",
+        "Hopkin", "Simpkin", "Tanvir", "Ranvir", "Chase", "Sorensen",
+    ):
+        assert not _looks_like_drug_name(name), name
+    # and the drugs those stems were for are still recognised
+    for drug in ("Aldesleukin", "Ritonavir", "Aciclovir", "Cefalexin"):
+        assert _looks_like_drug_name(drug), drug
+
+
+def test_a_clinical_false_positive_stays_visible():
+    """Deleting the finding makes the guess invisible, which means a WRONG
+    guess is invisible too. Reclassifying keeps the row, pre-decided PASS,
+    marked so a reviewer can read '[[CLINICAL_TERM:Larkin]]' and overrule
+    it in one cell."""
+    from deidkit.freetext import CLINICAL_TERM, DEFAULT_SCREEN_POLICY, reclassify
+
+    assert reclassify("PERSON", "Adalimumab") == CLINICAL_TERM
+    assert reclassify("PERSON", "Almeida") == "PERSON"
+    assert DEFAULT_SCREEN_POLICY[CLINICAL_TERM] == "pass"
+    # never a study drug: that finding is the blinding audit's input
+    assert reclassify("STUDY_DRUG", "Pembrolizumab") == "STUDY_DRUG"

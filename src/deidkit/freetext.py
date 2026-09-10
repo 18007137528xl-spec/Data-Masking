@@ -200,30 +200,50 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str], float], ...] = (
 #:
 #: Enumerating drugs is hopeless; enumerating their endings is not.
 _INN_STEMS: tuple[str, ...] = (
-    # biologics
-    "mab", "cept", "kin", "ase", "tide", "parin",
+    # biologics -- long enough to be unambiguous
+    "mab", "cept", "leukin", "kine", "ase", "tide", "parin",
     # small molecules by class
     "nib", "ciclib", "rafenib", "tinib", "zomib", "prazole", "statin",
-    "cillin", "mycin", "micin", "cycline", "oxacin", "penem", "cephalo",
-    "ceph", "cef", "olol", "pril", "sartan", "dipine", "azepam", "zolam",
-    "barbital", "caine", "vir", "navir", "ovir", "fungin", "conazole",
-    "azole", "setron", "triptan", "glitazone", "gliptin", "flozin",
+    "cillin", "mycin", "micin", "cycline", "oxacin", "penem",
+    "olol", "pril", "sartan", "dipine", "azepam", "zolam",
+    "barbital", "caine", "fungin", "conazole", "azole",
+    "setron", "triptan", "glitazone", "gliptin", "flozin",
     "formin", "sulin", "limus", "sporin", "profen", "coxib", "dronate",
     "trexate", "platin", "rubicin", "taxel", "tecan", "citabine", "fenac",
+    # antivirals: the full stems, never bare "vir"
+    "navir", "ciclovir", "tegravir", "previr", "buvir", "asvir", "amivir",
+    "adine", "ovudine", "citabine",
 )
 
-#: Short words that end in a stem by accident. "Case" is not an enzyme.
+#: Drug classes named by their BEGINNING. Written as suffixes they matched
+#: nothing at all -- cefalexin and cephalexin start with the stem.
+_INN_PREFIXES: tuple[str, ...] = ("cef", "ceph", "sulfa", "dexamethas")
+
 _INN_FALSE_FRIENDS = frozenset(
     {"case", "base", "phase", "release", "disease", "increase", "decrease",
-     "please", "cease", "nurse", "course", "worse", "dose", "close"}
+     "please", "cease", "nurse", "course", "worse", "dose", "close",
+     "purchase", "database", "suitcase", "staircase", "showcase"}
 )
 
 
 def _looks_like_drug_name(token: str) -> bool:
-    """Recognise an INN by its ending rather than by a dictionary."""
+    """Recognise an INN by its shape rather than by a dictionary.
+
+    A guess, and the error directions are not symmetric. Missing a drug costs
+    one extra row in a review queue. Matching a real surname costs a piece of
+    PHI that never reaches the queue at all -- so the stems have to be long
+    enough not to collide with names.
+
+    The first version of this list did collide: bare "kin" (meant for the
+    interleukins) swallowed Larkin, Rankin, Watkin, Jenkin, Perkin, Deakin,
+    Hopkin and Simpkin, and bare "vir" swallowed Tanvir and Ranvir. Both are
+    now spelled out in full.
+    """
     low = token.lower()
     if len(low) < 6 or low in _INN_FALSE_FRIENDS:
         return False
+    if any(low.startswith(pre) for pre in _INN_PREFIXES):
+        return True
     return any(low.endswith(stem) for stem in _INN_STEMS)
 
 
@@ -241,11 +261,36 @@ _ALLOWLISTABLE: frozenset[str] = frozenset(
 )
 
 
+#: What a reclassified clinical term is called in the queue.
+CLINICAL_TERM = "CLINICAL_TERM"
+
+
 def _suppressed(entity_type: str, text: str) -> bool:
     """Is this finding a clinical term a detector mistook for an identifier?"""
     if entity_type not in _ALLOWLISTABLE:
         return False
     return _allowlisted(text)
+
+
+def reclassify(entity_type: str, text: str) -> str:
+    """Rewrite a clinical false positive rather than deleting it.
+
+    This is the difference between a heuristic that has to be right and one
+    that only has to be useful.
+
+    Deleting the finding makes the guess invisible: "Adalimumab is a drug, not
+    a person" never appears anywhere, so neither does "Larkin is a drug, not a
+    person" -- and the second one is a surname that would then be published
+    with nothing recording the decision. The judgement is only as safe as the
+    stem list, and a stem list is never finished.
+
+    Reclassifying keeps the row in the queue as CLINICAL_TERM, pre-decided
+    PASS by policy, marked so a reviewer scanning the sheet reads
+    "[[CLINICAL_TERM:Larkin]]" and overrules it in one cell. The queue stays
+    short where it counts -- these rows need nobody -- and the guess stays
+    where someone can see it be wrong.
+    """
+    return CLINICAL_TERM if _suppressed(entity_type, text) else entity_type
 
 
 def _allowlisted(text: str) -> bool:
@@ -302,7 +347,7 @@ class PresidioDetector:  # pragma: no cover - optional dependency
         )
         found = [
             Finding(
-                r.entity_type,
+                reclassify(r.entity_type, text[r.start : r.end]),
                 r.start,
                 r.end,
                 text[r.start : r.end],
@@ -310,7 +355,6 @@ class PresidioDetector:  # pragma: no cover - optional dependency
                 self.name,
             )
             for r in res
-            if not _suppressed(r.entity_type, text[r.start : r.end])
         ]
         # Presidio's NER is strong on names and weak on study-specific ID
         # formats; run both and merge rather than choosing.
@@ -362,6 +406,9 @@ DEFAULT_SCREEN_POLICY: dict[str, str] = {
     # putting it in a PHI queue asks the wrong question about the right
     # finding.
     "STUDY_DRUG": "pass",
+    # A clinical term a detector read as a name. Kept in the sheet rather
+    # than deleted, so the reclassification is visible and overrulable.
+    CLINICAL_TERM: "pass",
     # Direct identifiers. There is no reading of an AE verbatim in which an
     # email address or a card number is clinical content, so asking a human
     # to confirm that 33 times teaches them to stop reading.
