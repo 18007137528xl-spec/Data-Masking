@@ -18,7 +18,17 @@ from pathlib import Path
 
 import pandas as pd
 
-READABLE = {".csv", ".tsv", ".txt", ".parquet", ".pq", ".xpt", ".sas7bdat"}
+READABLE = {
+    ".csv", ".tsv", ".txt", ".parquet", ".pq", ".xpt", ".sas7bdat",
+    # Excel is how clinical data actually moves between people, whatever the
+    # transfer specification says. A tool for inbound EDC data that cannot
+    # read a workbook is refusing the most likely input it will ever be given.
+    ".xlsx", ".xlsm",
+}
+
+#: Excel workbooks, which need sheet-aware discovery: one workbook commonly
+#: holds every domain as a separate sheet.
+EXCEL = {".xlsx", ".xlsm"}
 
 #: Working files that live beside published data but are not domains.
 #:
@@ -69,6 +79,15 @@ def _open(path: str | Path, mode: str = "rb"):
     return open(path, mode)
 
 
+def sheet_split(path: str | Path) -> tuple[str, str | None]:
+    """Split ``workbook.xlsx::SheetName`` into the file and the sheet."""
+    text = str(path)
+    if "::" in text:
+        base, sheet = text.rsplit("::", 1)
+        return base, sheet
+    return text, None
+
+
 def checksum(path: str | Path, chunk: int = 1 << 20) -> str:
     """SHA-256 of the file bytes.
 
@@ -76,6 +95,7 @@ def checksum(path: str | Path, chunk: int = 1 << 20) -> str:
     exact input it came from -- the first question anyone asks when a number
     looks wrong.
     """
+    path, _sheet = sheet_split(path)
     h = hashlib.sha256()
     with _open(path, "rb") as fh:
         while block := fh.read(chunk):
@@ -91,7 +111,18 @@ def read_table(path: str | Path) -> pd.DataFrame:
     silently completed to a day that was never recorded.
     """
     text = str(path)
+    text, sheet = sheet_split(text)
     suffix = Path(text.split("?", 1)[0]).suffix.lower()
+
+    if suffix in EXCEL:
+        # dtype=str for the same reason as CSV, and with more force: Excel
+        # will have already turned 2015-03 into a datetime and eaten the
+        # leading zero off site 002 before this tool ever sees the file. What
+        # is read here cannot undo that -- it can only avoid adding to it.
+        return pd.read_excel(
+            text, sheet_name=sheet or 0, dtype=str, keep_default_na=True,
+            engine="openpyxl",
+        )
 
     # pandas resolves s3:// / az:// / gs:// itself when the fsspec backend is
     # installed, so remote and local take the same path for these formats.
@@ -160,13 +191,82 @@ def discover(directory: str | Path) -> dict[str, str]:
         raise NotADirectoryError(d)
     local: dict[str, str] = {}
     for p in sorted(d.iterdir()):
-        if (
-            p.is_file()
-            and p.suffix.lower() in READABLE
-            and p.stem.upper() not in NOT_DOMAINS
-        ):
-            local[p.stem.upper()] = str(p)
+        if not p.is_file() or p.suffix.lower() not in READABLE:
+            continue
+        if p.stem.upper() in NOT_DOMAINS:
+            continue
+        if p.suffix.lower() in EXCEL:
+            # One workbook, many domains. "study.xlsx" holding sheets DM, AE
+            # and LB is three tables, not one -- and addressing them needs the
+            # sheet in the path, hence the "::" suffix that read_table splits.
+            for sheet in _excel_sheets(p):
+                if sheet.upper() in NOT_DOMAINS:
+                    continue
+                name = sheet.upper() if len(_excel_sheets(p)) > 1 else p.stem.upper()
+                local[name] = f"{p}::{sheet}"
+            continue
+        local[p.stem.upper()] = str(p)
     return local
+
+
+def _excel_sheets(path: str | Path) -> list[str]:
+    try:
+        import openpyxl
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError(
+            "reading .xlsx requires openpyxl: pip install 'deidkit[excel]'"
+        ) from exc
+    book = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        return [ws.title for ws in book.worksheets if ws.max_row and ws.max_row > 1]
+    finally:
+        book.close()
+
+
+def explain_empty(directory: str | Path) -> str:
+    """Say why a directory yielded no tables, naming what was actually there.
+
+    "no readable tables in D:\\study" is true and useless: it does not say
+    what the tool looked at, what it can read, or which of the two is wrong.
+    The usual answer is a file extension away -- an .xlsx before this tool
+    read Excel, or a Windows Explorer that hides extensions so nobody can see
+    the file is .xls rather than .xlsx.
+    """
+    d = Path(str(directory))
+    if not d.exists():
+        return f"{d} does not exist"
+    if not d.is_dir():
+        return (
+            f"{d} is a file, not a folder. Point this at the FOLDER that "
+            "holds your tables -- one domain per file, or one workbook with "
+            "a sheet per domain."
+        )
+    entries = sorted(p for p in d.iterdir() if p.is_file())
+    if not entries:
+        return f"{d} is empty"
+    lines = [f"{d} holds {len(entries)} file(s), none of them readable:"]
+    for p in entries[:15]:
+        why = (
+            "skipped: reserved name (working file, not a domain)"
+            if p.suffix.lower() in READABLE
+            else f"unsupported extension {p.suffix or '(none)'}"
+        )
+        lines.append(f"  {p.name:<44} {why}")
+    if len(entries) > 15:
+        lines.append(f"  ... and {len(entries) - 15} more")
+    lines.append(f"readable: {', '.join(sorted(READABLE))}")
+    if any(p.suffix.lower() == ".xls" for p in entries):
+        lines.append(
+            "\n.xls is the pre-2007 binary format and is not supported. "
+            "Open it in Excel and Save As .xlsx."
+        )
+    if not any(p.suffix for p in entries):
+        lines.append(
+            "\nSome files have no extension at all. Windows Explorer hides "
+            "known extensions by default (View > Show > File name "
+            "extensions) -- what looks like a bare name may be an .xls."
+        )
+    return "\n".join(lines)
 
 
 def load_study(directory: str | Path) -> tuple[dict[str, pd.DataFrame], dict[str, str]]:

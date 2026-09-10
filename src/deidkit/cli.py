@@ -224,7 +224,7 @@ def cmd_profile(args: argparse.Namespace) -> int:
 
     frames, _ = dio.load_study(args.directory)
     if not frames:
-        return _err(f"no readable tables in {args.directory}")
+        return _err(dio.explain_empty(args.directory))
 
     contract, suggestions = prof.draft_contract(
         frames,
@@ -397,7 +397,7 @@ def cmd_approve(args: argparse.Namespace) -> int:
     if args.data:
         frames, _ = dio.load_study(args.data)
         if not frames:
-            return _err(f"no readable tables in {args.data}")
+            return _err(dio.explain_empty(args.data))
     else:
         print(
             "note: --data was not given, so the sheet was checked against the\n"
@@ -465,7 +465,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
     frames, sums = dio.load_study(args.directory)
     if not frames:
-        return _err(f"no readable tables in {args.directory}")
+        return _err(dio.explain_empty(args.directory))
 
     # The manifest and the review queue are written last, after every domain
     # has been transformed and the risk measured. A lock on either -- the queue
