@@ -1295,3 +1295,78 @@ def test_an_unreadable_folder_says_what_it_found(tmp_path):
     assert ".xlsx" in msg               # names what IS accepted
     assert "Save As .xlsx" in msg       # and the specific way out
     assert "does not exist" in explain_empty(tmp_path / "nope")
+
+
+# ----------------------------------------------------------------------
+# raw EDC operational metadata
+# ----------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "column,treatment,why",
+    [
+        # SITEID already gets a surrogate; the site's NAME beside it makes
+        # that surrogate decorative, and a named hospital is a strong
+        # geographic identifier on its own.
+        ("SITENAME", "surrogate_id", "site name"),
+        ("INSTITUTION", "surrogate_id", "site name"),
+        # A person -- the coordinator or CRA who touched the record. The
+        # contract already drops INVNAM for this reason.
+        ("ENTEREDBY", "drop", "EDC user"),
+        ("LASTUPDBY", "drop", "EDC user"),
+        ("VERIFIEDBY", "drop", "EDC user"),
+    ],
+)
+def test_edc_metadata_is_recognised(column, treatment, why):
+    from deidkit.profile import profile_column, suggest
+
+    p = profile_column(pd.Series(["x"] * 20, name=column))
+    assert suggest(p, domain="EX").rule.treatment.value == treatment, why
+
+
+def test_an_audit_timestamp_is_not_a_clinical_date():
+    """ENTRYDTC dates the paperwork. Converting it to a study day gives a
+    number that reads like a clinical interval and is not one."""
+    from deidkit.profile import profile_column, suggest
+
+    for col in ("ENTRYDTC", "LASTUPDDTC", "SDVDTC"):
+        p = profile_column(pd.Series(["2025-03-01"] * 20, name=col))
+        assert suggest(p, domain="EX").rule.treatment.value == "drop", col
+
+
+def test_the_anchor_is_never_an_audit_timestamp():
+    """The fallback took the first column ending in DTC, which in a Rave
+    export is ENTRYDTC -- the moment a coordinator typed the record in.
+    Anchoring study day there makes every derived day wrong, quietly, and
+    the numbers still look like study days."""
+    from deidkit.profile import draft_contract
+
+    frame = pd.DataFrame(
+        {
+            "SUBJID": ["002-0001"],
+            "ENTRYDTC": ["2025-06-01"],
+            "LASTUPDDTC": ["2025-06-02"],
+            "EXSTDAT": ["2025-03-01"],
+        }
+    )
+    contract, _ = draft_contract({"EX": frame}, source="T")
+    assert contract.anchor.date_column not in {"ENTRYDTC", "LASTUPDDTC"}
+
+
+def test_a_comment_column_is_screened_not_published():
+    """EXCOMM is a comment field. The free-text names matched COMMENT and
+    CMNT but not the EDC's own --COMM, so it was published unscreened."""
+    from deidkit.profile import profile_column, suggest
+
+    p = profile_column(pd.Series(["dose held, see note from Dr Almeida"] * 20,
+                                 name="EXCOMM"))
+    assert suggest(p, domain="EX").rule.treatment.value == "screen_freetext"
+
+
+def test_a_subject_key_is_found_without_usubjid():
+    """A Rave export has SUBJID and no USUBJID. A domain with no subject key
+    silently has no anchor and no date offset, so every date treatment in it
+    then does nothing, or nothing correct."""
+    from deidkit.profile import draft_contract
+
+    frame = pd.DataFrame({"SUBJID": ["002-0001"], "EXDOSE": ["200"]})
+    contract, _ = draft_contract({"EX": frame}, source="T")
+    assert contract.domain("EX").subject_key == "SUBJID"
