@@ -12,6 +12,11 @@ Built for one specific set of constraints, and opinionated because of them:
 | MH and AE retained in full | Verbatim text is **screened for review, never rewritten**; rare coded terms are not pooled |
 | Internal model training is a downstream use | Only the de-identified tier may feed a corpus; the LDS tier may not |
 
+**Operating the tool day to day:** [`docs/manual.html`](docs/manual.html) — a
+step-by-step manual in Chinese, written for a steward who does not read code.
+Open it in a browser; it is a single self-contained file. The rest of this
+README is the design rationale and the reference.
+
 ## Why not Safe Harbor
 
 Safe Harbor requires removing every date element more specific than a year.
