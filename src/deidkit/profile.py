@@ -917,7 +917,7 @@ def draft_contract(
     contract_version: str = "0.1.0-draft",
     anchor_domain: str | None = None,
     anchor_date_column: str | None = None,
-    subject_column: str = "USUBJID",
+    subject_column: str | None = None,
     k_target: int = 5,
     sdtm_conformant: bool = False,
     blind_treatment: bool = False,
@@ -932,6 +932,14 @@ def draft_contract(
     confidence and rationale alongside for the steward to review.
     """
     anchor_domain = anchor_domain or ("DM" if "DM" in frames else next(iter(frames)))
+    if subject_column is None:
+        # USUBJID is an SDTM construct. It is the right name when the drop is
+        # SDTM and the wrong name almost everywhere else: a Rave or Medidata
+        # extract carries SUBJECT, SUBJID or PATID, and defaulting to USUBJID
+        # wrote an anchor naming a column that does not exist, which surfaced
+        # only at run time as MissingAnchor. The domain contracts already infer
+        # their subject key from the data; the anchor now does the same.
+        subject_column = _raw_subject_key(frames[anchor_domain]) or "USUBJID"
     if anchor_date_column is None:
         candidates = ["RFXSTDTC", "RFSTDTC", "TRTSDTC", "RANDDTC"]
         cols = set(frames[anchor_domain].columns)

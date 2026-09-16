@@ -34,7 +34,7 @@ from . import (
     risk as risk_mod,
     textcheck,
 )
-from .contract import Contract
+from .contract import NEEDS_ANCHOR, Contract
 from .pipeline import ContractMismatch, DeidPipeline
 from .vault import Vault, VaultError
 
@@ -232,6 +232,7 @@ def cmd_profile(args: argparse.Namespace) -> int:
         tier=args.tier,
         anchor_domain=args.anchor_domain,
         anchor_date_column=args.anchor_date,
+        subject_column=args.anchor_subject,
         k_target=args.k_target,
         sdtm_conformant=args.sdtm,
         blind_treatment=args.blind_treatment,
@@ -246,9 +247,19 @@ def cmd_profile(args: argparse.Namespace) -> int:
 
     print(f"profiled {len(frames)} domain(s): {', '.join(sorted(frames))}")
     print(f"drafted {len(table)} column rules")
-    print(f"anchor: {contract.anchor.domain}.{contract.anchor.date_column}")
     anchor_cols = set(map(str, frames.get(contract.anchor.domain, pd.DataFrame()).columns))
-    if contract.anchor.date_column not in anchor_cols:
+    # Only the treatments that measure from an anchor care whether it resolves.
+    # A raw drop shifts every date and reads the anchor nowhere, so warning
+    # about it there is noise -- and a warning that fires when nothing is wrong
+    # is how people learn to scroll past the ones that matter.
+    anchor_used = any(
+        f.treatment in NEEDS_ANCHOR for d in contract.domains for f in d.fields
+    )
+    if anchor_used:
+        print(f"anchor: {contract.anchor.domain}.{contract.anchor.date_column}")
+    else:
+        print("anchor: not used (no treatment in this contract measures from one)")
+    if anchor_used and contract.anchor.date_column not in anchor_cols:
         print(
             f"        WARNING: {contract.anchor.date_column} is not in "
             f"{contract.anchor.domain}. No reference start date was found, and "
@@ -257,6 +268,30 @@ def cmd_profile(args: argparse.Namespace) -> int:
             "patient. Any study-day conversion will refuse to run.\n"
             "        Point --anchor-domain/--anchor-date at the real "
             "randomisation or first-dose date."
+        )
+    if anchor_used and contract.anchor.subject_column not in anchor_cols:
+        print(
+            f"        WARNING: subject column "
+            f"{contract.anchor.subject_column} is not in "
+            f"{contract.anchor.domain}. Any study-day conversion will refuse\n"
+            "        to run. Name it with --anchor-subject."
+        )
+    # A drop with no --DTC columns is a raw extract, whatever the flags say.
+    # Profiled without --raw it gets study-day conversions, which need an
+    # anchor this drop does not have -- and on the raw side of a training pair
+    # a study day is not merely unnecessary, it deletes the thing being
+    # learned: the model is supposed to derive --DTC from the written date.
+    if not args.raw and not any(
+        str(c).upper().endswith("DTC") for f in frames.values() for c in f.columns
+    ):
+        print(
+            "        NOTE: no column in this drop ends in DTC, so it is very "
+            "likely a raw EDC\n        extract rather than SDTM. Without "
+            "--raw, dates are converted to study days,\n        which needs an "
+            "anchor date this drop has no column for -- and it discards the\n"
+            "        written date form, which is exactly what a raw -> SDTM "
+            "model has to learn.\n        Re-run with --raw to shift dates in "
+            "place instead."
         )
     if args.raw:
         print(
@@ -873,6 +908,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sp.add_argument("--anchor-domain")
     sp.add_argument("--anchor-date")
+    sp.add_argument(
+        "--anchor-subject",
+        help="the subject column in the anchor domain. Inferred from the data "
+        "when omitted. USUBJID is an SDTM construct: a raw extract normally "
+        "spells it SUBJECT, SUBJID or PATID, and naming a column that is not "
+        "there fails at run time, not here.",
+    )
     sp.add_argument("--k-target", type=int, default=5)
     sp.add_argument(
         "--sdtm",
