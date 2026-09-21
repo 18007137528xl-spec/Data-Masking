@@ -260,8 +260,141 @@ class DeidPipeline:
                 rule, frame, out, subjects, anchor_series, result, dom, offset_keys
             )
 
+        self._apply_templates(dom, frame, out)
         result.frame = out
         return result
+
+    def _shape_prefixes(
+        self, rule: FieldRule, frame: pd.DataFrame, dom: DomainContract
+    ) -> pd.Series | None:
+        """Per-row fixed prefix for a shaped surrogate, from another column.
+
+        Resolved through the vault rather than through the output frame: the
+        surrogate map is idempotent, so this gives the same answer whether or
+        not the referenced column's own rule has run yet. Depending on column
+        order here would make the result depend on how the extract happened to
+        be laid out.
+        """
+        ref = rule.shape_prefix_from
+        if not ref:
+            return None
+        if not rule.preserve_format:
+            raise ContractMismatch(
+                f"{dom.name}.{rule.column}: shape_prefix_from needs "
+                "preserve_format, which is what gives the surrogate a shape "
+                "for a prefix to sit in."
+            )
+        if ref not in frame.columns:
+            raise ContractMismatch(
+                f"{dom.name}.{rule.column}: shape_prefix_from names {ref!r}, "
+                "which is not in the data."
+            )
+        ref_rule = next((f for f in dom.fields if f.column == ref), None)
+        if (
+            ref_rule is None
+            or ref_rule.treatment is not Treatment.SURROGATE_ID
+            or not ref_rule.preserve_format
+        ):
+            raise ContractMismatch(
+                f"{dom.name}.{rule.column}: shape_prefix_from names {ref!r}, "
+                "which must itself be a format-preserving surrogate_id. "
+                "Otherwise its surrogate is a different length from the real "
+                "value and the composed identifier changes shape."
+            )
+
+        originals = frame[rule.column].astype("string")
+        ref_values = frame[ref].astype("string")
+        # The declared relationship has to be true of the data. Where it is
+        # not, the prefix is not the site and forcing it would quietly rewrite
+        # the identifier into something the study never used.
+        bad = [
+            (str(o), str(r))
+            for o, r in zip(originals, ref_values)
+            if not pd.isna(o) and not pd.isna(r) and not str(o).startswith(str(r))
+        ]
+        if bad:
+            o, r = bad[0]
+            raise ContractMismatch(
+                f"{dom.name}.{rule.column}: shape_prefix_from names {ref!r}, "
+                f"but {len(bad)} value(s) do not start with it -- {o!r} does "
+                f"not begin with {r!r}. The segment this names is not the "
+                "prefix of this identifier."
+            )
+        ref_map = self.vault.surrogate_map(
+            ref_rule.entity or "site",
+            (str(v) for v in ref_values.dropna().unique()),
+            prefix=ref_rule.prefix or "",
+            preserve_format=True,
+        )
+        return ref_values.map(
+            lambda v: None if pd.isna(v) else ref_map[str(v)]
+        )
+
+    def _apply_templates(
+        self, dom: DomainContract, frame: pd.DataFrame, out: pd.DataFrame
+    ) -> None:
+        """Rebuild composed identifiers, AFTER every column has been treated.
+
+        This runs as a second pass for one reason: a template that names
+        another column has to read that column's PUBLISHED value, and during
+        the first pass it may not exist yet -- the rules run in the data's
+        column order, and SUBJECT commonly precedes SITEID.
+
+        Reading the input frame instead, which is what this did, published the
+        real site code inside the composed subject identifier while the SITEID
+        column beside it carried a surrogate. Both wrong at once: a real
+        identifier in the clear, and two columns that disagree about the same
+        site.
+        """
+        for rule in dom.fields:
+            tmpl = rule.output_template
+            if not tmpl or rule.treatment is Treatment.DROP:
+                continue
+            name = rule.resolved_output()
+            if name not in out.columns:
+                continue
+            refs = set(re.findall(r"{(\w+)}", tmpl)) - {"value"}
+            missing = sorted(
+                c for c in refs
+                if c not in out.columns and c not in map(str, frame.columns)
+            )
+            if missing:
+                raise ContractMismatch(
+                    f"{dom.name}.{rule.column}: output_template {tmpl!r} "
+                    f"references column(s) not in the data: {missing}"
+                )
+            # Treated value where the column was treated, original only where
+            # it was retained unchanged. A column that was dropped is gone on
+            # purpose and must not come back through a template.
+            dropped = {
+                f.column for f in dom.fields if f.treatment is Treatment.DROP
+            }
+            reborn = sorted(refs & dropped)
+            if reborn:
+                raise ContractMismatch(
+                    f"{dom.name}.{rule.column}: output_template {tmpl!r} "
+                    f"references column(s) this contract drops: {reborn}. "
+                    "Dropping a column and then republishing it inside another "
+                    "one is not a rename, it is a leak."
+                )
+            sources = {
+                c: (out[c] if c in out.columns else frame[c].astype("string"))
+                for c in refs
+            }
+            treated = out[name]
+            out[name] = pd.Series(
+                [
+                    None
+                    if pd.isna(v)
+                    else tmpl.format(
+                        value=v,
+                        **{c: str(sources[c].loc[idx]) for c in refs},
+                    )
+                    for idx, v in treated.items()
+                ],
+                index=treated.index,
+                dtype="string",
+            )
 
     def _apply_rule(
         self,
@@ -301,6 +434,7 @@ class DeidPipeline:
                 entity=entity,
                 prefix=rule.prefix or "",
                 preserve_format=bool(rule.preserve_format),
+                keep_prefixes=self._shape_prefixes(rule, frame, dom),
             )
 
         elif t is Treatment.FAKER:
@@ -434,28 +568,7 @@ class DeidPipeline:
         else:  # pragma: no cover - Treatment is exhaustive
             raise ContractMismatch(f"unhandled treatment {t!r}")
 
-        if rule.output_template and name in out.columns:
-            tmpl = rule.output_template
-            cols = set(re.findall(r"{(\w+)}", tmpl)) - {"value"}
-            missing = sorted(cols - set(map(str, frame.columns)))
-            if missing:
-                raise ContractMismatch(
-                    f"{dom.name}.{rule.column}: output_template {tmpl!r} "
-                    f"references column(s) not in the data: {missing}"
-                )
-            treated = out[name]
-            out[name] = pd.Series(
-                [
-                    None
-                    if pd.isna(v)
-                    else tmpl.format(
-                        value=v, **{c: str(frame.at[idx, c]) for c in cols}
-                    )
-                    for idx, v in treated.items()
-                ],
-                index=treated.index,
-                dtype="string",
-            )
+        return None
 
     # ------------------------------------------------------------------
     # blinding

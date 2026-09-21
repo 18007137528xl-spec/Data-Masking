@@ -273,6 +273,7 @@ def surrogate(
     prefix: str = "",
     length: int = 8,
     preserve_format: bool = False,
+    keep_prefixes: pd.Series | None = None,
 ) -> pd.Series:
     """Replace identifiers with random, non-derived surrogates from the vault.
 
@@ -287,12 +288,33 @@ def surrogate(
     The value is still random and still from the vault; only its shape is
     borrowed.
     """
+    fixed: dict[str, str] | None = None
+    if keep_prefixes is not None:
+        # One original always maps to one surrogate, so it must always get the
+        # same fixed prefix. If the same subject number appears under two
+        # different sites the data is telling us the subject key is not what
+        # the contract says it is, and guessing which site wins would bury it.
+        fixed = {}
+        for v, p in zip(values, keep_prefixes):
+            if pd.isna(v) or pd.isna(p):
+                continue
+            v, p = str(v), str(p)
+            if v in fixed and fixed[v] != p:
+                raise ValueError(
+                    f"{v!r} appears under two different values of the prefix "
+                    f"column ({fixed[v]!r} and {p!r}). One identifier cannot "
+                    "take two prefixes; the prefix column is not a property "
+                    "of this identifier."
+                )
+            fixed[v] = p
+
     mapping = vault.surrogate_map(
         entity,
         (str(v) for v in values.dropna().unique()),
         prefix=prefix,
         length=length,
         preserve_format=preserve_format,
+        keep_prefixes=fixed,
     )
     return pd.Series(
         [None if pd.isna(v) else mapping[str(v)] for v in values],

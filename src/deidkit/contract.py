@@ -188,6 +188,20 @@ class FieldRule(BaseModel):
         "surrogate that collides with any real identifier it has seen, so the "
         "output never becomes a permutation of the real IDs.",
     )
+    shape_prefix_from: str | None = Field(
+        default=None,
+        description="With preserve_format: take the leading segment of the "
+        "surrogate from ANOTHER column's surrogate instead of drawing it.\n\n"
+        "For a subject number with the site embedded in it. '002-0001' shaped "
+        "freely becomes '141-8215' while the SITEID column beside it becomes "
+        "'387' -- three different site codes for one site, and every subject "
+        "at that site now carries a different prefix. The relationship 'the "
+        "first segment of SUBJECT is the site' is true of the input and false "
+        "of the output, so a model trained on it learns that it does not hold. "
+        "Naming the site column here makes the segment follow that column's "
+        "own surrogate. The named column must also be a format-preserving "
+        "surrogate, or the lengths cannot line up.",
+    )
     faker_provider: str | None = Field(
         default=None, description="Faker provider name, e.g. 'name', 'street_address'."
     )

@@ -957,6 +957,59 @@ def _raw_subject_key(frame: pd.DataFrame) -> str | None:
     return None
 
 
+def _link_embedded_site(
+    frame: pd.DataFrame, per_col: dict[str, "Suggestion"]
+) -> None:
+    """Tie a subject surrogate's leading segment to the site's surrogate.
+
+    Raw subject numbers usually carry the site in front: 002-0001 at site 002.
+    Shaped independently, that subject becomes 141-8215 while SITEID becomes
+    387 -- and every subject at site 002 gets a different leading segment. The
+    input says 'the first segment of SUBJECT is the site'; the output says it
+    is not, and a model trained on the pair learns the relationship does not
+    hold. It is the same failure as publishing SITEID and SITENAME as two
+    unrelated surrogates for one site, one level further in.
+
+    Proposed only when the data actually shows the relationship on every row.
+    """
+    subject = next(
+        (
+            c for c, s in per_col.items()
+            if s.rule.treatment is Treatment.SURROGATE_ID
+            and s.rule.entity == "subject"
+            and s.rule.preserve_format
+            and not s.rule.output_template
+        ),
+        None,
+    )
+    site = next(
+        (
+            c for c, s in per_col.items()
+            if s.rule.treatment is Treatment.SURROGATE_ID
+            and s.rule.entity == "site"
+            and s.rule.preserve_format
+        ),
+        None,
+    )
+    if not subject or not site or subject not in frame or site not in frame:
+        return
+    pairs = frame[[subject, site]].dropna()
+    if pairs.empty:
+        return
+    holds = all(
+        str(a).startswith(str(b)) and len(str(a)) > len(str(b))
+        for a, b in zip(pairs[subject], pairs[site])
+    )
+    if not holds:
+        return
+    sug = per_col[subject]
+    per_col[subject] = Suggestion(
+        sug.rule.model_copy(update={"shape_prefix_from": site}),
+        sug.confidence,
+        sug.rationale + f", site segment follows {site}",
+    )
+
+
 def draft_contract(
     frames: dict[str, pd.DataFrame],
     *,
@@ -1058,6 +1111,8 @@ def draft_contract(
                         sug.confidence,
                         sug.rationale + ", composed via output_template",
                     )
+
+        _link_embedded_site(frame, per_col)
 
         suggestions[name] = per_col
         domains.append(

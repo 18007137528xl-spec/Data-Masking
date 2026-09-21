@@ -275,7 +275,9 @@ class Vault:
             f"{length}; raise 'length'"
         )
 
-    def _new_shaped_surrogate(self, entity: str, original: str) -> str:
+    def _new_shaped_surrogate(
+        self, entity: str, original: str, keep_prefix: str = ""
+    ) -> str:
         """A random surrogate with the same shape as ``original``.
 
         Same length, same layout: a digit stays a digit, a letter stays a
@@ -296,10 +298,17 @@ class Vault:
         the point. It leaks nothing about the subject: every ID in a study
         shares one layout.
         """
+        if keep_prefix:
+            if len(keep_prefix) >= len(original):
+                raise VaultError(
+                    f"the fixed prefix {keep_prefix!r} is as long as "
+                    f"{original!r}: nothing would be left to randomise."
+                )
+        start = len(keep_prefix)
         slots = [
             i
             for i, ch in enumerate(original)
-            if ch.isdigit() or (ch.isalpha() and ch.isascii())
+            if i >= start and (ch.isdigit() or (ch.isalpha() and ch.isascii()))
         ]
         if not slots:
             raise VaultError(
@@ -323,6 +332,7 @@ class Vault:
             )
 
         chars = list(original)
+        chars[:start] = list(keep_prefix)
         for _ in range(64):
             for i in slots:
                 ch = original[i]
@@ -353,6 +363,7 @@ class Vault:
         prefix: str = "",
         length: int = 8,
         preserve_format: bool = False,
+        keep_prefix: str = "",
     ) -> str:
         """Return the surrogate for ``original``, issuing one if needed.
 
@@ -395,7 +406,7 @@ class Vault:
             )
 
         surrogate = (
-            self._new_shaped_surrogate(entity, original)
+            self._new_shaped_surrogate(entity, original, keep_prefix)
             if preserve_format
             else self._new_surrogate(entity, prefix, length)
         )
@@ -420,6 +431,7 @@ class Vault:
         prefix: str = "",
         length: int = 8,
         preserve_format: bool = False,
+        keep_prefixes: dict[str, str] | None = None,
     ) -> dict[str, str]:
         """Batch form of :meth:`surrogate_for`. Commits once.
 
@@ -439,6 +451,7 @@ class Vault:
             out[o] = self.surrogate_for(
                 entity, o, prefix=prefix, length=length,
                 preserve_format=preserve_format,
+                keep_prefix=(keep_prefixes or {}).get(o, ""),
             )
         self._db.commit()
         return out

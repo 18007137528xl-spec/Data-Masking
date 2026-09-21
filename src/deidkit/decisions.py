@@ -78,6 +78,7 @@ SETTABLE = (
     "entity",
     "prefix",
     "preserve_format",
+    "shape_prefix_from",
     "faker_provider",
     "output_column",
     "output_template",
@@ -125,7 +126,9 @@ TREATMENT_HELP: dict[str, dict[str, object]] = {
     "surrogate_id": {
         "does": "random non-derived surrogate + vault crosswalk",
         "requires": ("entity",),
-        "optional": ("prefix", "preserve_format", "output_template"),
+        "optional": (
+            "prefix", "preserve_format", "shape_prefix_from", "output_template",
+        ),
         "cost": "none; joins and reversibility both survive",
     },
     "faker": {
