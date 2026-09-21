@@ -65,6 +65,11 @@ class ColumnProfile:
     raw_date_order: str = "unambiguous"
     #: Written forms present, as templates -- never values.
     raw_date_formats: dict[str, int] = field(default_factory=dict)
+    #: Can a surrogate be drawn in this column's own shape and still have room
+    #: to be distinct for every value? False for narrow codes ('01', 'A'),
+    #: where the shape admits fewer strings than the column has values, and for
+    #: values with no letters or digits to replace.
+    shapeable: bool = False
     samples: list[str] = field(default_factory=list)
 
     @property
@@ -149,8 +154,42 @@ def profile_column(series: pd.Series, *, n_samples: int = 3) -> ColumnProfile:
         raw_date_precise_rate=raw_precise,
         raw_date_order=rawdates.infer_order(probe) if raw_rate else "unambiguous",
         raw_date_formats=rawdates.describe_formats(probe) if raw_rate else {},
+        shapeable=_shapeable(text, int(non_null.nunique())),
         samples=[str(v)[:80] for v in non_null.head(n_samples)],
     )
+
+
+def _shape_space(value: str) -> int:
+    """How many distinct strings share this value's shape."""
+    space = 1
+    for ch in value:
+        if ch.isdigit():
+            space *= 10
+        elif ch.isalpha() and ch.isascii():
+            space *= 26
+        if space > 1 << 40:
+            return 1 << 40
+    return space
+
+
+def _shapeable(text: pd.Series, n_unique: int) -> bool:
+    """Is a format-preserving surrogate safe to propose for this column?
+
+    Two ways it is not. A shape with no letters or digits has nothing to
+    replace. And a narrow shape -- a two-character site code, a single letter
+    -- admits so few strings that drawing a distinct surrogate for every value
+    either fails or, worse, is forced to use nearly the whole space, so most
+    of the real identifiers end up published as somebody's surrogate.
+
+    The margin is deliberately wide: a shape must hold at least 100x the
+    column's distinct values, and at least 1000 strings. Room to spare is
+    what keeps the draws from concentrating.
+    """
+    if text.empty or n_unique == 0:
+        return False
+    sample = text.head(500)
+    smallest = min((_shape_space(v) for v in sample), default=0)
+    return smallest >= max(1000, 100 * n_unique)
 
 
 def profile_frame(frame: pd.DataFrame) -> dict[str, ColumnProfile]:
@@ -355,6 +394,7 @@ def suggest(
                 Treatment.SURROGATE_ID,
                 entity="subject",
                 prefix="SUBJ",
+                preserve_format=profile.shapeable,
                 note="random surrogate, shared with the SDTM side via the "
                 "domain's join_key_template. Raw subject numbers encode site "
                 "and enrolment order, so they are identifiers in their own "
@@ -385,6 +425,7 @@ def suggest(
                 Treatment.SURROGATE_ID,
                 entity="subject",
                 prefix="SUBJ",
+                preserve_format=profile.shapeable,
                 note="random surrogate, not derived from the original: EDC "
                 "subject IDs encode country, site and enrolment order",
             ),
@@ -397,6 +438,7 @@ def suggest(
                 Treatment.SURROGATE_ID,
                 entity="site",
                 prefix="SITE",
+                preserve_format=profile.shapeable,
                 is_quasi_identifier=True,
                 note="a site with very few subjects is itself identifying; "
                 "consider pooling low-enrolment sites into a region",
@@ -445,6 +487,12 @@ def suggest(
                 Treatment.SURROGATE_ID,
                 entity="site",
                 prefix="SITE",
+                # Deliberately NOT format-preserving. A site code has one
+                # layout shared by every site, so shaping it leaks nothing; a
+                # site NAME is free text of varying length, and a shaped
+                # surrogate would publish each institution's name length and
+                # word structure -- which for a named hospital is most of the
+                # way back to the institution.
                 note="the site's NAME, and no site code column to defer to. A "
                 "named institution is a strong geographic identifier, so it "
                 "gets a surrogate rather than being published.",
