@@ -50,6 +50,9 @@ all = [
 [project.scripts]
 deidkit = "deidkit.cli:main"
 
+[tool.setuptools.package-data]
+deidkit = ["console.html"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

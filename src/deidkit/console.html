@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>deidkit console</title>
+<style>
+:root{
+  --paper:#FBFAF7; --raised:#FFFFFF; --sunk:#F2F0EB;
+  --ink:#16191A; --ink-2:#4A5356; --ink-3:#778184; --rule:#DFDCD5;
+  --accent:#0F5C63; --accent-soft:#E3EDEC;
+  --halt:#9A3324; --halt-soft:#F6E7E3;
+  --warn:#8A5A12; --warn-soft:#F7EFDF;
+  --good:#2F6B3C; --good-soft:#E6F0E7;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#141718; --raised:#1C2122; --sunk:#242A2B;
+  --ink:#EDEEEC; --ink-2:#B3BCBD; --ink-3:#7E8889; --rule:#333A3B;
+  --accent:#5FB6BC; --accent-soft:#1B2E30;
+  --halt:#E08070; --halt-soft:#32211E;
+  --warn:#D8A54B; --warn-soft:#2E2718;
+  --good:#7FBE8C; --good-soft:#1C2A1F;
+  color-scheme:dark;
+}}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.55 var(--sans)}
+h1,h2,h3{margin:0;font-weight:640;letter-spacing:-.01em;text-wrap:balance}
+button{font:inherit;cursor:pointer}
+code,.mono{font-family:var(--mono);font-size:.92em}
+
+.shell{display:grid;grid-template-columns:230px minmax(0,1fr);min-height:100vh}
+@media (max-width:820px){.shell{grid-template-columns:1fr}}
+
+/* step rail: the five steps are a real gated sequence, so they are numbered */
+.rail{background:var(--sunk);border-right:1px solid var(--rule);padding:22px 0}
+@media (max-width:820px){.rail{border-right:0;border-bottom:1px solid var(--rule);padding:14px 0}}
+.brand{padding:0 20px 18px;display:flex;flex-direction:column;gap:2px}
+.brand b{font-size:15px;letter-spacing:.02em}
+.brand span{font-size:12px;color:var(--ink-3)}
+.steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+@media (max-width:820px){.steps{flex-direction:row;overflow-x:auto;gap:2px;padding:0 12px}}
+.steps li{display:block}
+.steps button{
+  width:100%;display:flex;align-items:center;gap:10px;background:none;border:0;
+  padding:9px 20px;color:var(--ink-2);text-align:left;white-space:nowrap;
+  border-left:2px solid transparent;
+}
+.steps button:hover:not(:disabled){color:var(--ink)}
+.steps button[aria-current="true"]{color:var(--ink);border-left-color:var(--accent);background:var(--paper)}
+.steps button:disabled{color:var(--ink-3);cursor:not-allowed}
+.num{font-family:var(--mono);font-size:11px;color:var(--ink-3);min-width:16px}
+.steps button[aria-current="true"] .num{color:var(--accent)}
+.tick{margin-left:auto;color:var(--good);font-size:12px}
+
+main{padding:30px 34px 70px;max-width:1180px}
+@media (max-width:820px){main{padding:22px 16px 60px}}
+.head{margin-bottom:20px}
+.head p{margin:7px 0 0;color:var(--ink-2);max-width:66ch}
+section[hidden]{display:none!important}
+
+.card{background:var(--raised);border:1px solid var(--rule);border-radius:9px;padding:18px 20px;margin-bottom:16px}
+.field{display:flex;flex-direction:column;gap:5px;margin-bottom:13px}
+.field label{font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.field .hint{font-size:12.5px;color:var(--ink-3)}
+input[type=text]{
+  font:inherit;font-family:var(--mono);font-size:13.5px;padding:8px 10px;
+  background:var(--paper);color:var(--ink);border:1px solid var(--rule);border-radius:6px;width:100%;
+}
+input[type=text]:focus-visible,button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.row{display:flex;gap:16px;flex-wrap:wrap}
+.row>*{flex:1 1 240px}
+.check{display:flex;align-items:flex-start;gap:9px;margin-bottom:12px}
+.check input{margin-top:3px}
+.check span{font-size:13.5px;color:var(--ink-2)}
+
+.go{background:var(--accent);color:#fff;border:0;border-radius:7px;padding:9px 18px;font-weight:600}
+.go:disabled{opacity:.45;cursor:not-allowed}
+.ghost{background:none;border:1px solid var(--rule);color:var(--ink);border-radius:7px;padding:8px 14px}
+
+.note{border-radius:8px;padding:11px 14px;margin-bottom:10px;font-size:14px;border:1px solid}
+.note.halt{background:var(--halt-soft);border-color:var(--halt);color:var(--halt)}
+.note.warn{background:var(--warn-soft);border-color:var(--warn);color:var(--warn)}
+.note.info{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+.note.good{background:var(--good-soft);border-color:var(--good);color:var(--good)}
+.note b{display:block;margin-bottom:2px}
+
+.bar{
+  position:sticky;top:0;z-index:5;background:var(--paper);border-bottom:1px solid var(--rule);
+  padding:11px 0 12px;margin-bottom:2px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+}
+.meter{flex:1 1 200px;height:6px;background:var(--sunk);border-radius:3px;overflow:hidden;min-width:120px}
+.meter i{display:block;height:100%;background:var(--accent);width:0;transition:width .2s}
+.count{font-family:var(--mono);font-size:13px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.count b{color:var(--halt)}
+
+.tablewrap{overflow-x:auto;border:1px solid var(--rule);border-radius:9px;background:var(--raised)}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th{
+  text-align:left;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);
+  font-weight:600;padding:9px 12px;border-bottom:1px solid var(--rule);white-space:nowrap;
+  position:sticky;top:0;background:var(--raised);
+}
+td{padding:9px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
+tr:last-child td{border-bottom:0}
+tr.undecided td{background:color-mix(in srgb,var(--halt-soft) 55%,transparent)}
+tr.changed td{background:color-mix(in srgb,var(--warn-soft) 45%,transparent)}
+.col{font-family:var(--mono);font-weight:600;white-space:nowrap}
+.dom{font-family:var(--mono);color:var(--ink-3);font-size:12px}
+.why{color:var(--ink-2);max-width:40ch}
+.detail{color:var(--ink-3);font-size:12.5px;max-width:46ch;margin-top:3px}
+.params{font-family:var(--mono);font-size:12px;color:var(--ink-2);word-break:break-word;max-width:30ch}
+
+.chip{
+  display:inline-block;font-size:11px;letter-spacing:.04em;text-transform:uppercase;
+  padding:2px 7px;border-radius:99px;border:1px solid;font-weight:600;white-space:nowrap;
+}
+.chip.low{color:var(--halt);border-color:var(--halt);background:var(--halt-soft)}
+.chip.medium{color:var(--warn);border-color:var(--warn);background:var(--warn-soft)}
+.chip.high{color:var(--ink-3);border-color:var(--rule);background:var(--sunk)}
+.chip.qi{color:var(--accent);border-color:var(--accent);background:var(--accent-soft);margin-left:5px}
+
+.pick{display:flex;gap:5px}
+.pick button{
+  border:1px solid var(--rule);background:var(--paper);color:var(--ink-2);
+  border-radius:6px;padding:4px 11px;font-size:12.5px;font-weight:600;
+}
+.pick button[aria-pressed="true"][data-v="OK"]{background:var(--good);border-color:var(--good);color:#fff}
+.pick button[aria-pressed="true"][data-v="CHANGE"]{background:var(--warn);border-color:var(--warn);color:#fff}
+.override{margin-top:7px;display:flex;flex-direction:column;gap:5px}
+.override select,.override input{
+  font:inherit;font-size:12.5px;font-family:var(--mono);padding:5px 7px;border-radius:5px;
+  border:1px solid var(--rule);background:var(--paper);color:var(--ink);width:100%;
+}
+
+pre.out{
+  background:var(--sunk);border:1px solid var(--rule);border-radius:8px;padding:14px 16px;
+  overflow-x:auto;font-family:var(--mono);font-size:12.5px;line-height:1.5;margin:0 0 14px;
+  white-space:pre-wrap;
+}
+dl.kv{display:grid;grid-template-columns:auto 1fr;gap:5px 16px;margin:0;font-size:13.5px}
+dl.kv dt{color:var(--ink-3)}
+dl.kv dd{margin:0;font-family:var(--mono);word-break:break-all}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid var(--rule);border-top-color:var(--accent);border-radius:50%;animation:s .7s linear infinite;vertical-align:-1px}
+@keyframes s{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <nav class="rail">
+    <div class="brand"><b>deidkit</b><span>de-identification console</span></div>
+    <ul class="steps" id="steps">
+      <li><button data-step="0" aria-current="true"><span class="num">01</span>Read the drop<span class="tick" hidden>done</span></button></li>
+      <li><button data-step="1" disabled><span class="num">02</span>Review every column<span class="tick" hidden>done</span></button></li>
+      <li><button data-step="2" disabled><span class="num">03</span>Sign it off<span class="tick" hidden>done</span></button></li>
+      <li><button data-step="3" disabled><span class="num">04</span>Run<span class="tick" hidden>done</span></button></li>
+      <li><button data-step="4" disabled><span class="num">05</span>Results<span class="tick" hidden>done</span></button></li>
+    </ul>
+  </nav>
+
+  <main>
+    <div id="err"></div>
+
+    <!-- 01 -->
+    <section data-panel="0">
+      <div class="head">
+        <h1>Read the drop</h1>
+        <p>Point this at the folder on this server holding the extract. Nothing is
+           uploaded — the files are read where they sit, and the tiers are written back here.</p>
+      </div>
+      <div class="card">
+        <div class="field">
+          <label for="dir">Folder on this server</label>
+          <input type="text" id="dir" placeholder="/data/quarantine/study_abc" spellcheck="false">
+        </div>
+        <label class="check"><input type="checkbox" id="raw">
+          <span><b>This is a raw EDC extract</b>, the input side of a raw&nbsp;→&nbsp;SDTM pair.
+          Dates are found by their values rather than a <code>--DTC</code> suffix and shifted
+          with their written form intact, because converting <code>19/03/2025</code> to a study
+          day deletes the thing the model is supposed to learn.</span></label>
+        <div class="row">
+          <div class="field">
+            <label for="source">Study / source name</label>
+            <input type="text" id="source" placeholder="defaults to the folder name" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="k">k target</label>
+            <input type="text" id="k" value="5" spellcheck="false">
+          </div>
+        </div>
+        <div class="field">
+          <label for="offsetkey">Offset key template <span class="hint">optional</span></label>
+          <input type="text" id="offsetkey" placeholder="TIG-2026-001-US-{SUBJECT}" spellcheck="false">
+          <span class="hint">Only for the two sides of a training pair. Both sides must resolve to
+            a byte-identical string, or one subject gets two unrelated offsets and the pair breaks
+            while both files still look correct.</span>
+        </div>
+        <button class="go" id="btn-profile">Read and propose</button>
+      </div>
+    </section>
+
+    <!-- 02 -->
+    <section data-panel="1" hidden>
+      <div class="head">
+        <h1>Review every column</h1>
+        <p>One row per column, least confident first. These are guesses from naming convention
+           and content — they are not knowledge of your study. A row left blank blocks the run.</p>
+      </div>
+      <div id="notes"></div>
+      <div class="bar">
+        <div class="count" id="tally"></div>
+        <div class="meter"><i id="meterfill"></i></div>
+        <button class="ghost" id="btn-bulk"></button>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr>
+            <th>Column</th><th>Proposed</th><th>Why</th><th>Decision</th>
+          </tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 03 -->
+    <section data-panel="2" hidden>
+      <div class="head">
+        <h1>Sign it off</h1>
+        <p>This turns the reviewed sheet into a contract carrying a signature over these exact
+           rules. Edit a rule afterwards and the signature stops matching, and the run refuses.</p>
+      </div>
+      <div class="card">
+        <div class="field">
+          <label for="who">Approved by</label>
+          <input type="text" id="who" placeholder="a person, not a service account" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="cnote">Note <span class="hint">optional, recorded with the approval</span></label>
+          <input type="text" id="cnote" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="cout">Write the approved contract to</label>
+          <input type="text" id="cout" placeholder="contracts/study_abc.yaml" spellcheck="false">
+          <span class="hint">Keep this file. With the manifest it is the record of how this drop
+            was treated, and it is what a second drop of the same study carries forward from.</span>
+        </div>
+        <button class="go" id="btn-approve">Approve these rules</button>
+      </div>
+      <div id="approved"></div>
+    </section>
+
+    <!-- 04 -->
+    <section data-panel="3" hidden>
+      <div class="head">
+        <h1>Run</h1>
+        <p>Transform, screen the free text, measure re-identification risk, publish.</p>
+      </div>
+      <div class="card">
+        <div class="row">
+          <div class="field">
+            <label for="out">Output folder</label>
+            <input type="text" id="out" placeholder="/tiers/study_abc" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="vault">Vault file</label>
+            <input type="text" id="vault" placeholder="/vault/study_abc.db" spellcheck="false">
+            <span class="hint">The same study must always use the same vault, or the same subject
+              gets a different surrogate and the two drops cannot be joined.</span>
+          </div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label for="operator">Operator</label>
+            <input type="text" id="operator" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="fmt">Format</label>
+            <input type="text" id="fmt" value="csv" spellcheck="false">
+          </div>
+        </div>
+        <div class="note info">
+          <b>The vault key comes from the server's environment</b>
+          It is never typed into this page. A key entered in a browser ends up in the request log,
+          the autofill store, and any screen-share.
+        </div>
+        <button class="go" id="btn-run">Run</button>
+      </div>
+    </section>
+
+    <!-- 05 -->
+    <section data-panel="4" hidden>
+      <div class="head"><h1>Results</h1></div>
+      <div id="results"></div>
+    </section>
+  </main>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let STATE = {}, ROWS = [], TREATMENTS = [];
+
+/* The picker's options come from the same reference the CLI prints, so the
+   two front doors cannot drift apart. Awaited where it is needed rather than
+   only at boot: a fast click used to render the rows before it arrived, and
+   the picker was then silently empty for the whole session. */
+async function treatments(){
+  if (TREATMENTS.length) return TREATMENTS;
+  try{
+    const j = await api('/api/treatments', {});
+    TREATMENTS = [...j.text.matchAll(/^ {2}(\w+)\s{2,}/gm)].map(m => m[1]);
+  }catch(e){ /* the params box still accepts a treatment name by hand */ }
+  return TREATMENTS;
+}
+
+function showError(msg){
+  $('#err').innerHTML = msg
+    ? `<div class="note halt"><b>It stopped here</b>${esc(msg)}</div>` : '';
+  if (msg) window.scrollTo({top:0, behavior:'smooth'});
+}
+function esc(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+async function api(path, body){
+  const opt = body === undefined
+    ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)};
+  const r = await fetch(path, opt);
+  const j = await r.json().catch(() => ({error:'the server sent something unreadable'}));
+  if (!r.ok) throw new Error(j.error || 'request failed');
+  showError('');
+  return j;
+}
+function busy(btn, on, label){
+  btn.disabled = on;
+  btn.innerHTML = on ? '<span class="spin"></span> ' + esc(label) : btn.dataset.label;
+}
+
+/* ---- steps ---------------------------------------------------------- */
+function go(n){
+  document.querySelectorAll('[data-panel]').forEach(p => p.hidden = +p.dataset.panel !== n);
+  document.querySelectorAll('.steps button').forEach(b =>
+    b.setAttribute('aria-current', String(+b.dataset.step === n)));
+  window.scrollTo({top:0});
+}
+document.querySelectorAll('.steps button').forEach(b =>
+  b.addEventListener('click', () => { if (!b.disabled) go(+b.dataset.step); }));
+
+function unlock(n, done){
+  const b = document.querySelector(`.steps button[data-step="${n}"]`);
+  b.disabled = false;
+  if (done !== undefined) b.querySelector('.tick').hidden = !done;
+}
+
+/* ---- 01 profile ------------------------------------------------------ */
+$('#btn-profile').dataset.label = 'Read and propose';
+$('#btn-profile').addEventListener('click', async () => {
+  const btn = $('#btn-profile');
+  busy(btn, true, 'reading…');
+  try{
+    const j = await api('/api/profile', {
+      directory: $('#dir').value,
+      raw: $('#raw').checked,
+      source: $('#source').value,
+      k_target: $('#k').value,
+      offset_key: $('#offsetkey').value,
+    });
+    STATE = j.state; ROWS = j.rows;
+    await treatments();
+    renderNotes(j.notes);
+    renderRows();
+    unlock(0, true); unlock(1);
+    go(1);
+  }catch(e){ showError(e.message); }
+  finally{ busy(btn, false); }
+});
+
+function renderNotes(notes){
+  const order = {halt:0, warn:1, info:2};
+  $('#notes').innerHTML = (notes || [])
+    .slice().sort((a,b) => (order[a.level] ?? 3) - (order[b.level] ?? 3))
+    .map(n => `<div class="note ${esc(n.level)}"><b>${
+      n.level === 'halt' ? 'This will stop the run'
+      : n.level === 'warn' ? 'Worth checking before you go on' : 'Note'
+    }</b>${esc(n.text)}</div>`).join('');
+}
+
+/* ---- 02 review ------------------------------------------------------- */
+function renderRows(){
+  $('#rows').innerHTML = ROWS.map((r, i) => {
+    const dec = r.decision || '';
+    const cls = dec === '' ? 'undecided' : (dec === 'CHANGE' ? 'changed' : '');
+    return `<tr class="${cls}" data-i="${i}">
+      <td>
+        <div class="col">${esc(r.column)}</div>
+        <div class="dom">${esc(r.domain)}</div>
+      </td>
+      <td>
+        <div class="mono">${esc(r.proposed_treatment)}</div>
+        ${r.proposed_params ? `<div class="params">${esc(r.proposed_params)}</div>` : ''}
+      </td>
+      <td>
+        <span class="chip ${esc(r.confidence)}">${esc(r.confidence)}</span>
+        ${r.quasi_identifier ? '<span class="chip qi">quasi-id</span>' : ''}
+        <div class="why">${esc(r.why)}</div>
+        ${r.detail ? `<div class="detail">${esc(r.detail)}</div>` : ''}
+      </td>
+      <td>
+        <div class="pick">
+          <button data-v="OK" aria-pressed="${dec === 'OK'}">OK</button>
+          <button data-v="CHANGE" aria-pressed="${dec === 'CHANGE'}">Change</button>
+        </div>
+        <div class="override" ${dec === 'CHANGE' ? '' : 'hidden'}>
+          <select data-f="decision_treatment">
+            <option value="">choose a treatment…</option>
+            ${TREATMENTS.map(t => `<option value="${esc(t)}"${
+              r.decision_treatment === t ? ' selected' : ''}>${esc(t)}</option>`).join('')}
+          </select>
+          <input type="text" data-f="decision_params" placeholder="entity=subject;prefix=SUBJ"
+                 value="${esc(r.decision_params)}">
+          <input type="text" data-f="steward_note" placeholder="why you overruled it"
+                 value="${esc(r.steward_note)}">
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+  tally();
+}
+
+$('#rows').addEventListener('click', e => {
+  const b = e.target.closest('.pick button');
+  if (!b) return;
+  const tr = b.closest('tr'), i = +tr.dataset.i;
+  ROWS[i].decision = ROWS[i].decision === b.dataset.v ? '' : b.dataset.v;
+  renderRows();
+  save([i]);
+});
+$('#rows').addEventListener('change', e => {
+  const f = e.target.closest('[data-f]');
+  if (!f) return;
+  const i = +f.closest('tr').dataset.i;
+  ROWS[i][f.dataset.f] = f.value;
+  save([i]);
+});
+
+let saveTimer = null;
+function save(idx){
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    try{
+      const j = await api('/api/decide', {rows: idx.map(i => ({index:i, ...ROWS[i]}))});
+      STATE = j.state;
+    }catch(e){ showError(e.message); }
+  }, 120);
+}
+
+function tally(){
+  const done = ROWS.filter(r => r.decision).length;
+  const blank = ROWS.length - done;
+  const high = ROWS.filter(r => r.confidence === 'high' && !r.decision).length;
+  $('#tally').innerHTML = blank
+    ? `${done} of ${ROWS.length} decided &middot; <b>${blank} still blank</b>`
+    : `${done} of ${ROWS.length} decided`;
+  $('#meterfill').style.width = (ROWS.length ? done / ROWS.length * 100 : 0) + '%';
+  const bulk = $('#btn-bulk');
+  bulk.hidden = high === 0;
+  bulk.textContent = `Accept the ${high} the profiler is confident about`;
+  if (!blank){ unlock(1, true); unlock(2); }
+}
+
+$('#btn-bulk').addEventListener('click', () => {
+  const idx = [];
+  ROWS.forEach((r, i) => {
+    if (r.confidence === 'high' && !r.decision){ r.decision = 'OK'; idx.push(i); }
+  });
+  renderRows();
+  save(idx);
+});
+
+/* ---- 03 approve ------------------------------------------------------ */
+$('#btn-approve').dataset.label = 'Approve these rules';
+$('#btn-approve').addEventListener('click', async () => {
+  const btn = $('#btn-approve');
+  busy(btn, true, 'signing…');
+  try{
+    const j = await api('/api/approve', {
+      approved_by: $('#who').value,
+      note: $('#cnote').value,
+      contract_out: $('#cout').value,
+    });
+    STATE = j.state;
+    $('#approved').innerHTML = `<div class="note good">
+        <b>Approved</b>${j.stats.accepted} accepted as proposed, ${j.stats.changed} overruled,
+        of ${j.stats.total}.</div>
+      <div class="card"><dl class="kv">
+        <dt>signature</dt><dd>${esc(j.fingerprint)}</dd>
+        ${j.contract_written_to ? `<dt>written to</dt><dd>${esc(j.contract_written_to)}</dd>` : ''}
+      </dl></div>`;
+    unlock(2, true); unlock(3);
+    go(3);
+  }catch(e){ showError(e.message); }
+  finally{ busy(btn, false); }
+});
+
+/* ---- 04 run ---------------------------------------------------------- */
+$('#btn-run').dataset.label = 'Run';
+$('#btn-run').addEventListener('click', async () => {
+  const btn = $('#btn-run');
+  busy(btn, true, 'running…');
+  try{
+    const j = await api('/api/run', {
+      out: $('#out').value, vault: $('#vault').value,
+      operator: $('#operator').value, format: $('#fmt').value,
+    });
+    STATE = j.state;
+    renderResults(j);
+    unlock(3, true); unlock(4, true);
+    go(4);
+  }catch(e){ showError(e.message); }
+  finally{ busy(btn, false); }
+});
+
+/* ---- 05 results ------------------------------------------------------ */
+function renderResults(j){
+  const risk = j.risk || {};
+  const pass = risk.k === undefined ? null : risk.k >= (risk.k_target ?? 0);
+  let html = `<pre class="out">${esc(j.summary)}</pre>`;
+
+  if (pass !== null){
+    html += `<div class="note ${pass ? 'good' : 'halt'}">
+      <b>k = ${esc(risk.k)} against a target of ${esc(risk.k_target)}</b>
+      ${pass
+        ? 'No record sits in an equivalence class smaller than the target.'
+        : `${esc(risk.below_target ?? 0)} record(s) are in classes below it.`}
+      Quasi-identifiers counted: ${esc((risk.quasi_identifiers || []).join(', ') || 'none')}.
+      A k computed over site-level columns alone says how many rows share a site, not how
+      hard it is to find a person.</div>`;
+  }
+
+  html += `<div class="card"><dl class="kv">
+    ${Object.entries(j.written || {}).map(([k, v]) =>
+      `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}
+    <dt>manifest</dt><dd>${esc(j.manifest)}</dd>
+  </dl></div>`;
+
+  if (j.queue){
+    html += `<div class="note warn">
+      <b>${esc(j.queue_rows)} row(s) flagged for adjudication</b>
+      The queue holds the ORIGINAL text of each flagged row, which is what makes it reviewable
+      and also means it is unredacted PHI. It is at <span class="mono">${esc(j.queue)}</span>.
+      Keep it under the vault's access controls rather than the published tier's, and delete it
+      once adjudicated.</div>
+      <button class="ghost" id="btn-queue">Show the queue on this screen</button>
+      <div id="queue"></div>`;
+  }else{
+    html += `<div class="note good"><b>Nothing flagged for adjudication</b>
+      The free-text screen queued no rows, so there is no adjudication step and this tier is
+      the deliverable.</div>`;
+  }
+
+  html += `<div class="note info"><b>Before this leaves the server</b>
+    Send the manifest with the data — on its own the tier does not say how it was made.
+    And delete <span class="mono">${esc(j.review_dir)}</span> once you have read it: the risk
+    detail there carries the quasi-identifier values of the most exposed subjects, which is the
+    most targeting-useful thing this pipeline produces.</div>`;
+
+  $('#results').innerHTML = html;
+  const qb = $('#btn-queue');
+  if (qb) qb.addEventListener('click', showQueue);
+}
+
+async function showQueue(){
+  try{
+    const j = await api('/api/queue');
+    $('#queue').innerHTML = `<div class="tablewrap"><table>
+      <thead><tr>${j.columns.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
+      <tbody>${j.rows.map(r => `<tr>${
+        j.columns.map(c => `<td>${esc(r[c])}</td>`).join('')}</tr>`).join('')}</tbody>
+    </table></div>${j.total > j.rows.length
+      ? `<p class="why">showing ${j.rows.length} of ${j.total}</p>` : ''}`;
+  }catch(e){ showError(e.message); }
+}
+
+/* ---- boot ------------------------------------------------------------ */
+(async () => {
+  treatments();
+  try{
+    const j = await api('/api/state');
+    STATE = j.state;
+    if (STATE.directory) $('#dir').value = STATE.directory;
+  }catch(e){}
+})();
+</script>
+</body>
+</html>

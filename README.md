@@ -30,6 +30,32 @@ So: surrogates here are **randomly generated and stored in a vault**, and dates
 are **reparameterised to study day** rather than redacted. Study day is an
 interval, not a date element, and it preserves every interval quantity exactly.
 
+## Without a terminal
+
+The five steps below are also a local web console, for the person who owns the
+decisions but does not own a shell:
+
+```bash
+export DEIDKIT_VAULT_KEY=...     # the key comes from the environment, as always
+deidkit serve                    # http://127.0.0.1:8765
+```
+
+It runs **on the server holding the data**. Nothing is uploaded: the drop is
+read where it sits and the tiers are written back beside it; the browser sees
+counts, column names and rules. The key is never accepted from the page — a key
+typed into a browser is a key in the request log, the autofill store, and any
+screen-share.
+
+It is a different way to fill the decision sheet, not a way around it. Approval
+goes through the same code, still refuses a sheet with a blank row, and still
+produces a contract signed over the rules.
+
+Bound to loopback. Reach it from another machine with an SSH tunnel
+(`ssh -L 8765:127.0.0.1:8765 you@phi-server`) rather than `--host 0.0.0.0`: this
+console reads the quarantine drop and displays unredacted free text from the
+review queue, so putting it on an external interface is a bigger exposure than
+the manual workflow it replaces.
+
 ## Install
 
 One-shot install with a verified self-check:

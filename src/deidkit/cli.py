@@ -1074,6 +1074,22 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_textcheck)
 
     # vault
+    # serve
+    sp = sub.add_parser(
+        "serve",
+        help="a local web console for the five steps, for a steward who does "
+        "not use a terminal",
+    )
+    sp.add_argument("--port", type=int, default=8765)
+    sp.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="loopback by default, and it should stay there: this console "
+        "reads the quarantine drop and shows unredacted free text. Reach it "
+        "from another machine through an SSH tunnel, not by binding wider.",
+    )
+    sp.set_defaults(func=cmd_serve)
+
     sp = sub.add_parser("vault", help="inspect the crosswalk")
     sp.add_argument("action", choices=["stats", "log"])
     add_vault_args(sp)
@@ -1093,6 +1109,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_reverse)
 
     return p
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    from . import web
+
+    web.serve(host=args.host, port=args.port)
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
