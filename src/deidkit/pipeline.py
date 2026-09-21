@@ -300,6 +300,7 @@ class DeidPipeline:
                 self.vault,
                 entity=entity,
                 prefix=rule.prefix or "",
+                preserve_format=bool(rule.preserve_format),
             )
 
         elif t is Treatment.FAKER:

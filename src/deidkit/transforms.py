@@ -272,6 +272,7 @@ def surrogate(
     entity: str,
     prefix: str = "",
     length: int = 8,
+    preserve_format: bool = False,
 ) -> pd.Series:
     """Replace identifiers with random, non-derived surrogates from the vault.
 
@@ -279,12 +280,19 @@ def surrogate(
     *not* happening: no hash of the original, so the EDC identifier's internal
     structure (``US-001-0042`` -> country, site, enrolment order) is destroyed
     rather than merely obscured.
+
+    ``preserve_format`` keeps the original's length and layout -- digits stay
+    digits, letters stay letters, separators are copied -- so the published
+    column still looks like the identifiers a model will meet in production.
+    The value is still random and still from the vault; only its shape is
+    borrowed.
     """
     mapping = vault.surrogate_map(
         entity,
         (str(v) for v in values.dropna().unique()),
         prefix=prefix,
         length=length,
+        preserve_format=preserve_format,
     )
     return pd.Series(
         [None if pd.isna(v) else mapping[str(v)] for v in values],
