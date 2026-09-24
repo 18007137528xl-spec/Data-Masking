@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>deidkit 网页控制台使用指南</title>
+<!-- Built by scripts/console_guide.py. Edit this template, not guide.html:
+     the screenshots are regenerated from a live console on synthetic data. -->
+<style>
+  :root {
+    --paper:#FBFAF7; --raised:#F3F1EC; --ink:#1A1C1B; --ink-soft:#55605C; --ink-faint:#8A928E;
+    --rule:#DEDAD1; --accent:#0F5C63; --accent-wash:#E4EEED;
+    --stop:#A6371F; --stop-wash:#F7E9E4; --care:#8A6413; --care-wash:#F8F0DD;
+    --ok:#2F6B45; --ok-wash:#E7F0E9;
+    --mark:#6D28D9;
+    --serif:"Songti SC","Noto Serif SC","Source Han Serif SC","SimSun",Georgia,serif;
+    --sans:"PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,"Segoe UI",sans-serif;
+    --mono:ui-monospace,"Cascadia Mono",Consolas,"SF Mono",Menlo,monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:#14171A; --raised:#1D2126; --ink:#E9E7E2; --ink-soft:#A2ADAA; --ink-faint:#6E7A77;
+      --rule:#2B3237; --accent:#5FB3B8; --accent-wash:#172E31; --stop:#E08267; --stop-wash:#33201B;
+      --care:#D5A64B; --care-wash:#302716; --ok:#77B994; --ok-wash:#1A2C22; --mark:#8B5CF6;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper:#14171A; --raised:#1D2126; --ink:#E9E7E2; --ink-soft:#A2ADAA; --ink-faint:#6E7A77;
+    --rule:#2B3237; --accent:#5FB3B8; --accent-wash:#172E31; --stop:#E08267; --stop-wash:#33201B;
+    --care:#D5A64B; --care-wash:#302716; --ok:#77B994; --ok-wash:#1A2C22; --mark:#8B5CF6;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    background: var(--paper); color: var(--ink); font-family: var(--sans);
+    font-size: 16px; line-height: 1.75; margin: 0;
+    padding-inline: 20px; padding-block: 0 96px; -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; }
+  .prose { max-width: 700px; }
+
+  header.top { padding-block: 52px 36px; border-bottom: 2px solid var(--ink); display: flex; flex-direction: column; gap: 13px; }
+  .eyebrow { font-family: var(--mono); font-size: 11.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
+  h1 { font-family: var(--serif); font-size: clamp(32px, 5.6vw, 46px); line-height: 1.12; font-weight: 700; margin: 0; text-wrap: balance; }
+  .standfirst { font-family: var(--serif); font-size: 18px; line-height: 1.65; color: var(--ink-soft); margin: 0; max-width: 58ch; }
+
+  nav.toc { padding-block: 24px 6px; }
+  nav.toc ol { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 3px 22px; font-size: 14px; }
+  nav.toc a { color: var(--ink-soft); text-decoration: none; }
+  nav.toc a:hover { color: var(--accent); }
+  nav.toc .n { font-family: var(--mono); font-size: 12px; color: var(--accent); margin-right: 6px; }
+
+  section { padding-block: 42px 6px; }
+  section + section { border-top: 1px solid var(--rule); }
+  h2 { font-family: var(--serif); font-size: 27px; font-weight: 700; line-height: 1.25; margin: 0 0 6px; text-wrap: balance; }
+  h2 .en { display: block; font-family: var(--mono); font-size: 12px; font-weight: 400; letter-spacing: .08em; color: var(--ink-faint); margin-top: 6px; }
+  h3 { font-size: 16px; font-weight: 600; margin: 30px 0 10px; }
+  p { margin: 0 0 14px; max-width: 66ch; }
+  strong { font-weight: 600; }
+  a { color: var(--accent); }
+  ul, ol { margin: 0 0 14px; padding-left: 1.3em; max-width: 66ch; }
+  li { margin-bottom: 6px; }
+  code { font-family: var(--mono); font-size: .88em; background: var(--raised); padding: .1em .34em; border-radius: 2px; }
+  pre { font-family: var(--mono); font-size: 12.5px; line-height: 1.65; background: var(--raised); border: 1px solid var(--rule); border-radius: 3px; padding: 13px 15px; margin: 0 0 14px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  .ui { font-family: var(--sans); font-size: .88em; font-weight: 600; white-space: nowrap; border: 1px solid var(--rule); background: var(--paper); border-radius: 5px; padding: .05em .45em; }
+
+  /* the screenshot and its numbered key, read together */
+  figure.shot { margin: 22px 0 6px; }
+  figure.shot img {
+    display: block; width: 100%; max-width: 100%; height: auto;
+    border: 1px solid var(--rule); border-radius: 6px; background: #fff;
+  }
+  figure.shot figcaption { font-size: 13px; color: var(--ink-faint); margin-top: 7px; }
+  ol.key { list-style: none; counter-reset: k; padding: 0; margin: 14px 0 18px; display: flex; flex-direction: column; gap: 9px; max-width: 700px; }
+  ol.key > li { counter-increment: k; display: grid; grid-template-columns: 30px 1fr; gap: 0 12px; margin: 0; }
+  ol.key > li::before {
+    content: counter(k); width: 24px; height: 24px; border-radius: 50%;
+    background: var(--mark); color: #fff; font: 700 13px/24px var(--sans); text-align: center; margin-top: 2px;
+  }
+  ol.key > li > span { min-width: 0; }
+
+  .note { border-left: 3px solid var(--accent); background: var(--accent-wash); padding: 12px 16px; border-radius: 0 3px 3px 0; margin: 16px 0; max-width: 700px; }
+  .note.you  { border-color: var(--care); background: var(--care-wash); }
+  .note.halt { border-color: var(--stop); background: var(--stop-wash); }
+  .note.good { border-color: var(--ok);   background: var(--ok-wash); }
+  .note p { margin: 0 0 8px; }
+  .note p:last-child { margin-bottom: 0; }
+  .note .tag { display: block; font-family: var(--mono); font-size: 11px; letter-spacing: .11em; text-transform: uppercase; margin-bottom: 6px; font-weight: 500; color: var(--accent); }
+  .note.you .tag { color: var(--care); } .note.halt .tag { color: var(--stop); } .note.good .tag { color: var(--ok); }
+
+  .tw { overflow-x: auto; margin: 0 0 16px; max-width: 760px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 460px; }
+  th, td { text-align: left; padding: 9px 12px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-size: 11.5px; font-family: var(--mono); letter-spacing: .09em; text-transform: uppercase; color: var(--ink-faint); font-weight: 500; border-bottom: 1.5px solid var(--ink-soft); white-space: nowrap; }
+  td code { font-size: 12px; }
+  tr:last-child td { border-bottom: none; }
+
+  .faq dt { font-weight: 600; margin-top: 18px; }
+  .faq dd { margin: 4px 0 0; color: var(--ink-soft); max-width: 66ch; }
+
+  footer { margin-top: 46px; padding-top: 22px; border-top: 2px solid var(--ink); font-size: 13.5px; color: var(--ink-soft); }
+  footer p { max-width: 64ch; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (max-width: 560px) { ol.key > li { grid-template-columns: 26px 1fr; gap: 0 9px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <span class="eyebrow">使用指南 · 网页控制台</span>
+  <h1>deidkit 网页控制台怎么用</h1>
+  <p class="standfirst">给负责审阅的同事：从打开网页到拿到脱敏数据，每一屏长什么样、每个框填什么、每个按钮是干什么的。</p>
+</header>
+
+<nav class="toc" aria-label="目录">
+  <ol>
+    <li><a href="#before"><span class="n">00</span>开始之前</a></li>
+    <li><a href="#s1"><span class="n">01</span>读数据</a></li>
+    <li><a href="#s2"><span class="n">02</span>逐列确认</a></li>
+    <li><a href="#s3"><span class="n">03</span>签字</a></li>
+    <li><a href="#s4"><span class="n">04</span>运行</a></li>
+    <li><a href="#s5"><span class="n">05</span>看结果</a></li>
+    <li><a href="#adjudicate"><span class="n">06</span>裁定待审文本</a></li>
+    <li><a href="#stopped">它停下来的时候</a></li>
+    <li><a href="#resume">关掉、刷新、重来</a></li>
+    <li><a href="#faq">常见问题</a></li>
+    <li><a href="#missing">网页里还没有的</a></li>
+  </ol>
+</nav>
+
+<section id="before">
+  <h2>开始之前</h2>
+  <div class="prose">
+    <p>你只需要一个浏览器。这个页面由技术同事在<strong>放数据的那台服务器上</strong>启动，你用的是那台机器上的网页 —— 数据不会上传到任何地方，页面也不在互联网上。</p>
+    <p>你需要从技术同事那里拿到三样东西：</p>
+    <ul>
+      <li><strong>地址</strong>，一般是 <code>http://127.0.0.1:8765</code>；</li>
+      <li><strong>怎么连上那台服务器</strong> —— 远程桌面登录上去用它的浏览器，或者他帮你配好的隧道；</li>
+      <li><strong>数据放在服务器上哪个文件夹</strong>，例如 <code>D:\quarantine\STUDY-001</code>。</li>
+    </ul>
+    <p>页面上的按钮和标签是英文的，本指南里照原样写出，例如 <span class="ui">Read and propose</span>。左边栏最下方有 <span class="ui">使用指南 · Guide</span>，随时能打开这份指南。</p>
+  </div>
+  <div class="note halt">
+    <span class="tag">一次只能一个人用</span>
+    <p>两个人同时打开，后操作的人会覆盖前一个人的进度。约好轮流，一批做完再换人。</p>
+  </div>
+</section>
+
+<section id="s1">
+  <h2>第一步：读数据，出建议<span class="en">01 · Read the drop</span></h2>
+  <figure class="shot">
+    <img src="{{img:s1-read}}" alt="Read the drop 页面：文件夹路径、raw 勾选框、研究名、k 目标、offset key 和 Read and propose 按钮">
+  </figure>
+  <ol class="key">
+    <li><span>左边一列是五个步骤。当前这一步高亮；前一步做完，后一步才能点；做完的打 ✓。</span></li>
+    <li><span><strong>数据所在的文件夹</strong>，填服务器上的路径。是<strong>文件夹</strong>不是文件：里面每个文件是一个域，文件名就是域名（<code>LB.csv</code> → <code>LB</code>）。能读 csv、xlsx、xpt、sas7bdat、parquet；老式 <code>.xls</code> 不行，先另存为 <code>.xlsx</code>。</span></li>
+    <li><span><strong>原始 EDC 抽取就勾上</strong> —— 列名里没有 <code>DTC</code> 结尾的列、日期写成 <code>19/03/2025</code> 这样的，就是原始抽取。勾上：日期按受试者整体偏移，<strong>原来的写法不变</strong>。不勾：日期变成"第几天"。拿不准就勾；忘了勾，下一屏会用黄框提醒你。</span></li>
+    <li><span>研究名，会写进合同和 manifest。不填就用文件夹名。</span></li>
+    <li><span>k 目标，默认 5。没有特别要求就不改。</span></li>
+    <li><span>只在做"原始数据 → SDTM"训练对、而且两边受试者号写法不一样时才填。平时空着。</span></li>
+    <li><span>点它。数据越大越久，一般几秒到几十秒。</span></li>
+  </ol>
+</section>
+
+<section id="s2">
+  <h2>第二步：逐列确认<span class="en">02 · Review every column</span></h2>
+  <p class="prose">这是整个流程里<strong>只有你能做</strong>的一步。工具对每一列提一个处理建议，你逐列点 OK（接受）或 Change（改掉）。</p>
+  <figure class="shot">
+    <img src="{{img:s2-review}}" alt="Review every column 页面顶部：提示框、进度、批量按钮、第一行的把握程度和 OK/Change 按钮">
+  </figure>
+  <ol class="key">
+    <li><span><strong>提示框</strong>，按颜色读：<span style="color:var(--stop)">红</span>＝不处理的话运行时一定会停；<span style="color:var(--care)">黄</span>＝多半设置错了（比如该勾 raw 没勾）；<span style="color:var(--accent)">蓝</span>＝说明，看一眼就行。</span></li>
+    <li><span><strong>进度</strong>：已决定几列、还剩几列空着。剩余归零之前进不了下一步。</span></li>
+    <li><span><strong>批量按钮</strong>：把所有"HIGH 且还没决定"的行一次设成 OK。看下面的提醒再用。</span></li>
+    <li><span><strong>把握程度</strong>：<span style="color:var(--stop)">LOW</span> / <span style="color:var(--care)">MEDIUM</span> / HIGH。表格按它排序，<strong>工具最没把握的排在最上面</strong> —— 你的注意力应该花在那里。旁边有 <span style="color:var(--accent)">QUASI-ID</span> 的列会计入重识别风险 k。</span></li>
+    <li><span><strong>你的决定</strong>。还没决定的行底色是红的。</span></li>
+  </ol>
+
+  <h3>看一行的时候看什么</h3>
+  <div class="prose">
+    <p>每一行从左到右是：<strong>Column</strong>（列名，下面灰字是域）、<strong>Proposed</strong>（工具打算怎么处理，下面是参数）、<strong>Why</strong>（为什么这么猜）、<strong>Decision</strong>（你的决定）。</p>
+    <p>问自己一个问题就够了：<strong>这一列里有没有能指向具体一个人的东西，工具的处理够不够？</strong>名字、编号、日期、地点、自由填写的备注，都要多看一眼。</p>
+  </div>
+
+  <h3>改掉一条建议</h3>
+  <figure class="shot">
+    <img src="{{img:s2-change}}" alt="点了 Change 的一行展开了处置、参数和理由三个框；另一行点了 OK">
+  </figure>
+  <ol class="key">
+    <li><span>点 <span class="ui">Change</span>，按钮变成棕色，下面展开三个框。<strong>框里已经预先填好了原来的建议</strong>，你只改你想改的那一处。</span></li>
+    <li><span><strong>改成哪种处理</strong>，下拉选。截图里把 <code>PKGRP</code> 从 <code>retain</code>（原样保留）改成了 <code>drop</code>（整列删除）。</span></li>
+    <li><span><strong>参数</strong>，多个用分号隔开，例如 <code>entity=subject;prefix=SUBJ</code>。<code>drop</code> 不需要参数，所以空着。</span></li>
+    <li><span><strong>为什么改</strong>。会写进合同和 manifest，以后有人问"这一列当初为什么这么处理"，答案就是这一句。别空着。</span></li>
+    <li><span>点了 <span class="ui">OK</span> 的行：按钮变绿，红底消失。</span></li>
+    <li><span>还红着的行＝还没决定。</span></li>
+  </ol>
+  <p class="prose">改了又后悔？直接点 <span class="ui">OK</span>，就回到接受原建议，刚才改的内容会被清掉。</p>
+
+  <h3>受试者号那一行</h3>
+  <figure class="shot">
+    <img src="{{img:s2-surrogate}}" alt="SUBJECT 一行，参数里有 preserve_format=True 和 shape_prefix_from=SITEID">
+  </figure>
+  <ol class="key">
+    <li><span>受试者号会被换成随机的替代编号。这里通常带两个参数：<br>
+      <code>preserve_format=True</code> —— 替代编号<strong>保持原来的长度和格式</strong>：<code>001-0042</code> → <code>394-9212</code>。为了让数据看起来像真实数据，<strong>不影响保护强度</strong>。<br>
+      <code>shape_prefix_from=SITEID</code> —— 受试者号前几位本来就是中心号时，让替代编号的前几位跟中心的替代编号一致：受试者 <code>002-0001</code> → <code>208-2262</code>，中心 <code>002</code> → <code>208</code>。</span></li>
+    <li><span>理由里写着 <code>site segment follows SITEID</code>，就是第二个参数生效了。这两个一般直接 OK。</span></li>
+  </ol>
+
+  <h3>全部决定完</h3>
+  <figure class="shot">
+    <img src="{{img:s2-done}}" alt="进度显示 10 of 10 decided，左边第三步解锁">
+  </figure>
+  <ol class="key">
+    <li><span>进度条满了，红字消失。</span></li>
+    <li><span>左边第三步 <span class="ui">Sign it off</span> 解锁了，点它。</span></li>
+  </ol>
+
+  <div class="note you">
+    <span class="tag">关于那个批量按钮</span>
+    <p><span class="ui">Accept the N the profiler is confident about</span> 只动 HIGH 且还没决定的行，MEDIUM 和 LOW 它不碰，那些必须一行一行看。</p>
+    <p>它省时间，但 <strong>HIGH 不等于对</strong>。点之前至少把每一行的 Why 扫一遍。签字的是你，不是工具。</p>
+  </div>
+</section>
+
+<section id="s3">
+  <h2>第三步：签字<span class="en">03 · Sign it off</span></h2>
+  <figure class="shot">
+    <img src="{{img:s3-sign}}" alt="Sign it off 页面：签字人、备注、合同保存位置、按钮，以及签字后的签名">
+  </figure>
+  <ol class="key">
+    <li><span><strong>签字人</strong>：你本人的邮箱。不能是公共账号，不能空。</span></li>
+    <li><span>备注，可选，会跟签字一起记下。</span></li>
+    <li><span><strong>合同存到哪</strong>，例如 <code>D:\contracts\STUDY-001.yaml</code>。<strong>一定要填</strong>：不填的话合同只存在于页面背后的内存里，服务器一重启就没了。</span></li>
+    <li><span>点它签字。还有空行的话会被拒绝，并列出是哪几列。</span></li>
+    <li><span>签好后显示<strong>签名</strong>（<code>sha256:…</code>）和保存位置。签名锁住的是<strong>这一整套规则</strong>：以后任何人改了合同文件里的任何一条，运行时都会被拒绝。把这个文件交给技术同事存档。</span></li>
+  </ol>
+</section>
+
+<section id="s4">
+  <h2>第四步：运行<span class="en">04 · Run</span></h2>
+  <figure class="shot">
+    <img src="{{img:s4-run}}" alt="Run 页面：输出文件夹、金库文件、操作人、格式和 Run 按钮">
+  </figure>
+  <ol class="key">
+    <li><span><strong>结果放到哪个文件夹</strong>。工具还会自动建一个同名加 <code>_review</code> 的文件夹，放需要人看、但不能交出去的东西。</span></li>
+    <li><span><strong>金库文件</strong>，记着"真实编号 ↔ 替代编号"的对应关系。第一次会新建。<strong>同一个研究永远用同一个金库</strong>：换一个就等于换一套替代编号，前后两批数据再也对不上 —— 而且当时不会报错。</span></li>
+    <li><span>你的邮箱，记进 manifest。</span></li>
+    <li><span><strong>格式</strong>：要用 Excel 打开就选 <code>xlsx</code>（默认，每一格按文本存，Excel 不会吃掉 <code>002</code> 的前导零）；进训练语料选 <code>parquet</code>；<code>csv</code> 给其他程序用，别用 Excel 打开再存回去。</span></li>
+    <li><span>开始运行。页面上<strong>没有密钥输入框，这是故意的</strong> —— 密钥由启动控制台的人在服务器上设好。</span></li>
+  </ol>
+</section>
+
+<section id="s5">
+  <h2>第五步：看结果<span class="en">05 · Results</span></h2>
+  <figure class="shot">
+    <img src="{{img:s5-results}}" alt="Results 页面：运行摘要、k 结论、输出文件、待裁定提示、显示队列按钮和交付提醒">
+  </figure>
+  <ol class="key">
+    <li><span><strong>运行摘要</strong>：多少行、多少列、多少行待裁定，以及风险报告。下半段 <code>smallest classes</code> 列出的是<strong>最容易被认出来的几组人</strong>的特征组合 —— 别在屏幕共享、投屏时停在这一页。</span></li>
+    <li><span><strong>k 的结论</strong>：<span style="color:var(--ok)">绿</span>＝达标，<span style="color:var(--stop)">红</span>＝没达标。k 的意思是"最少有几个人长得一样"。先看它算了哪些列：如果只有中心、国家这种列，k 再高也只说明每个中心有很多行，不说明找到一个人有多难。没达标时摘要里会给出"再去掉哪些列能达标"的路径 —— 那是代价清单，不是建议，拿去跟负责人商量。</span></li>
+    <li><span><strong>写出了哪些文件</strong>。<code>…\STUDY-001-Q3.xlsx::LB</code> 的意思是"这个 Excel 文件里名叫 LB 的那张表"。<code>manifest.json</code> 记录了这批数据是怎么处理的，<strong>要跟数据一起交付</strong>。</span></li>
+    <li><span><strong>有文本需要人判断</strong>（黄框）。如果这里是<span style="color:var(--ok)">绿框</span> <em>Nothing flagged for adjudication</em>，说明没有，<strong>输出文件夹就是成品，这一批结束了</strong>。</span></li>
+    <li><span>在页面上显示那些待判断的行。显示的是<strong>原文，没有脱敏</strong>。</span></li>
+    <li><span>交付前的提醒：manifest 跟数据一起交；<code>_review</code> 文件夹看完就删。</span></li>
+  </ol>
+</section>
+
+<section id="adjudicate">
+  <h2>第六步：裁定待审文本<span class="en">only when step 5 shows a yellow box</span></h2>
+  <div class="prose">
+    <p>自由填写的文本（备注、不良事件描述）里可能夹着人名、医院名、日期。工具会把可疑的行挑出来，<strong>由人判断</strong>是不是个人信息。</p>
+  </div>
+  <figure class="shot">
+    <img src="{{img:s5-queue}}" alt="待裁定队列：原文和标出可疑片段的文本">
+    <figcaption>示例数据是编造的，里面没有真实的人。</figcaption>
+  </figure>
+  <div class="prose">
+    <p>看 <code>MARKED_TEXT</code> 那一列，可疑片段用 <code>[[…]]</code> 框出来了，前面写着工具以为它是什么（<code>PERSON</code> 是人名）。每一行问一个问题：<strong>这是不是能指向受试者本人的信息？</strong></p>
+  </div>
+  <div class="tw">
+    <table>
+      <thead><tr><th>原文</th><th>判断</th><th>为什么</th></tr></thead>
+      <tbody>
+        <tr><td>repeat requested by Dr. <strong>Okafor</strong></td><td><code>PASS</code> 保留</td><td>研究者的名字，不是受试者</td></tr>
+        <tr><td>patient's daughter <strong>Mary Hartley</strong> phoned about the result</td><td><code>REDACT</code> 去掉</td><td>受试者家属的名字，能反推到受试者</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="note halt">
+    <span class="tag">这一步现在还不在网页里</span>
+    <p>网页能<strong>显示</strong>队列，但<strong>填判断、出最终版</strong>还要用命令行。请技术同事协助，或者按下面自己做：</p>
+  </div>
+  <div class="prose">
+    <ol>
+      <li>用 Excel 打开 <code>…\STUDY-001-Q3_review\review_queue.csv</code>。</li>
+      <li>在 <code>verdict</code> 列填 <code>PASS</code> 或 <code>REDACT</code>。已经预先填好的行是工具按规则判的，可以改。<code>REDACT</code> 的行，<code>replacement</code> 列预填了只涂掉可疑片段的版本，也可以改。</li>
+      <li>保存时选 <strong>CSV UTF-8</strong>。</li>
+      <li>在服务器上运行（技术同事知道怎么设密钥）：
+<pre><code>.\.venv\Scripts\deidkit.exe adjudicate "D:\tiers\STUDY-001-Q3" `
+    --queue "D:\tiers\STUDY-001-Q3_review\review_queue.csv" `
+    -o "D:\tiers\STUDY-001-Q3-final" --format xlsx `
+    --operator 你的邮箱</code></pre></li>
+      <li>出来的 <code>…-final</code> 文件夹才是成品。</li>
+    </ol>
+  </div>
+</section>
+
+<section id="stopped">
+  <h2>它停下来的时候</h2>
+  <div class="prose">
+    <p>工具会经常拒绝往下走。<strong>这不是坏了</strong> —— 每一次都对应一件它不肯替你猜的事。页面顶部会出现红框：</p>
+  </div>
+  <figure class="shot">
+    <img src="{{img:err-folder}}" alt="页面顶部的红框 It stopped here，说明文件夹不存在">
+  </figure>
+  <ol class="key">
+    <li><span><strong>It stopped here</strong>，下面一句话说原因。截图里是文件夹名打错了一个字（<code>STUDY-OO1</code>，把数字 0 打成了字母 O）。改好再点一次就行。</span></li>
+  </ol>
+  <div class="tw">
+    <table>
+      <thead><tr><th>红框里写着</th><th>意思</th><th>怎么办</th></tr></thead>
+      <tbody>
+        <tr><td><code>… is not a folder on this server.</code></td><td>路径不对</td><td>检查拼写；确认填的是<strong>服务器上</strong>的路径，不是你自己电脑上的</td></tr>
+        <tr><td><code>N of M row(s) have no decision</code></td><td>第二步还有空行</td><td>回第二步，找红底的行</td></tr>
+        <tr><td><code>Who is approving?</code></td><td>签字人没填</td><td>填你的邮箱</td></tr>
+        <tr><td><code>DEIDKIT_VAULT_KEY is not set</code></td><td>启动控制台时没设密钥</td><td>找技术同事重启控制台。重启后从第一步重来，已保存的合同文件不受影响</td></tr>
+        <tr><td><code>the key supplied does not open …</code></td><td>密钥和金库对不上</td><td>找技术同事。<strong>不要</strong>换一个新金库绕过去</td></tr>
+        <tr><td><code>… value(s) were not shifted …</code></td><td>有一列日期读不懂</td><td>把红框文字发给技术同事</td></tr>
+        <tr><td><code>day/month order: unknown</code></td><td><code>03/04/2025</code> 是 3 月 4 日还是 4 月 3 日，数据自己说不清</td><td>查数据传输规范；回第二步把这一列 Change，参数加 <code>date_order=dmy</code>（日/月/年）或 <code>date_order=mdy</code>（月/日/年）</td></tr>
+        <tr><td><code>… do not start with it</code></td><td>"受试者号开头就是中心号"这个假设不成立</td><td>回第二步把受试者那一列 Change，参数里删掉 <code>shape_prefix_from=…</code></td></tr>
+        <tr><td><code>the shape of … admits only N value(s)</code></td><td>这一列太短，没法保持原格式</td><td>回第二步把这一列 Change，参数里删掉 <code>preserve_format=True</code></td></tr>
+        <tr><td><code>… already published as another subject's surrogate</code></td><td>新的真实编号撞上了以前发出去的替代编号</td><td>极少见。找技术同事，<strong>不要</strong>换金库</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="resume">
+  <h2>关掉、刷新、重来</h2>
+  <div class="prose">
+    <p><strong>关掉浏览器、刷新页面都没关系。</strong>进度存在服务器那边，重新打开地址，页面会自己回到你上次停下的那一步。</p>
+    <p>在第二步已经做了决定之后，如果回到第一步又点了 <span class="ui">Read and propose</span>，它会先问你：</p>
+  </div>
+  <figure class="shot">
+    <img src="{{img:guard-discard}}" alt="黄框：重新读取会丢掉已有决定，两个按钮">
+  </figure>
+  <ol class="key">
+    <li><span><span class="ui">Keep my decisions</span> —— 不读了，回到你的审阅。点错了就点这个。</span></li>
+    <li><span><span class="ui">Discard N decision(s) and read again</span> —— 丢掉已经做的决定，重新读。只有数据文件真的换了才点这个。</span></li>
+  </ol>
+  <p class="prose"><strong>会丢进度的只有一种情况：服务器上那个控制台被关掉或重启了。</strong>那样要从第一步重来 —— 已经保存的合同文件和已经输出的数据都不受影响。</p>
+</section>
+
+<section id="faq">
+  <h2>常见问题</h2>
+  <dl class="faq">
+    <dt>下一批数据来了，还要再逐列审一遍吗？</dt>
+    <dd>用网页的话，目前要。命令行可以把上一批签过字的决定带过来，只审新增或有变化的列 —— 请技术同事用 <code>--carry-forward</code>。</dd>
+
+    <dt>我点错了 OK 怎么办？</dt>
+    <dd>在签字之前，随时回第二步改。再点一次同一个按钮会取消，行变回红色。</dd>
+
+    <dt>签完字发现有一列处理错了？</dt>
+    <dd>回第二步改，再签一次。新的签名会覆盖旧的。已经用旧合同跑出来的数据要重新跑。</dd>
+
+    <dt>工具提议的我看不懂，能先全部 OK 吗？</dt>
+    <dd>技术上能，但签字的人是你。看不懂的那一列，把 Why 下面的说明和列名发给技术同事问 —— 那里面只有列名和处理方式，没有受试者数据。</dd>
+
+    <dt>结果文件夹里的东西可以直接发给别人吗？</dt>
+    <dd>可以发的是：数据文件 + <code>manifest.json</code>（有裁定时是 <code>-final</code> 文件夹里的）。<strong>不能发的</strong>：<code>_review</code> 文件夹、金库文件、合同以外的任何中间文件。</dd>
+
+    <dt>我能截图问问题吗？</dt>
+    <dd>第一到第四步的截图可以。<strong>第五步的运行摘要和待裁定队列不要截图外传</strong> —— 前者有最容易被认出的人的特征组合，后者是没有脱敏的原文。</dd>
+  </dl>
+</section>
+
+<section id="missing">
+  <h2>网页里还没有的</h2>
+  <div class="prose">
+    <p>下面这些现在只能用命令行，找技术同事：</p>
+    <ul>
+      <li><strong>裁定待审文本</strong>（第六步的 PASS / REDACT）；</li>
+      <li><strong>复用上一批的决定</strong>；</li>
+      <li><strong>反查某个替代编号对应的真实受试者</strong>，比如写严重不良事件报告时 —— 这个是故意只放在命令行里的，每一次都要写理由，并留下记录；</li>
+      <li><strong>多人同时使用</strong>。</li>
+    </ul>
+    <p>更完整的背景 —— 为什么这样设计、每种处理方式的代价、交付和销毁的清单 —— 在同一文件夹下的 <code>docs/manual.html</code>。</p>
+  </div>
+</section>
+
+<footer>
+  <p>本指南的截图全部来自编造的示例数据，里面没有真实的受试者、研究者或机构。<strong>真实数据、待裁定队列、<code>_review</code> 文件夹里的东西，都留在服务器上。</strong></p>
+</footer>
+
+</div>
+</body>
+</html>
