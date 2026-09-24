@@ -258,4 +258,6 @@ printf "     ${D}%s${N}\n" '    -c contracts/demo.approved.yaml -o out/tier_revi
 printf "     ${D}    --vault out/vault/demo.db --format csv${N}\n\n"
 printf "  ${D}The second command has no --unreviewed, and it will only work${N}\n"
 printf "  ${D}because of the first.${N}\n\n"
+printf "  To review a real drop in the browser instead: ./serve.sh\n"
+printf "  It starts the console and opens it for you.\n\n"
 printf "  ${D}In a new shell: source .venv/bin/activate  (then: deidkit --help)${N}\n\n"
