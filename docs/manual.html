@@ -3,15 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<style>
-:root { color-scheme: light; }
-body { margin: 0; font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; background: #FBFAF7; }
-img { max-width: 100%; }
-[hidden] { display: none !important; }
-</style>
 <title>deidkit 操作手册</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
+  /* No web fonts. This page is read on the server that holds the data, which
+     often has no route out -- and a request to a font CDN from that machine is
+     exactly the kind of traffic a security team asks about. */
   :root {
     --paper:      #FBFAF7;
     --raised:     #F3F1EC;
@@ -28,275 +24,134 @@ img { max-width: 100%; }
     --ok:         #2F6B45;
     --ok-wash:    #E7F0E9;
 
-    --serif: "Source Serif 4", Georgia, "Songti SC", serif;
-    --sans:  "IBM Plex Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
-    --mono:  "IBM Plex Mono", ui-monospace, Consolas, monospace;
+    --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", "SimSun", Georgia, serif;
+    --sans:  "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, "Segoe UI", sans-serif;
+    --mono:  ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+    color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --paper:      #14171A;
-      --raised:     #1D2126;
-      --ink:        #E9E7E2;
-      --ink-soft:   #A2ADAA;
-      --ink-faint:  #6E7A77;
-      --rule:       #2B3237;
-      --accent:     #5FB3B8;
-      --accent-wash:#172E31;
-      --stop:       #E08267;
-      --stop-wash:  #33201B;
-      --care:       #D5A64B;
-      --care-wash:  #302716;
-      --ok:         #77B994;
-      --ok-wash:    #1A2C22;
+      --paper:#14171A; --raised:#1D2126; --ink:#E9E7E2; --ink-soft:#A2ADAA; --ink-faint:#6E7A77;
+      --rule:#2B3237; --accent:#5FB3B8; --accent-wash:#172E31; --stop:#E08267; --stop-wash:#33201B;
+      --care:#D5A64B; --care-wash:#302716; --ok:#77B994; --ok-wash:#1A2C22;
+      color-scheme: dark;
     }
   }
   :root[data-theme="dark"] {
-    --paper:      #14171A;
-    --raised:     #1D2126;
-    --ink:        #E9E7E2;
-    --ink-soft:   #A2ADAA;
-    --ink-faint:  #6E7A77;
-    --rule:       #2B3237;
-    --accent:     #5FB3B8;
-    --accent-wash:#172E31;
-    --stop:       #E08267;
-    --stop-wash:  #33201B;
-    --care:       #D5A64B;
-    --care-wash:  #302716;
-    --ok:         #77B994;
-    --ok-wash:    #1A2C22;
+    --paper:#14171A; --raised:#1D2126; --ink:#E9E7E2; --ink-soft:#A2ADAA; --ink-faint:#6E7A77;
+    --rule:#2B3237; --accent:#5FB3B8; --accent-wash:#172E31; --stop:#E08267; --stop-wash:#33201B;
+    --care:#D5A64B; --care-wash:#302716; --ok:#77B994; --ok-wash:#1A2C22;
+    color-scheme: dark;
   }
 
   * { box-sizing: border-box; }
-
+  [hidden] { display: none !important; }
   body {
-    background: var(--paper);
-    color: var(--ink);
-    font-family: var(--sans);
-    font-size: 16px;
-    line-height: 1.7;
-    margin: 0;
-    padding-inline: 20px;
-    padding-block: 0 96px;
+    background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 16px; line-height: 1.75;
+    margin: 0; padding-inline: 20px; padding-block: 0 96px;
     -webkit-font-smoothing: antialiased;
   }
   .wrap { max-width: 760px; margin: 0 auto; }
+  img { max-width: 100%; }
 
-  /* ---------- masthead ---------- */
   header.top {
-    padding-block: 56px 40px;
-    border-bottom: 2px solid var(--ink);
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
+    padding-block: 56px 40px; border-bottom: 2px solid var(--ink);
+    display: flex; flex-direction: column; gap: 14px;
   }
-  .eyebrow {
-    font-family: var(--mono);
-    font-size: 11.5px;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--accent);
-  }
-  h1 {
-    font-family: var(--serif);
-    font-size: clamp(34px, 6vw, 50px);
-    line-height: 1.08;
-    font-weight: 600;
-    margin: 0;
-    text-wrap: balance;
-    letter-spacing: -0.015em;
-  }
-  .standfirst {
-    font-family: var(--serif);
-    font-size: 18.5px;
-    line-height: 1.6;
-    color: var(--ink-soft);
-    margin: 0;
-    max-width: 60ch;
-  }
-  .meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px 22px;
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--ink-faint);
-  }
+  .eyebrow { font-family: var(--mono); font-size: 11.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
+  h1 { font-family: var(--serif); font-size: clamp(34px, 6vw, 50px); line-height: 1.1; font-weight: 700; margin: 0; text-wrap: balance; }
+  .standfirst { font-family: var(--serif); font-size: 18.5px; line-height: 1.65; color: var(--ink-soft); margin: 0; max-width: 60ch; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 22px; font-family: var(--mono); font-size: 12px; color: var(--ink-faint); }
 
-  /* ---------- sections ---------- */
+  nav.toc { padding-block: 26px 4px; }
+  nav.toc ol { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 4px 22px; font-size: 14px; }
+  nav.toc a { color: var(--ink-soft); text-decoration: none; }
+  nav.toc a:hover { color: var(--accent); }
+
   section { padding-block: 44px 8px; }
   section + section { border-top: 1px solid var(--rule); }
-  h2 {
-    font-family: var(--serif);
-    font-size: 27px;
-    font-weight: 600;
-    line-height: 1.2;
-    margin: 0 0 18px;
-    text-wrap: balance;
-  }
-  h3 {
-    font-size: 15px;
-    font-weight: 600;
-    margin: 30px 0 10px;
-    letter-spacing: 0.005em;
-  }
+  h2 { font-family: var(--serif); font-size: 27px; font-weight: 700; line-height: 1.25; margin: 0 0 18px; text-wrap: balance; }
+  h3 { font-size: 15.5px; font-weight: 600; margin: 30px 0 10px; }
   p { margin: 0 0 15px; max-width: 66ch; }
   p:last-child { margin-bottom: 0; }
   strong { font-weight: 600; }
   a { color: var(--accent); }
-
-  .lede {
-    font-family: var(--serif);
-    font-size: 18px;
-    line-height: 1.62;
-  }
-
+  .lede { font-family: var(--serif); font-size: 18px; line-height: 1.65; }
   ul, ol { margin: 0 0 15px; padding-left: 1.3em; max-width: 66ch; }
   li { margin-bottom: 7px; }
   li:last-child { margin-bottom: 0; }
 
-  /* ---------- numbered steps: a real sequence, each gated by the last ---------- */
-  .steps { display: flex; flex-direction: column; gap: 34px; margin-top: 8px; }
+  /* The console's five screens are a real gated sequence: each unlocks the next. */
+  .steps { display: flex; flex-direction: column; gap: 38px; margin-top: 8px; }
   .step { display: grid; grid-template-columns: 46px 1fr; gap: 0 18px; }
   .step-n {
-    font-family: var(--mono);
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--accent);
-    padding-top: 5px;
-    border-top: 2px solid var(--accent);
-    grid-row: 1 / span 2;
+    font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--accent);
+    padding-top: 5px; border-top: 2px solid var(--accent); grid-row: 1 / span 2;
     font-variant-numeric: tabular-nums;
   }
-  .step-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-  .step-title {
-    font-family: var(--serif);
-    font-size: 21px;
-    font-weight: 600;
-    line-height: 1.25;
-    margin: 0;
-    padding-top: 2px;
-  }
+  .step-body { display: flex; flex-direction: column; gap: 13px; min-width: 0; }
+  .step-title { font-family: var(--serif); font-size: 21px; font-weight: 700; line-height: 1.3; margin: 0; padding-top: 2px; }
   .step-title small {
-    display: block;
-    font-family: var(--mono);
-    font-size: 11.5px;
-    font-weight: 400;
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-    color: var(--ink-faint);
-    margin-top: 5px;
+    display: block; font-family: var(--mono); font-size: 11.5px; font-weight: 400;
+    letter-spacing: .07em; text-transform: uppercase; color: var(--ink-faint); margin-top: 5px;
   }
   .step-body p { margin: 0; }
 
-  /* ---------- code ---------- */
   pre {
-    font-family: var(--mono);
-    font-size: 12.5px;
-    line-height: 1.65;
-    background: var(--raised);
-    border: 1px solid var(--rule);
-    border-radius: 3px;
-    padding: 13px 15px;
-    margin: 0;
-    overflow-x: auto;
-    white-space: pre;
-    color: var(--ink);
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.65; background: var(--raised);
+    border: 1px solid var(--rule); border-radius: 3px; padding: 13px 15px; margin: 0;
+    overflow-x: auto; white-space: pre; color: var(--ink);
   }
-  code {
-    font-family: var(--mono);
-    font-size: 0.885em;
-    background: var(--raised);
-    padding: 0.1em 0.34em;
-    border-radius: 2px;
-  }
+  code { font-family: var(--mono); font-size: .885em; background: var(--raised); padding: .1em .34em; border-radius: 2px; }
   pre code { background: none; padding: 0; font-size: 1em; }
 
-  /* ---------- callouts: three roles, three treatments ---------- */
-  .note {
-    border-left: 3px solid var(--accent);
-    background: var(--accent-wash);
-    padding: 13px 16px;
-    border-radius: 0 3px 3px 0;
+  /* a button or label exactly as it appears on screen */
+  .ui {
+    font-family: var(--sans); font-size: .9em; font-weight: 600; white-space: nowrap;
+    border: 1px solid var(--rule); background: var(--paper); border-radius: 5px; padding: .05em .45em;
   }
-  .note.you   { border-color: var(--care); background: var(--care-wash); }
-  .note.halt  { border-color: var(--stop); background: var(--stop-wash); }
-  .note.good  { border-color: var(--ok);   background: var(--ok-wash); }
+
+  .note { border-left: 3px solid var(--accent); background: var(--accent-wash); padding: 13px 16px; border-radius: 0 3px 3px 0; }
+  .note.you  { border-color: var(--care); background: var(--care-wash); }
+  .note.halt { border-color: var(--stop); background: var(--stop-wash); }
+  .note.good { border-color: var(--ok);   background: var(--ok-wash); }
   .note p { margin: 0 0 9px; max-width: 62ch; }
   .note p:last-child { margin-bottom: 0; }
-  .note .tag {
-    display: block;
-    font-family: var(--mono);
-    font-size: 11px;
-    letter-spacing: 0.11em;
-    text-transform: uppercase;
-    margin-bottom: 7px;
-    font-weight: 500;
-  }
-  .note.you   .tag { color: var(--care); }
-  .note.halt  .tag { color: var(--stop); }
-  .note.good  .tag { color: var(--ok); }
-  .note       .tag { color: var(--accent); }
+  .note .tag { display: block; font-family: var(--mono); font-size: 11px; letter-spacing: .11em; text-transform: uppercase; margin-bottom: 7px; font-weight: 500; color: var(--accent); }
+  .note.you  .tag { color: var(--care); }
+  .note.halt .tag { color: var(--stop); }
+  .note.good .tag { color: var(--ok); }
 
-  /* ---------- tables ---------- */
   .tw { overflow-x: auto; margin: 0 0 16px; }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 14px;
-    min-width: 460px;
-  }
-  th, td {
-    text-align: left;
-    padding: 9px 12px 9px 0;
-    border-bottom: 1px solid var(--rule);
-    vertical-align: top;
-  }
-  th {
-    font-size: 11.5px;
-    font-family: var(--mono);
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    color: var(--ink-faint);
-    font-weight: 500;
-    border-bottom: 1.5px solid var(--ink-soft);
-    white-space: nowrap;
-  }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 460px; }
+  th, td { text-align: left; padding: 9px 12px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-size: 11.5px; font-family: var(--mono); letter-spacing: .09em; text-transform: uppercase; color: var(--ink-faint); font-weight: 500; border-bottom: 1.5px solid var(--ink-soft); white-space: nowrap; }
   td code { font-size: 12.5px; white-space: nowrap; }
   td:last-child, th:last-child { padding-right: 0; }
   tr:last-child td { border-bottom: none; }
 
-  /* two-sheet comparison */
-  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; }
+  .swatch { display: inline-block; width: .8em; height: .8em; border-radius: 2px; vertical-align: -.05em; margin-right: .35em; border: 1px solid var(--rule); }
+
+  .pair { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; }
   .pair > div { padding: 16px 18px; display: flex; flex-direction: column; gap: 9px; }
   .pair > div + div { border-left: 1px solid var(--rule); }
-  .pair h4 {
-    font-family: var(--mono);
-    font-size: 12px;
-    letter-spacing: 0.04em;
-    margin: 0;
-    color: var(--accent);
-    font-weight: 500;
-    word-break: break-all;
-  }
+  .pair h4 { font-family: var(--mono); font-size: 12.5px; margin: 0; color: var(--accent); font-weight: 500; }
   .pair dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 5px 12px; font-size: 13.5px; }
-  .pair dt { color: var(--ink-faint); font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.05em; text-transform: uppercase; padding-top: 2px; }
+  .pair dt { color: var(--ink-faint); font-family: var(--mono); font-size: 11.5px; letter-spacing: .05em; text-transform: uppercase; padding-top: 2px; }
   .pair dd { margin: 0; }
 
-  /* refusal decoder */
-  .halts { display: flex; flex-direction: column; gap: 20px; }
+  .halts { display: flex; flex-direction: column; gap: 22px; }
   .halt-item { display: flex; flex-direction: column; gap: 8px; }
-  .halt-item pre { font-size: 12px; border-left: 3px solid var(--stop); }
+  .halt-item pre { font-size: 12px; border-left: 3px solid var(--stop); white-space: pre-wrap; }
   .halt-item .why { font-size: 14.5px; color: var(--ink-soft); margin: 0; max-width: 64ch; }
   .halt-item .why b { color: var(--ink); font-weight: 600; }
 
-  footer {
-    margin-top: 46px;
-    padding-top: 22px;
-    border-top: 2px solid var(--ink);
-    font-size: 13.5px;
-    color: var(--ink-soft);
-  }
+  .ba { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; font-family: var(--mono); font-size: 13px; background: var(--raised); border: 1px solid var(--rule); border-radius: 3px; padding: 12px 15px; }
+  .ba span { white-space: pre; }
+  .ba span:nth-child(odd) { color: var(--ink-faint); }
+
+  footer { margin-top: 46px; padding-top: 22px; border-top: 2px solid var(--ink); font-size: 13.5px; color: var(--ink-soft); }
   footer p { max-width: 64ch; }
 
   @media (max-width: 560px) {
@@ -312,343 +167,458 @@ img { max-width: 100%; }
 <div class="wrap">
 
 <header class="top">
-  <span class="eyebrow">操作手册 · 数据管理</span>
+  <span class="eyebrow">操作手册 · 第二版 · 网页控制台</span>
   <h1>deidkit 怎么用</h1>
-  <p class="standfirst">把外部送来的 EDC / SDTM 数据脱敏成可以分析、也可以作为训练材料的版本。全程不需要写代码 —— 是几条命令,加一张你在 Excel 里填的表。</p>
+  <p class="standfirst">把外部送来的 EDC / SDTM 数据脱敏成可以分析、也可以作为训练材料的版本。日常操作在一个网页上完成：读数据、逐列确认、签字、运行、看结果。</p>
   <div class="meta">
-    <span>面向:数据管理 / 数据管理员</span>
+    <span>面向：数据管理 / 数据管理员</span>
     <span>不需要编程基础</span>
     <span>US HIPAA · Expert Determination</span>
   </div>
 </header>
 
-<section>
+<nav class="toc" aria-label="目录">
+  <ol>
+    <li><a href="#idea">先理解一件事</a></li>
+    <li><a href="#install">装一次就够</a></li>
+    <li><a href="#open">打开控制台</a></li>
+    <li><a href="#steps">每一批数据走五步</a></li>
+    <li><a href="#two">审阅页和待裁定队列</a></li>
+    <li><a href="#halts">它停下来的时候</a></li>
+    <li><a href="#hints">要你读的两类提示</a></li>
+    <li><a href="#treatments">Change 能填什么</a></li>
+    <li><a href="#deliver">交付与销毁</a></li>
+    <li><a href="#limits">工具管不了的事</a></li>
+    <li><a href="#cli">附：命令行对照</a></li>
+  </ol>
+</nav>
+
+<section id="idea">
   <h2>先理解一件事</h2>
-  <p class="lede">这个工具<strong>不替你做决定</strong>。它读你的数据,给每一列提一个处置建议,然后停下来等你确认 —— 确认过的东西才会执行,执行过的东西会留下证据。</p>
-  <p>三个角色分得很清楚:</p>
+  <p class="lede">这个工具<strong>不替你做决定</strong>。它读你的数据，给每一列提一个处置建议，然后停下来等你确认 —— 确认过的东西才会执行，执行过的东西会留下证据。</p>
   <div class="tw">
     <table>
       <thead><tr><th>谁</th><th>做什么</th></tr></thead>
       <tbody>
-        <tr><td><strong>工具</strong></td><td>识别每一列是什么,提议怎么处理,把不确定的排在最前面</td></tr>
-        <tr><td><strong>你</strong></td><td>在一张 Excel 表里逐行确认或改掉,然后签字</td></tr>
-        <tr><td><strong>工具</strong></td><td>照你签的字执行,并在 manifest 里记下谁批准的、做了什么、风险多少</td></tr>
+        <tr><td><strong>工具</strong></td><td>识别每一列是什么，提议怎么处理，把不确定的排在最前面</td></tr>
+        <tr><td><strong>你</strong></td><td>在网页上逐列点 OK 或改掉，然后签字</td></tr>
+        <tr><td><strong>工具</strong></td><td>照你签的字执行，并在 manifest 里记下谁批准的、做了什么、风险多少</td></tr>
       </tbody>
     </table>
   </div>
   <div class="note">
     <span class="tag">为什么要这么麻烦</span>
-    <p>工具的建议来自 SDTM 命名习惯和内容特征 —— 它不理解你的研究。<code>AETERM</code> 里那个人名是研究者还是受试者的女儿,只有人知道。所以未经确认的合同,<code>run</code> 会直接拒绝执行。</p>
+    <p>工具的建议来自命名习惯和内容特征 —— 它不理解你的研究。<code>AETERM</code> 里那个人名是研究者还是受试者的女儿，只有人知道。所以没签字的合同一律不执行，网页上也绕不过去。</p>
   </div>
 </section>
 
-<section>
+<section id="install">
   <h2>装一次就够</h2>
-  <p>这一步找懂技术的人做,每台服务器一次。装完之后你不用再碰它。</p>
+  <p>这一步找懂技术的人做，每台服务器一次。<strong>装在放数据的那台服务器上</strong> —— 工具读的是那台机器硬盘上的文件，数据不需要、也不应该拷到别处。</p>
   <pre><code>git clone https://github.com/18007137528xl-spec/Data-Masking.git
 cd Data-Masking
 setup.bat</code></pre>
-  <p><code>setup.bat</code> 会建好环境、装依赖、用一份<strong>完全编造的</strong>合成研究跑一遍全流程,并检查输出是否满足设计承诺。看到 <span style="color:var(--ok);font-weight:600">Setup complete and verified</span> 就成了。</p>
+  <p><code>setup.bat</code> 会建好环境、装依赖、用一份<strong>完全编造的</strong>合成研究跑一遍全流程，并检查输出是否满足设计承诺。看到 <span style="color:var(--ok);font-weight:600">Setup complete and verified</span> 就成了。</p>
+  <p>确认这个版本带网页控制台：</p>
+  <pre><code>.\.venv\Scripts\deidkit.exe serve --help</code></pre>
+  <p>能打出帮助就有。报 <code>invalid choice: 'serve'</code> 说明代码是旧的，让技术同事更新。</p>
   <div class="note halt">
     <span class="tag">生产环境必须改一件事</span>
-    <p><code>setup</code> 生成的 <code>out\dev-vault.key</code> 就放在它所打开的 vault 旁边。<strong>合成数据可以,真实数据绝对不行。</strong>真实数据的密钥要来自 KMS/HSM,而且能读数据层的账号不许能读密钥。这一步是技术同事的事,但你需要知道它没做完就不能上真实数据。</p>
+    <p><code>setup</code> 生成的 <code>out\dev-vault.key</code> 就放在它所打开的金库旁边。<strong>合成数据可以，真实数据绝对不行。</strong>真实数据的密钥要来自 KMS/HSM，而且能读数据层的账号不许能读密钥。这是技术同事的事，但你需要知道它没做完就不能上真实数据。</p>
   </div>
 </section>
 
-<section>
+<section id="open">
+  <h2>打开控制台</h2>
+  <p>控制台是一个只在那台服务器上运行的网页。<strong>它不在互联网上</strong> —— 浏览器和工具在同一台机器里对话，数据包连网卡都不经过。</p>
+
+  <h3>在服务器上启动</h3>
+  <p>开一个 PowerShell 窗口，三行：</p>
+  <pre><code>cd $HOME\Data-Masking
+$env:DEIDKIT_VAULT_KEY = (Get-Content out\dev-vault.key -Raw).Trim()
+.\.venv\Scripts\deidkit.exe serve</code></pre>
+  <p>看到这个就启动好了：</p>
+  <pre><code>deidkit console on http://127.0.0.1:8765
+  the vault key is read from this process's environment, not the browser
+  Ctrl-C to stop</code></pre>
+  <p>在同一台机器上开浏览器，访问 <code>http://127.0.0.1:8765</code>。</p>
+  <div class="note you">
+    <span class="tag">这个窗口一直开着</span>
+    <p>这个 PowerShell 窗口<strong>就是控制台本身</strong>。关掉它网页就打不开了；要停就在里面按 <kbd>Ctrl</kbd>+<kbd>C</kbd>。报 <code>Address already in use</code> 说明端口被占，换一个：<code>serve --port 9000</code>，网页地址跟着改成 <code>:9000</code>。</p>
+  </div>
+  <div class="note">
+    <span class="tag">为什么密钥在这里设，不在网页上填</span>
+    <p>网页上<strong>故意没有</strong>密钥输入框。在浏览器里输入的密钥会进请求日志、浏览器的自动填充、以及任何一次屏幕共享。所以密钥只从启动它的那个窗口的环境里读 —— 第二行就是干这个的，漏了它，前三步都能走，到运行那一步会停下来。</p>
+  </div>
+
+  <h3>从另一台电脑用</h3>
+  <p>控制台只接受来自服务器本机的访问。同事要在自己电脑上用，两种办法：</p>
+  <ul>
+    <li><strong>远程桌面登上服务器</strong>，用服务器上的浏览器开 <code>http://127.0.0.1:8765</code>。最简单。</li>
+    <li><strong>SSH 隧道。</strong>在他自己电脑上运行 <code>ssh -L 8765:127.0.0.1:8765 他的账号@服务器地址</code>，然后在他自己的浏览器开同一个地址。</li>
+  </ul>
+  <p>两种办法都要求他<strong>本来就有那台服务器的登录账号</strong>。这是有意的：控制台自己没有密码，能不能用它，由服务器的登录权限决定。</p>
+  <div class="note halt">
+    <span class="tag">不要改成对外开放</span>
+    <p>启动命令有个 <code>--host</code> 参数，<strong>不要把它改成 <code>0.0.0.0</code></strong>。那等于把一个不需要密码、还会显示未脱敏原文的页面挂到内网上 —— 比原来在 Excel 里填表的流程更危险。确实需要多人从网络访问，那是一个要配 TLS 和登录认证的部署项目，找技术同事。</p>
+  </div>
+  <div class="note halt">
+    <span class="tag">一次只能一个人用</span>
+    <p>控制台现在是单人的。两个人同时开着页面，后读数据的那个会覆盖前一个的进度，前一个再点签字，签的是别人的数据。<strong>约好轮流，一个人做完一批再换人。</strong></p>
+  </div>
+</section>
+
+<section id="steps">
   <h2>每一批数据走五步</h2>
-  <p>下面每一步都在 PowerShell 里做,目录先切到 <code>Data-Masking</code>。命令里的路径换成你自己的。</p>
+  <p>控制台左边一列就是这五步。每一步做完，下一步才解锁；做完的步骤后面会标 <span style="color:var(--ok)">done</span>。按钮和标签是英文的，下面照原样写出。</p>
 
   <div class="steps">
 
     <div class="step">
-      <div class="step-n">00</div>
-      <p class="step-title">开工前:给这个窗口设密钥<small>每开一个新的 PowerShell 窗口都要设一次</small></p>
-      <div class="step-body">
-        <pre><code>cd $HOME\Data-Masking
-$env:DEIDKIT_VAULT_KEY = (Get-Content out\dev-vault.key -Raw).Trim()</code></pre>
-        <p>这是最容易漏的一步。环境变量只在当前窗口有效,关掉窗口就没了 —— 后面报"没有 vault key"基本都是漏了这一行。</p>
-      </div>
-    </div>
-
-    <div class="step">
       <div class="step-n">01</div>
-      <p class="step-title">看数据,出建议<small>profile · 只读,不改你的原始数据</small></p>
+      <p class="step-title">读数据，出建议<small>Read the drop · 只读，不改原始数据</small></p>
       <div class="step-body">
-        <pre><code>.\.venv\Scripts\python.exe -m deidkit.cli profile "D:\quarantine\STUDY-001" `
-    -o STUDY-001.draft.yaml `
-    --decisions STUDY-001_plan.csv `
-    --blind-treatment</code></pre>
-        <p>第一个参数是<strong>文件夹</strong>,不是单个文件。文件夹里每个能读的文件是一个域,<strong>文件名就是域名</strong> —— <code>ae.csv</code> → <code>AE</code>,<code>dm.xpt</code> → <code>DM</code>。SDTM 的识别规则挂在这个名字上。</p>
-        <p>能读:<code>.csv</code> <code>.tsv</code> <code>.txt</code> <code>.parquet</code> <code>.xpt</code> <code>.sas7bdat</code> <code>.xlsx</code> <code>.xlsm</code>。一个 Excel 工作簿里每个 sheet 一个域也可以。<code>.xls</code>(2007 前的老格式)不行,用 Excel 另存为 <code>.xlsx</code>。</p>
-        <p>出两个文件:一份<strong>草稿合同</strong>(机器的建议,还不能用),和一份<strong>决策表</strong> —— 那才是给你的。</p>
-        <div class="note">
-          <span class="tag">常用开关</span>
-          <p><code>--blind-treatment</code> 把药名换成 <code>TRT A</code> / <code>TRT B</code>,可逆。<br>
-          <code>--raw</code> 数据是 raw EDC 而不是 SDTM 时加上 —— 日期靠<strong>值</strong>识别,不靠 <code>--DTC</code> 这种后缀。<br>
-          <code>--sdtm</code> 交付物必须是合规 SDTM 时加上,<code>--DTC</code> 会被偏移但仍是合法 ISO 日期。</p>
+        <p><strong>Folder on this server</strong> 填数据所在的<strong>文件夹</strong>路径，例如 <code>D:\quarantine\STUDY-001</code>。注意是<strong>服务器上的路径</strong> —— 从自己电脑连过来的同事最容易填成自己电脑上的。</p>
+        <p>文件夹里每个能读的文件是一个域，<strong>文件名就是域名</strong>：<code>ae.csv</code> → <code>AE</code>，<code>dm.xpt</code> → <code>DM</code>。能读 <code>.csv</code> <code>.tsv</code> <code>.txt</code> <code>.parquet</code> <code>.xpt</code> <code>.sas7bdat</code> <code>.xlsx</code> <code>.xlsm</code>；一个 Excel 工作簿里每个 sheet 一个域也行。<code>.xls</code> 老格式不行，另存为 <code>.xlsx</code>。</p>
+        <p><strong>This is a raw EDC extract</strong> 这个勾，什么时候勾：</p>
+        <div class="tw">
+          <table>
+            <thead><tr><th>数据是</th><th>勾不勾</th><th>日期会变成</th></tr></thead>
+            <tbody>
+              <tr><td>SDTM（有 <code>AESTDTC</code> 这类 <code>DTC</code> 结尾的列）</td><td>不勾</td><td>研究日（第几天）</td></tr>
+              <tr><td>原始 EDC 抽取（<code>LBDAT</code>、<code>VISIT_DT</code>、<code>19/03/2025</code> 这种）</td><td><strong>勾</strong></td><td>按受试者整体偏移，<strong>原写法不变</strong></td></tr>
+            </tbody>
+          </table>
         </div>
+        <p>忘了勾也不怕：数据里一个 <code>DTC</code> 结尾的列都没有时，下一页会用黄色提示你。</p>
+        <p><strong>Study / source name</strong> 不填就用文件夹名。<strong>k target</strong> 默认 5。<strong>Offset key template</strong> 只在做 raw→SDTM 训练对、两侧受试者号写法不同时才填，其余时候空着。</p>
+        <p>点 <span class="ui">Read and propose</span>。</p>
       </div>
     </div>
 
     <div class="step">
       <div class="step-n">02</div>
-      <p class="step-title">填决策表<small>在 Excel 里做 · 这一步只有你能做</small></p>
+      <p class="step-title">逐列确认<small>Review every column · 这一步只有你能做</small></p>
       <div class="step-body">
-        <p>打开 <code>STUDY-001_plan.csv</code>。一列数据一行,<strong>工具最没把握的排在最前面</strong> —— 83 条规则不需要平均用力。</p>
+        <p>页面顶上可能先出几条提示，按颜色读：</p>
+        <ul>
+          <li><span class="swatch" style="background:var(--stop);border-color:var(--stop)"></span><strong>This will stop the run</strong> —— 不改的话第 4 步一定会停。先处理它。</li>
+          <li><span class="swatch" style="background:var(--care);border-color:var(--care)"></span><strong>Worth checking before you go on</strong> —— 大概率是设置错了，比如该勾 raw 没勾。</li>
+          <li><span class="swatch" style="background:var(--accent);border-color:var(--accent)"></span><strong>Note</strong> —— 说明，读一眼就行。</li>
+        </ul>
+        <p>下面是表：一列数据一行，<strong>工具最没把握的排在最前面</strong>。每行四栏：</p>
         <div class="tw">
           <table>
-            <thead><tr><th>列</th><th>谁写</th><th>是什么</th></tr></thead>
+            <thead><tr><th>栏</th><th>是什么</th></tr></thead>
             <tbody>
-              <tr><td><code>proposed_treatment</code></td><td>工具</td><td>它准备怎么做</td></tr>
-              <tr><td><code>proposed_params</code></td><td>工具</td><td>用什么参数,如 <code>cap=90</code></td></tr>
-              <tr><td><code>confidence</code> · <code>why</code> · <code>detail</code></td><td>工具</td><td>有多确定、依据是什么</td></tr>
-              <tr><td><strong><code>decision</code></strong></td><td><strong>你</strong></td><td><code>OK</code> 接受 · <code>CHANGE</code> 改掉 · <strong>留空 = 没看,会拦住整个运行</strong></td></tr>
-              <tr><td><strong><code>decision_treatment</code></strong></td><td><strong>你</strong></td><td>填 <code>CHANGE</code> 时:改成哪一种处置</td></tr>
-              <tr><td><strong><code>decision_params</code></strong></td><td><strong>你</strong></td><td>如 <code>cap=90</code>、<code>min_count=5</code></td></tr>
-              <tr><td><strong><code>steward_note</code></strong></td><td><strong>你</strong></td><td>你的理由 —— 会写进规则和 manifest</td></tr>
+              <tr><td><strong>Column</strong></td><td>列名，下面灰字是它所在的域</td></tr>
+              <tr><td><strong>Proposed</strong></td><td>工具准备怎么处理，下面是参数</td></tr>
+              <tr><td><strong>Why</strong></td><td>把握程度：<span style="color:var(--stop)">LOW</span> / <span style="color:var(--care)">MEDIUM</span> / HIGH。带 <span style="color:var(--accent)">QUASI-ID</span> 的列会计入重识别风险（k）。下面是它为什么这么猜</td></tr>
+              <tr><td><strong>Decision</strong></td><td>你的决定</td></tr>
             </tbody>
           </table>
         </div>
+        <p>每一行点 <span class="ui">OK</span>（接受）或 <span class="ui">Change</span>（改掉）。<strong>还没决定的行底色是红的</strong>，顶上实时显示还有几行空着。一行空着就进不了第 3 步。</p>
+        <p>点 <span class="ui">Change</span> 会展开三个框，已经预先填好了原来的提议，你只需要改你想改的那一处：处置方式（下拉）、参数（用分号隔开，如 <code>entity=subject;prefix=SUBJ</code>）、你的理由。理由会写进合同和 manifest —— 以后有人问"为什么这一列这么处理"，答案就是它。</p>
+
         <div class="note you">
-          <span class="tag">存回去的时候注意</span>
-          <p>Excel 的"另存为"默认会存成 <code>.xlsx</code>。这张表必须还是 <strong>CSV</strong>(选 <em>CSV UTF-8</em>),否则下一步读不到。</p>
+          <span class="tag">那个批量按钮</span>
+          <p>顶上有一个 <span class="ui">Accept the N the profiler is confident about</span>，一次把所有 HIGH 且还没决定的行设成 OK。MEDIUM 和 LOW 它不碰，那些必须逐行看。</p>
+          <p>它省时间，但 <strong>HIGH 不等于对</strong>。点之前至少把每一行的 Why 扫一眼。这个按钮就是"在 Excel 里把 decision 整列拖成 OK"的正式版 —— 区别只在于它被记录下来了。</p>
         </div>
-        <p>不确定 <code>CHANGE</code> 能填什么,随时查:</p>
-        <pre><code>.\.venv\Scripts\python.exe -m deidkit.cli treatments</code></pre>
+
+        <h3>你会在参数里看到的两个新东西</h3>
+        <p><code>preserve_format=True</code> —— 替身保持原值的<strong>长度和排版</strong>：数字还是数字，字母还是字母，分隔符照抄。</p>
+        <div class="ba"><span>原值</span><span>001-0042</span><span>替身</span><span>394-9212</span></div>
+        <p>这是为了训练语料看起来像真实数据 —— 生产里受试者号长成 <code>001-0042</code>，语料里就不该长成 <code>SUBJ-3D7M2YVY</code>。<strong>它不增加、也不减少保护</strong>：值照样是随机的、照样进金库、照样可逆。工具只在这一列"空间够大"时才提议（两位数的中心号这种窄编码不提议，因为抽着抽着会撞上真实编号）；<strong>中心名称永远不提议</strong>，因为保形会泄露每家医院名字的长度和结构。</p>
+        <p><code>shape_prefix_from=SITEID</code> —— 受试者号里嵌着中心号时，让替身的前缀跟中心的替身对上。</p>
+        <div class="ba"><span>原值</span><span>SUBJECT 002-0001   SITEID 002</span><span>替身</span><span>SUBJECT 208-2262   SITEID 208</span></div>
+        <p>同一个中心的受试者共享前缀，不同中心不同 —— 原数据里"受试者号前三位就是中心"这个关系，在输出里依然成立。只有当数据里<strong>每一行</strong>都满足这个关系时工具才会提议。</p>
+        <p>这两个一般直接 OK。要关掉：点 <span class="ui">Change</span>，在参数框里把那一项删掉。</p>
       </div>
     </div>
 
     <div class="step">
       <div class="step-n">03</div>
-      <p class="step-title">签字<small>approve · 表变成带签名的合同</small></p>
+      <p class="step-title">签字<small>Sign it off · 审好的表变成带签名的合同</small></p>
       <div class="step-body">
-        <pre><code>.\.venv\Scripts\python.exe -m deidkit.cli approve STUDY-001_plan.csv `
-    -c STUDY-001.draft.yaml `
-    --data "D:\quarantine\STUDY-001" `
-    -o STUDY-001.yaml `
-    --approved-by 你的邮箱@tigermedgrp.com</code></pre>
-        <p>成功会回给你:</p>
-        <pre><code>approved by  : 你的邮箱@tigermedgrp.com
-decisions    : 79 accepted as proposed, 4 changed  (of 83)
-fingerprint  : sha256:aacf7f0c975a5014...</code></pre>
+        <p><strong>Approved by</strong> 填<strong>你本人</strong>，例如 <code>你的邮箱@tigermedgrp.com</code>。不能是服务账号，也不能空着。</p>
+        <p><strong>Note</strong> 可选，会跟签字一起记下。</p>
+        <p><strong>Write the approved contract to</strong> 填一个文件路径，例如 <code>D:\contracts\STUDY-001.yaml</code>。<strong>一定要填</strong>：不填的话合同只存在于控制台的内存里，服务器一重启就没了，下一批数据也没法复用。</p>
+        <p>点 <span class="ui">Approve these rules</span>。成功会显示一个 <code>signature  sha256:…</code>。</p>
         <div class="note good">
-          <span class="tag">这个指纹是重点</span>
-          <p>签的是<strong>那一套具体规则</strong>,不是这个文件。批准之后任何人改动任何一条规则,指纹就不匹配,合同<strong>在所有命令里都会拒绝加载</strong>。所以 <code>STUDY-001.yaml</code> 要提交进版本库 —— 它是你这个研究的正式产物,以后每批数据复用它,不用再走一次表。</p>
+          <span class="tag">这个签名是重点</span>
+          <p>签的是<strong>那一套具体规则</strong>，不是这个文件。批准之后任何人改动任何一条规则，签名就对不上，这份合同在所有地方都会拒绝使用。所以那个 <code>.yaml</code> 要交给技术同事提交进版本库 —— 它是这个研究的正式产物。</p>
         </div>
       </div>
     </div>
 
     <div class="step">
       <div class="step-n">04</div>
-      <p class="step-title">执行<small>run · 出脱敏后的数据</small></p>
+      <p class="step-title">运行<small>Run · 出脱敏后的数据</small></p>
       <div class="step-body">
-        <pre><code>.\.venv\Scripts\python.exe -m deidkit.cli run "D:\quarantine\STUDY-001" `
-    -c STUDY-001.yaml `
-    -o "D:\tiers\STUDY-001-Q3" `
-    --vault "D:\vault\STUDY-001.db" `
-    --format xlsx `
-    --operator 你的邮箱@tigermedgrp.com</code></pre>
-        <p><code>--format</code> 可以是 <code>xlsx</code>、<code>csv</code> 或 <code>parquet</code>。</p>
-        <div class="note">
-          <span class="tag">建议用 xlsx</span>
-          <p>不是为了方便。一个 CSV 的输出在 Excel 里打开,等于让 Excel 重新解释一遍:<code>2015-03</code> 变日期、中心号 <code>002</code> 掉前导零、长受试者编号变科学计数。<strong>脱敏活得下来,数据活不下来。</strong><code>--format xlsx</code> 把每个单元格存为文本,Excel 就不再猜了。</p>
+        <p><strong>Output folder</strong>：结果放哪，例如 <code>D:\tiers\STUDY-001-Q3</code>。</p>
+        <p><strong>Vault file</strong>：金库文件，例如 <code>D:\vault\STUDY-001.db</code>。第一次会新建。</p>
+        <div class="note halt">
+          <span class="tag">同一个研究，永远同一个金库</span>
+          <p>金库记着"真实编号 → 替身"的对应。第二批数据指向同一个金库，同一个受试者才会拿到同一个替身，两批数据才拼得起来。<strong>换一个金库就是换一套替身</strong>，而且当时不会有任何报错 —— 两批数据看着都对，只是再也连不上了。</p>
         </div>
-        <p>产出两个位置 —— 一个给分析,一个<strong>不给</strong>:</p>
-        <pre><code>D:\tiers\STUDY-001-Q3\           脱敏后的数据 + manifest.json
-D:\tiers\STUDY-001-Q3_review\    review_queue.csv + risk_detail.json</code></pre>
-        <p><code>_review</code> 那个目录里是<strong>原始未脱敏的文本</strong>和最容易被重识别的那些受试者的准标识符组合。它要按 vault 的权限管,不是按分析员的权限管,而且裁定完就删。</p>
+        <p><strong>Operator</strong>：你的邮箱。</p>
+        <p><strong>Format</strong>：</p>
+        <ul>
+          <li><code>xlsx</code>（默认）—— 要在 Excel 里打开看，选这个。每个单元格存为文本，Excel 不会把 <code>002</code> 吃掉前导零、不会把 <code>2015-03</code> 变成日期。</li>
+          <li><code>csv</code> —— 给别的程序读。<strong>不要</strong>拿 Excel 直接打开它再存回去。</li>
+          <li><code>parquet</code> —— 进训练语料用这个。</li>
+        </ul>
+        <p>点 <span class="ui">Run</span>。出问题时页面顶部会出现红框 <strong>It stopped here</strong>，下面写着原因，对照<a href="#halts">它停下来的时候</a>。</p>
       </div>
     </div>
 
     <div class="step">
       <div class="step-n">05</div>
-      <p class="step-title">裁定自由文本,出最终版<small>adjudicate · 这一步的产物才是能交出去的</small></p>
+      <p class="step-title">看结果<small>Results · 决定是结束还是要裁定</small></p>
       <div class="step-body">
-        <p>打开 <code>review_queue.csv</code>。只有 <code>verdict</code> <strong>空白</strong>的行需要你 —— 其余的工具已经按策略预填并注明了来源,你可以推翻。</p>
+        <p>最上面是运行摘要。接着是一个 k 的框：<span style="color:var(--ok)">绿色</span>是达标，<span style="color:var(--stop)">红色</span>是没达标。</p>
+        <div class="note you">
+          <span class="tag">读 k 之前看一眼它算的是什么</span>
+          <p>框里会列出计入的准标识符。如果只有 <code>SITEID</code>、<code>COUNTRY</code> 这种中心层面的列，那 <code>k = 97</code> 的意思只是"每个中心至少 97 行"，<strong>不代表找到一个具体的人有多难</strong>。年龄、性别、种族这些在别的表里、以后要一起发布的话，合起来的 k 才是要看的数，而且会低得多。</p>
+        </div>
+        <p>然后分两种情况：</p>
+        <h3>绿框：Nothing flagged for adjudication</h3>
+        <p>自由文本一行都没被标记。<strong>输出文件夹就是成品</strong>，这一批做完了。直接看<a href="#deliver">交付与销毁</a>。</p>
+        <h3>黄框：N row(s) flagged for adjudication</h3>
+        <p>有些自由文本行可能含 PHI，需要人判断。框里写着 <code>review_queue.csv</code> 的位置。</p>
+        <p><span class="ui">Show the queue on this screen</span> 会把这些行直接显示在页面上。<strong>这时你屏幕上是未脱敏的原文</strong> —— 别在屏幕共享、投屏的时候点。</p>
+        <div class="note halt">
+          <span class="tag">裁定这一步现在还不在网页里</span>
+          <p>网页能<strong>显示</strong>队列，但填裁定、出最终版这一步还要用命令行。找技术同事，或者照下面自己做。</p>
+        </div>
+        <p>用 Excel 打开 <code>review_queue.csv</code>。只有 <code>verdict</code> <strong>空白</strong>的行需要你 —— 其余的工具已按策略预填并注明来源，你可以推翻。</p>
         <div class="tw">
           <table>
             <thead><tr><th>你填</th><th>意思</th></tr></thead>
             <tbody>
-              <tr><td><code>PASS</code></td><td>这不是 PHI,原样发布</td></tr>
-              <tr><td><code>REDACT</code></td><td>去掉。<code>replacement</code> 列已经预填成<strong>只涂掉检出片段</strong>的版本,你可以改</td></tr>
+              <tr><td><code>PASS</code></td><td>不是 PHI，原样发布</td></tr>
+              <tr><td><code>REDACT</code></td><td>去掉。<code>replacement</code> 列已预填成<strong>只涂掉检出片段</strong>的版本，可以改</td></tr>
             </tbody>
           </table>
         </div>
-        <p>看 <code>marked_text</code> 列,可疑片段已经用 <code>[[…]]</code> 标出来了。典型的判断题:那个人名是研究者(可留)还是受试者亲属(必须去)?那家医院是研究中心(可留)还是他家附近那家(会把人缩到一个镇)?</p>
-        <pre><code>.\.venv\Scripts\python.exe -m deidkit.cli adjudicate "D:\tiers\STUDY-001-Q3" `
+        <p>看 <code>marked_text</code> 列，可疑片段用 <code>[[…]]</code> 标出来了。典型的判断题：那个人名是研究者（可留）还是受试者亲属（必须去）？那家医院是研究中心（可留）还是他家附近那家（会把人缩到一个镇）？存回时选 <strong>CSV UTF-8</strong>。然后在服务器的 PowerShell 里（另开一个窗口，先设密钥）：</p>
+        <pre><code>.\.venv\Scripts\deidkit.exe adjudicate "D:\tiers\STUDY-001-Q3" `
     --queue "D:\tiers\STUDY-001-Q3_review\review_queue.csv" `
-    --out "D:\tiers\STUDY-001-Q3-final" `
+    -o "D:\tiers\STUDY-001-Q3-final" `
+    --format xlsx `
     --operator 你的邮箱@tigermedgrp.com</code></pre>
-        <div class="note good">
-          <span class="tag">交付</span>
-          <p><code>-final</code> 那个目录才是能交出去的。它的 manifest 里会写清楚谁裁定的、涂掉几行、放行几行、有没有留下缺口。交付完把整个 <code>_review</code> 目录删掉。</p>
-        </div>
+        <p>出来的 <code>-final</code> 文件夹才是成品。</p>
       </div>
     </div>
 
   </div>
 </section>
 
-<section>
-  <h2>两张表,别搞混</h2>
-  <p>整个流程里你要填两张 CSV。它们<strong>范围不同、时点不同</strong>,这是最容易混的地方。</p>
+<section id="two">
+  <h2>审阅页和待裁定队列，别搞混</h2>
+  <p>整个流程里有两处要你逐项判断。它们<strong>范围不同、时点不同</strong>，这是最容易混的地方。</p>
   <div class="pair">
     <div>
-      <h4>STUDY-001_plan.csv</h4>
+      <h4>第 2 步 · 逐列确认</h4>
       <dl>
-        <dt>时点</dt><dd>跑之前</dd>
+        <dt>时点</dt><dd>运行之前</dd>
         <dt>粒度</dt><dd>按<strong>列</strong></dd>
-        <dt>问题</dt><dd>这一列该怎么处理?</dd>
-        <dt>次数</dt><dd>每个研究一次(后续批次复用合同)</dd>
-        <dt>留空</dt><dd>拦住 <code>approve</code></dd>
+        <dt>问题</dt><dd>这一列该怎么处理？</dd>
+        <dt>次数</dt><dd>每个研究一次，后续批次复用合同</dd>
+        <dt>留空</dt><dd>进不了签字</dd>
       </dl>
     </div>
     <div>
       <h4>review_queue.csv</h4>
       <dl>
-        <dt>时点</dt><dd>跑之后</dd>
+        <dt>时点</dt><dd>运行之后</dd>
         <dt>粒度</dt><dd>按<strong>行</strong></dd>
-        <dt>问题</dt><dd>这一格文本里有没有 PHI?</dd>
-        <dt>次数</dt><dd>每批数据一次</dd>
+        <dt>问题</dt><dd>这一格文本里有没有 PHI？</dd>
+        <dt>次数</dt><dd>每批数据一次（可能是零次）</dd>
         <dt>留空</dt><dd>拦住 <code>adjudicate</code></dd>
       </dl>
     </div>
   </div>
-  <p style="margin-top:16px">为什么必须是两次:决策表说的是"<code>AETERM</code> 这一列走自由文本筛查",它<strong>说不出</strong>那 220 个单元格里各写了什么。而 MH/AE 是全数保留、不做整列涂黑的 —— 那么逐字文本剩下的唯一防线就是逐行人工裁定。</p>
+  <p style="margin-top:16px">为什么必须是两次：第 2 步说的是"<code>AETERM</code> 这一列走自由文本筛查"，它<strong>说不出</strong>那 220 个单元格里各写了什么。MH/AE 是全数保留、不做整列涂黑的 —— 那么逐字文本剩下的唯一防线就是逐行人工裁定。</p>
 </section>
 
-<section>
+<section id="halts">
   <h2>它停下来的时候</h2>
-  <p class="lede">工具会拒绝执行,而且拒绝得比较频繁。<strong>这不是坏了</strong> —— 每一次拒绝都对应一件它不肯替你猜的事。下面是你会遇到的几种,以及各自的意思。</p>
+  <p class="lede">工具会拒绝执行，而且拒绝得比较频繁。<strong>这不是坏了</strong> —— 每一次拒绝都对应一件它不肯替你猜的事。网页上是顶部的红框 <strong>It stopped here</strong>，下面是原因。</p>
   <div class="halts">
 
     <div class="halt-item">
-      <pre><code>error: STUDY-001.draft.yaml has not been approved.</code></pre>
-      <p class="why"><b>你拿草稿去跑了。</b>草稿是机器的猜测。回到第 2 步填表,第 3 步 <code>approve</code>,然后用它输出的那个 <code>.yaml</code>。</p>
+      <pre><code>12 of 83 row(s) have no decision ({'low': 9, 'medium': 3}).</code></pre>
+      <p class="why"><b>第 2 步还有空行。</b>一行空白就是一列没人形成过判断 —— 一份覆盖了它的批准会让 manifest 说假话。它会把没填的行列出来。</p>
     </div>
 
     <div class="halt-item">
-      <pre><code>error: 12 of 83 row(s) have no decision ({'low': 9, 'medium': 3}).</code></pre>
-      <p class="why"><b>决策表还有空行。</b>一行空白就是一列没人形成过判断 —— 一份覆盖了它的批准会让 manifest 说假话。它会把没填的行列出来给你。</p>
+      <pre><code>Who is approving? This is recorded in the contract and the manifest…</code></pre>
+      <p class="why"><b>签字人空着。</b>填你本人。</p>
     </div>
 
     <div class="halt-item">
-      <pre><code>error: cannot write out\plan.csv -- it is locked by another program.
-On Windows that is almost always Excel holding the file open.</code></pre>
-      <p class="why"><b>表还开在 Excel 里。</b>关掉再跑。它是在做任何事<strong>之前</strong>检查的,所以什么都没被改动。</p>
+      <pre><code>D:\quarantine\STUDY-001 is not a folder on this server.</code></pre>
+      <p class="why"><b>路径不对，或者填了你自己电脑上的路径。</b>控制台读的是服务器的硬盘。远程桌面或隧道过来的人最容易踩。</p>
     </div>
 
     <div class="halt-item">
-      <pre><code>error: 2853 value(s) were not shifted and would be published as recorded
+      <pre><code>DEIDKIT_VAULT_KEY is not set</code></pre>
+      <p class="why"><b>启动控制台的那个窗口没设密钥。</b>在那个窗口按 <kbd>Ctrl</kbd>+<kbd>C</kbd> 停掉，补上第二行，重新 <code>serve</code>。重启后控制台的进度会清空，从第 1 步重来 —— 已经写出去的合同 <code>.yaml</code> 不受影响。</p>
+    </div>
+
+    <div class="halt-item">
+      <pre><code>the key supplied does not open D:\vault\STUDY-001.db. Refusing to continue:
+proceeding would issue a second, disjoint surrogate space for the same subjects.</code></pre>
+      <p class="why"><b>密钥和金库对不上。</b>用的不是当初建这个金库的那把钥匙。<strong>不要</strong>为了跑通就换一个新金库 —— 那样同一批受试者会拿到另一套替身。找到正确的密钥。</p>
+    </div>
+
+    <div class="halt-item">
+      <pre><code>2853 value(s) were not shifted and would be published as recorded
   formats seen : {'UNPARSED': 2853}</code></pre>
-      <p class="why"><b>有一列日期它读不懂。</b>读不懂的值会<strong>原样输出</strong> —— 那就是真实日期留在了脱敏结果里,所以它拦停而不是警告。把报错里的样例值贴给技术同事看。</p>
+      <p class="why"><b>有一列日期它读不懂。</b>读不懂的值会<strong>原样输出</strong> —— 那就是真实日期留在了脱敏结果里，所以它拦停而不是警告。把报错里的样例值给技术同事看。</p>
     </div>
 
     <div class="halt-item">
-      <pre><code>error: day/month order: unknown -- set date_order</code></pre>
-      <p class="why"><b><code>03/04/2025</code> 是 3 月 4 日还是 4 月 3 日,这一列的数据自己证明不了。</b>猜错会把每个日期挪到错误的月份,而且看起来仍然像日期。查一下这个研究的数据传输规范,在决策表里填 <code>date_order=dmy</code> 或 <code>date_order=mdy</code>。</p>
+      <pre><code>day/month order: unknown -- set date_order</code></pre>
+      <p class="why"><b><code>03/04/2025</code> 是 3 月 4 日还是 4 月 3 日，这一列的数据自己证明不了。</b>猜错会把每个日期挪到错误的月份，而且看起来仍然像日期。查这个研究的数据传输规范，回到第 2 步把这一列 <span class="ui">Change</span>，参数里加上 <code>date_order=dmy</code> 或 <code>date_order=mdy</code>。</p>
     </div>
 
     <div class="halt-item">
-      <pre><code>error: 16 row(s) have no verdict.</code></pre>
-      <p class="why"><b>自由文本队列没填完。</b>没裁定的行会原样发布,而这些行是被标记为"可能含 PHI"的 —— 这是最后一道关。填完,或者用 <code>--allow-pending</code> 明确放行(manifest 会记下这个缺口)。</p>
+      <pre><code>'001-0042' is already published as another subject's surrogate in entity 'subject'.</code></pre>
+      <p class="why"><b>保形替身撞车了。</b>这一批里新出现了一个真实编号，恰好等于之前某一批抽出去的替身 —— 继续的话两个人会共用一个编号。极少见，但一旦发生不能静默放过。找技术同事；<strong>不要</strong>换金库绕过去。</p>
     </div>
 
     <div class="halt-item">
-      <pre><code>error: this contract was edited after it was approved.
+      <pre><code>shape_prefix_from names 'SITEID', but 3 value(s) do not start with it
+-- '0001-77' does not begin with '002'.</code></pre>
+      <p class="why"><b>"受试者号前缀就是中心号"这个关系在数据里不成立。</b>回到第 2 步把受试者那一列 <span class="ui">Change</span>，参数里删掉 <code>shape_prefix_from=…</code>。</p>
+    </div>
+
+    <div class="halt-item">
+      <pre><code>the shape of '7' admits only 10 value(s), too few to draw a distinct surrogate…</code></pre>
+      <p class="why"><b>这一列太窄，不能保形。</b>回到第 2 步把这一列 <span class="ui">Change</span>，参数里删掉 <code>preserve_format=True</code>。</p>
+    </div>
+
+    <div class="halt-item">
+      <pre><code>this contract was edited after it was approved.
   approved : sha256:2bf4c051...    now : sha256:cf05da8a...</code></pre>
-      <p class="why"><b>有人在批准之后改了合同。</b>如果是你改的,重新走一次 <code>approve</code>。<strong>如果不是你改的,那本身就是需要上报的发现。</strong></p>
+      <p class="why"><b>有人在批准之后改了合同文件。</b>如果是你改的，重新走一次签字。<strong>如果不是你改的，那本身就是需要上报的发现。</strong></p>
     </div>
 
   </div>
 </section>
 
-<section>
-  <h2>不是拦停,但要你读的两类提示</h2>
-
+<section id="hints">
+  <h2>不是拦停，但要你读的两类提示</h2>
   <h3>blinding: LEAKED in N place(s)</h3>
-  <p>药名或给药频率还留在某些列里,重标记碰不到那些地方 —— 比如 AE 叙述里写了"跳过下一次 Pembrolizumab",或者 <code>EXDOSFRQ</code> 的 <code>Q3W</code>/<code>Q6W</code> 把两个组分得清清楚楚。自由文本那部分会在第 5 步裁定;剂量和频率要不要池化是个取舍(护住盲态 vs 保住暴露-反应分析),由你定。</p>
-
-  <h3>NOTE: the k target was not met</h3>
-  <p>k=1 意味着按准标识符组合看,几乎每个受试者都唯一。<strong>小样本试验必然如此</strong> —— 120 例 × 7 个准标识符,组合空间远大于人数。工具会给出一条"再砍掉哪几个变量能到 k=15"的路径,那是<strong>代价清单,不是建议</strong>:通常要砍掉年龄和种族,而那是大多数分析的分层变量。</p>
+  <p>药名或给药频率还留在某些列里，重标记碰不到那些地方 —— 比如 AE 叙述里写了"跳过下一次 Pembrolizumab"，或者 <code>EXDOSFRQ</code> 的 <code>Q3W</code>/<code>Q6W</code> 把两个组分得清清楚楚。自由文本那部分会在裁定时处理；剂量和频率要不要池化是个取舍（护住盲态 vs 保住暴露-反应分析），由你定。</p>
+  <h3>k 没达标</h3>
+  <p>k=1 意味着按准标识符组合看，几乎每个受试者都唯一。<strong>小样本试验必然如此</strong> —— 120 例 × 7 个准标识符，组合空间远大于人数。工具会给出"再砍掉哪几个变量能达标"的路径，那是<strong>代价清单，不是建议</strong>：通常要砍掉年龄和种族，而那是大多数分析的分层变量。</p>
   <div class="note halt">
     <span class="tag">这句话要记住</span>
-    <p>正确做法通常是把 k=1 作为<strong>已接受的残余风险</strong>写进 determination,并写明补偿控制(数据使用协议、访问控制、不外传、vault 分离)。因为 —— <strong>已接受的风险和未处理的疏漏,在数据里长得一模一样。</strong>区别只存在于你的文档里。</p>
+    <p>正确做法通常是把 k=1 作为<strong>已接受的残余风险</strong>写进 determination，并写明补偿控制（数据使用协议、访问控制、不外传、金库分离）。因为 —— <strong>已接受的风险和未处理的疏漏，在数据里长得一模一样。</strong>区别只存在于你的文档里。</p>
   </div>
 </section>
 
-<section>
-  <h2>决策表里能填什么</h2>
-  <p>这 16 种是 <code>decision_treatment</code> 的全部选项。<strong>必需参数</strong>是强制的 —— 缺了会被点名拒绝,填了工具不接受的参数也会。</p>
+<section id="treatments">
+  <h2>Change 能填什么</h2>
+  <p>下拉框里的 16 种处置就是全部选项。<strong>必需参数</strong>是强制的 —— 缺了会被点名拒绝，填了工具不接受的参数也会。</p>
   <div class="tw">
     <table>
       <thead><tr><th>处置</th><th>做什么</th><th>必需参数</th><th>分析代价</th></tr></thead>
       <tbody>
         <tr><td><code>retain</code></td><td>原样发布</td><td>—</td><td>无</td></tr>
-        <tr><td><code>drop</code></td><td>整列删除</td><td>—</td><td>全丢,除非 <code>redundant_with</code> 点名幸存列</td></tr>
-        <tr><td><code>surrogate_id</code></td><td>随机替身 + vault 台账</td><td><code>entity</code></td><td>无;join 和可逆性都保住</td></tr>
-        <tr><td><code>faker</code></td><td>换成一个像样的假值</td><td><code>faker_provider</code></td><td><strong>原值不可恢复</strong> —— vault 里什么都不写</td></tr>
-        <tr><td><code>date_to_study_day</code></td><td>日期 → 相对 anchor 的天数</td><td>—</td><td>区间无损;日历没了,<code>--DTC</code> 也没了</td></tr>
-        <tr><td><code>partial_date_to_year_offset</code></td><td>部分日期 → 相对年 + 粒度标记</td><td>—</td><td>低;绝不补天</td></tr>
-        <tr><td><code>dob_to_age</code></td><td>出生日期 → 年龄,封顶</td><td>— (<code>cap</code> 默认 90)</td><td>低</td></tr>
-        <tr><td><code>date_shift</code></td><td>保留 ISO 日期,按受试者偏移</td><td><code>entity</code></td><td>近似;SDTM 仍合规</td></tr>
-        <tr><td><code>date_shift_raw</code></td><td>同样偏移,保留原始书写格式</td><td><code>entity</code></td><td>近似;给 raw→SDTM 训练对</td></tr>
-        <tr><td><code>cap_numeric</code></td><td>封顶以下精确,以上并成一档</td><td><code>cap</code></td><td>低;只有尾部丢精度</td></tr>
-        <tr><td><code>generalize_numeric</code></td><td>数值分档</td><td><code>bins</code></td><td>中;每个值都丢精度</td></tr>
-        <tr><td><code>zip3</code></td><td>截成 3 位邮编,低人口前缀 → 000</td><td>—</td><td>低</td></tr>
-        <tr><td><code>pool_rare</code></td><td>低频类别 → 池化值</td><td><code>min_count</code></td><td>整体轻,稀有类别全丢 —— <strong>别用在 MH/AE</strong></td></tr>
-        <tr><td><code>label_map</code></td><td>不同值 → <code>TRT A</code>/<code>TRT B</code>,可逆</td><td><code>entity</code></td><td>分析上无;这是盲态,不是隐私</td></tr>
-        <tr><td><code>screen_freetext</code></td><td>检出候选进队列,<strong>数据不改</strong></td><td>—</td><td>无 —— 保护来自第 5 步裁定,不是这条规则</td></tr>
-        <tr><td><code>redact_freetext</code></td><td>就地检出并替换</td><td>—</td><td>高;会毁掉监管审阅需要的内容</td></tr>
+        <tr><td><code>drop</code></td><td>整列删除</td><td>—</td><td>全丢，除非 <code>redundant_with</code> 点名幸存列</td></tr>
+        <tr><td><code>surrogate_id</code></td><td>随机替身 + 金库台账</td><td><code>entity</code></td><td>无；关联和可逆性都保住</td></tr>
+        <tr><td><code>faker</code></td><td>换成一个像样的假值</td><td><code>faker_provider</code></td><td><strong>原值不可恢复</strong> —— 金库里什么都不写</td></tr>
+        <tr><td><code>date_to_study_day</code></td><td>日期 → 相对锚点的天数</td><td>—</td><td>区间无损；日历没了，<code>--DTC</code> 也没了</td></tr>
+        <tr><td><code>partial_date_to_year_offset</code></td><td>部分日期 → 相对年 + 粒度标记</td><td>—</td><td>低；绝不补天</td></tr>
+        <tr><td><code>dob_to_age</code></td><td>出生日期 → 年龄，封顶</td><td>—（<code>cap</code> 默认 90）</td><td>低</td></tr>
+        <tr><td><code>date_shift</code></td><td>保留 ISO 日期，按受试者偏移</td><td><code>entity</code></td><td>近似；SDTM 仍合规</td></tr>
+        <tr><td><code>date_shift_raw</code></td><td>同样偏移，保留原始书写格式</td><td><code>entity</code></td><td>近似；给 raw→SDTM 训练对</td></tr>
+        <tr><td><code>cap_numeric</code></td><td>封顶以下精确，以上并成一档</td><td><code>cap</code></td><td>低；只有尾部丢精度</td></tr>
+        <tr><td><code>generalize_numeric</code></td><td>数值分档</td><td><code>bins</code></td><td>中；每个值都丢精度</td></tr>
+        <tr><td><code>zip3</code></td><td>截成 3 位邮编，低人口前缀 → 000</td><td>—</td><td>低</td></tr>
+        <tr><td><code>pool_rare</code></td><td>低频类别 → 池化值</td><td><code>min_count</code></td><td>整体轻，稀有类别全丢 —— <strong>别用在 MH/AE</strong></td></tr>
+        <tr><td><code>label_map</code></td><td>不同值 → <code>TRT A</code>/<code>TRT B</code>，可逆</td><td><code>entity</code></td><td>分析上无；这是盲态，不是隐私</td></tr>
+        <tr><td><code>screen_freetext</code></td><td>检出候选进队列，<strong>数据不改</strong></td><td>—</td><td>无 —— 保护来自裁定，不是这条规则</td></tr>
+        <tr><td><code>redact_freetext</code></td><td>就地检出并替换</td><td>—</td><td>高；会毁掉监管审阅需要的内容</td></tr>
       </tbody>
     </table>
   </div>
-  <h3>decision_params 写法</h3>
-  <pre><code>cap=90                     90 及以上并成一档
+  <h3>参数的写法</h3>
+  <p>参数框里多个参数用分号隔开，例如 <code>entity=subject;preserve_format=true;shape_prefix_from=SITEID</code>。</p>
+  <pre><code>entity=subject             用哪个替身命名空间（subject / site …）
+prefix=SUBJ                不保形时替身的前缀：SUBJ-XXXXXXXX
+preserve_format=true       替身保持原值长度和排版
+shape_prefix_from=SITEID   替身前缀跟着这一列的替身走
+cap=90                     90 及以上并成一档
 bins=0,18,40,65,90         generalize_numeric 的档位边界
 min_count=5                pool_rare 阈值
-entity=subject             用哪个替身命名空间
-keep_values=Placebo        label_map:这些值原样透传
-date_order=dmy             date_shift_raw:03/04/2025 是 4 月 3 日
-redundant_with=AESTDY      drop:内容幸存在哪一列
-is_quasi_identifier=true   把这列计入 k 匿名度量</code></pre>
+keep_values=Placebo        label_map：这些值原样透传
+date_order=dmy             date_shift_raw：03/04/2025 是 4 月 3 日
+redundant_with=AESTDY      drop：内容幸存在哪一列
+is_quasi_identifier=true   把这列计入 k</code></pre>
   <div class="note">
     <span class="tag">你改不动的部分</span>
-    <p>建议可以覆写,<strong>不变量不行</strong>。两条规则写同一个输出列、声称"de-identified"却保留真实日期、在"全数保留"的域(MH/AE)里做毁值处置 —— 这些不论谁要求都会被拒绝,因为它们就是这个 tier 的定义本身。</p>
+    <p>建议可以覆写，<strong>不变量不行</strong>。两条规则写同一个输出列、声称 de-identified 却保留真实日期、在全数保留的域（MH/AE）里做毁值处置、在组合编号模板里引用一个被删掉的列 —— 这些不论谁要求都会被拒绝，因为它们就是这个数据层的定义本身。</p>
   </div>
 </section>
 
-<section>
+<section id="deliver">
   <h2>交付与销毁</h2>
   <div class="tw">
     <table>
       <thead><tr><th>文件</th><th>怎么处理</th></tr></thead>
       <tbody>
-        <tr><td><code>STUDY-001-Q3-final\</code></td><td><strong>交出去的就是这个。</strong>数据 + manifest</td></tr>
-        <tr><td><code>STUDY-001.yaml</code></td><td>提交进版本库。下一批数据复用,不必再填表</td></tr>
-        <tr><td><code>vault\STUDY-001.db</code></td><td>加密的对照台账。安全报告要反查真人时用它。<strong>销毁它就是把假名化数据变成匿名数据</strong> —— 一个需要按流程做的决定</td></tr>
-        <tr><td><code>STUDY-001-Q3_review\</code></td><td><strong>裁定完就删。</strong>原始未脱敏文本 + 最易重识别受试者的准标识符组合</td></tr>
-        <tr><td><code>STUDY-001-Q3\</code>(裁定前那份)</td><td>中间产物。它的 manifest 写着 <code>adjudication.complete: false</code>,不要当成交付版</td></tr>
+        <tr><td>输出文件夹（没有待裁定时）<br>或 <code>-final</code>（有待裁定时）</td><td><strong>交出去的就是这个。</strong>数据 + <code>manifest.json</code>，两个一起给 —— 数据本身说不出它是怎么做出来的</td></tr>
+        <tr><td>合同 <code>.yaml</code></td><td>交给技术同事提交进版本库。下一批数据复用</td></tr>
+        <tr><td>金库 <code>.db</code></td><td>加密的对照台账，安全报告要反查真人时用。<strong>销毁它就是把假名化数据变成匿名数据</strong> —— 一个需要按流程做的决定</td></tr>
+        <tr><td><code>…_review\</code></td><td><strong>读完 / 裁定完就删。</strong>里面是未脱敏原文和最容易被重识别的那些受试者的准标识符取值 —— 整条流水线产出的东西里，最适合拿来定位人的就是它。不要和数据一起交付，不要进同一个备份</td></tr>
+        <tr><td>裁定前那份输出</td><td>只在有待裁定时存在。中间产物，manifest 写着 <code>adjudication.complete: false</code>，不要当成交付版</td></tr>
       </tbody>
     </table>
   </div>
   <h3>需要反查真实受试者时</h3>
-  <pre><code>.\.venv\Scripts\python.exe -m deidkit.cli reverse SUBJ-7QK2XM4A `
+  <p>这一步只有命令行，而且是故意的：</p>
+  <pre><code>.\.venv\Scripts\deidkit.exe reverse 394-9212 `
     --entity subject --vault "D:\vault\STUDY-001.db" `
     -j "SAE-2026-0031 快速安全报告"</code></pre>
-  <p><code>-j</code> 是<strong>强制</strong>的理由,而且会写进访问日志 —— 通向真实标识符的路径只有这一条,而且没有不留痕的走法。查谁反查过什么:<code>deidkit vault log</code>。</p>
+  <p><code>-j</code> 是<strong>强制</strong>的理由，会写进访问日志 —— 通向真实标识符的路径只有这一条，而且没有不留痕的走法。查谁反查过什么：<code>deidkit vault log</code>。</p>
 </section>
 
-<section>
-  <h2>工具管不了的三件事</h2>
-  <p><strong>一、determination 文档。</strong>k=1 是已接受风险及其补偿控制、药名保留是明确决定、剂量频率保留的取舍 —— 这些必须有人写成文字。工具能证明做了什么,证明不了那是深思熟虑的结果。</p>
-  <p><strong>二、拦不住有人把 <code>decision</code> 整列拖成 <code>OK</code>。</strong>工具能保证空白必须处理、批准留痕、指纹绑定、最该想的排在最前 —— 但保证不了那些行被想过。<code>approve</code> 在一条改动都没有的时候会自己说出这句话。</p>
-  <p><strong>三、HIPAA 以外的法规。</strong>这套工具是按美国 HIPAA / Expert Determination 建的。中国站点的受试者数据受 PIPL 管,尤其是作为训练材料和任何跨境传输 —— <code>tier: deidentified</code> 这个标签的法律含义是 HIPAA 的,不自动等于 PIPL 下的"匿名化"。</p>
+<section id="limits">
+  <h2>工具管不了的事</h2>
+  <p><strong>一、determination 文档。</strong>k=1 是已接受风险及其补偿控制、药名保留是明确决定、剂量频率保留的取舍 —— 这些必须有人写成文字。工具能证明做了什么，证明不了那是深思熟虑的结果。</p>
+  <p><strong>二、拦不住没看就点 OK。</strong>工具能保证空白必须处理、批准留痕、签名绑定、最该想的排在最前 —— 但保证不了那些行被想过。批量按钮让这件事更快，不让它更对。</p>
+  <p><strong>三、谁能坐在那台服务器前面。</strong>控制台自己没有密码，它的安全边界就是服务器的登录权限。谁能登上那台机器，谁就能打开它、看到待裁定队列里的原文。</p>
+  <p><strong>四、HIPAA 以外的法规。</strong>这套工具是按美国 HIPAA / Expert Determination 建的。中国站点的受试者数据受 PIPL 管，尤其是作为训练材料和任何跨境传输 —— <code>deidentified</code> 这个标签的法律含义是 HIPAA 的，不自动等于 PIPL 下的"匿名化"。</p>
+</section>
+
+<section id="cli">
+  <h2>附：命令行对照</h2>
+  <p>给技术同事，或者控制台用不了的时候。每一步和网页上是同一段代码、同一套规则。</p>
+  <div class="tw">
+    <table>
+      <thead><tr><th>网页</th><th>命令</th></tr></thead>
+      <tbody>
+        <tr><td>01 Read the drop</td><td><code>deidkit profile &lt;文件夹&gt; --raw -o X.draft.yaml --decisions X_plan.csv</code></td></tr>
+        <tr><td>02 Review every column</td><td>用 Excel 填 <code>X_plan.csv</code> 的 <code>decision</code> 列，存为 CSV UTF-8</td></tr>
+        <tr><td>03 Sign it off</td><td><code>deidkit approve X_plan.csv -c X.draft.yaml --data &lt;文件夹&gt; -o X.yaml --approved-by 你</code></td></tr>
+        <tr><td>04 Run</td><td><code>deidkit run &lt;文件夹&gt; -c X.yaml -o &lt;输出&gt; --vault &lt;金库&gt; --format xlsx</code></td></tr>
+        <tr><td>05 裁定</td><td><code>deidkit adjudicate &lt;输出&gt; --queue &lt;…_review\review_queue.csv&gt; -o &lt;输出-final&gt;</code></td></tr>
+        <tr><td>查处置选项</td><td><code>deidkit treatments</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p><code>deidkit</code> 指的是 <code>.\.venv\Scripts\deidkit.exe</code>。命令行下 CSV 开在 Excel 里时会被锁住，报 <code>locked by another program</code> —— 关掉 Excel 再跑，它是在做任何事之前检查的，所以什么都没被改动。</p>
 </section>
 
 <footer>
-  <p>不确定某个报错的意思、或者觉得某一列的建议不对,把控制台输出或决策表贴出来问 —— 那里面只有列名和处置方式,没有受试者数据。<strong>真实 EDC 数据留在服务器上,不要传出去。</strong></p>
+  <p>不确定某个报错的意思、或者觉得某一列的建议不对，把页面上的红框文字或审阅页的截图拿出来问 —— 那里面只有列名和处置方式。<strong>待裁定队列、<code>…_review</code> 文件夹里的东西、真实 EDC 数据，留在服务器上，不要传出去。</strong></p>
 </footer>
 
 </div>

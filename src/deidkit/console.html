@@ -66,6 +66,10 @@ section[hidden]{display:none!important}
 .field{display:flex;flex-direction:column;gap:5px;margin-bottom:13px}
 .field label{font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
 .field .hint{font-size:12.5px;color:var(--ink-3)}
+.field select{
+  font:inherit;font-size:13.5px;padding:8px 10px;background:var(--paper);color:var(--ink);
+  border:1px solid var(--rule);border-radius:6px;width:100%;
+}
 input[type=text]{
   font:inherit;font-family:var(--mono);font-size:13.5px;padding:8px 10px;
   background:var(--paper);color:var(--ink);border:1px solid var(--rule);border-radius:6px;width:100%;
@@ -279,7 +283,7 @@ dl.kv dd{margin:0;font-family:var(--mono);word-break:break-all}
           </div>
           <div class="field">
             <label for="fmt">Format</label>
-            <input type="text" id="fmt" value="csv" spellcheck="false">
+            <select id="fmt"><option value="xlsx" selected>xlsx — opens safely in Excel</option><option value="csv">csv</option><option value="parquet">parquet — for a training corpus</option></select>
           </div>
         </div>
         <div class="note info">
@@ -435,6 +439,10 @@ $('#rows').addEventListener('click', e => {
   if (!b) return;
   const tr = b.closest('tr'), i = +tr.dataset.i;
   ROWS[i].decision = ROWS[i].decision === b.dataset.v ? '' : b.dataset.v;
+  if (ROWS[i].decision === 'CHANGE' && !ROWS[i].decision_treatment){
+    ROWS[i].decision_treatment = ROWS[i].proposed_treatment;
+    ROWS[i].decision_params = ROWS[i].proposed_params || '';
+  }
   renderRows();
   save([i]);
 });
