@@ -233,10 +233,11 @@ setup.bat</code></pre>
   <p>控制台是一个只在那台服务器上运行的网页。<strong>它不在互联网上</strong> —— 浏览器和工具在同一台机器里对话，数据包连网卡都不经过。</p>
 
   <h3>在服务器上启动</h3>
-  <p>开一个 PowerShell 窗口，三行：</p>
+  <p><strong>最简单：在 <code>Data-Masking</code> 文件夹里双击 <code>serve.bat</code>。</strong>会弹出一个黑色窗口，稍等一下浏览器会自己打开控制台。它会自动找密钥：服务器上已经配置了密钥就用配置的；没有就用 <code>setup</code> 生成的开发密钥，并在窗口里提示你这是开发密钥。</p>
+  <p>不用双击的话，在 PowerShell 里三行，效果一样：</p>
   <pre><code>cd $HOME\Data-Masking
 $env:DEIDKIT_VAULT_KEY = (Get-Content out\dev-vault.key -Raw).Trim()
-.\.venv\Scripts\deidkit.exe serve</code></pre>
+.\.venv\Scripts\deidkit.exe serve --open</code></pre>
   <p>看到这个就启动好了：</p>
   <pre><code>deidkit console on http://127.0.0.1:8765
   the vault key is read from this process's environment, not the browser
@@ -244,7 +245,7 @@ $env:DEIDKIT_VAULT_KEY = (Get-Content out\dev-vault.key -Raw).Trim()
   <p>在同一台机器上开浏览器，访问 <code>http://127.0.0.1:8765</code>。左边栏最下方的 <span class="ui">User guide</span> 是逐屏带截图的操作指南（英文），交给审阅的同事看那一份就够了。</p>
   <div class="note you">
     <span class="tag">这个窗口一直开着</span>
-    <p>这个 PowerShell 窗口<strong>就是控制台本身</strong>。关掉它网页就打不开了；要停就在里面按 <kbd>Ctrl</kbd>+<kbd>C</kbd>。报 <code>Address already in use</code> 说明端口被占，换一个：<code>serve --port 9000</code>，网页地址跟着改成 <code>:9000</code>。</p>
+    <p>这个窗口（双击 <code>serve.bat</code> 弹出来的黑窗口也一样）<strong>就是控制台本身</strong>。关掉它网页就打不开了；要停就在里面按 <kbd>Ctrl</kbd>+<kbd>C</kbd>。提示 <code>The console may already be running in another window</code>，多半是已经开着一个了 —— 找找另一个黑窗口，或者直接在浏览器打开 <code>http://127.0.0.1:8765</code>。确实要再开一个，换个端口：<code>serve.bat --port 8766</code>。</p>
   </div>
   <div class="note">
     <span class="tag">为什么密钥在这里设，不在网页上填</span>

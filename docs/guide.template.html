@@ -120,6 +120,7 @@
 <nav class="toc" aria-label="Contents">
   <ol>
     <li><a href="#before"><span class="n">00</span>Before you start</a></li>
+    <li><a href="#start">Starting the console</a></li>
     <li><a href="#s1"><span class="n">01</span>Read the drop</a></li>
     <li><a href="#s2"><span class="n">02</span>Review every column</a></li>
     <li><a href="#s3"><span class="n">03</span>Sign it off</a></li>
@@ -148,6 +149,38 @@
   <div class="note halt">
     <span class="tag">One person at a time</span>
     <p>If two people have the console open together, whoever acts second overwrites the first person's progress. Take turns, and finish a drop before handing over.</p>
+  </div>
+</section>
+
+<section id="start">
+  <h2>Starting the console<span class="en">for whoever runs it on the server</span></h2>
+  <div class="prose">
+    <p>If someone has already started it and given you the address, skip this. If it falls to you:</p>
+    <ol>
+      <li>On the server, open the <code>Data-Masking</code> folder.</li>
+      <li><strong>Double-click <code>serve.bat</code>.</strong> A black window opens, and a moment later the console opens in your browser by itself.</li>
+      <li><strong>Leave the black window open</strong> while you work. It <em>is</em> the console: close it and the page stops working. To stop, close it, or press <kbd>Ctrl</kbd>+<kbd>C</kbd> in it.</li>
+    </ol>
+    <p>What the black window may say:</p>
+  </div>
+  <div class="tw">
+    <table>
+      <thead><tr><th>Message</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>Using the DEVELOPMENT vault key in out\dev-vault.key</code></td><td>No key is configured on this machine, so it is using the one setup created. Fine for synthetic data. For real data the key belongs in a key service — ask whoever runs the server.</td></tr>
+        <tr><td><code>The console may already be running in another window</code></td><td>It is probably open already. Look for another black window, or just open <code>http://127.0.0.1:8765</code>. Or start a second one on another port: <code>serve.bat --port 8766</code>.</td></tr>
+        <tr><td><code>deidkit is not installed in this folder yet</code></td><td>Double-click <code>setup.bat</code> first.</td></tr>
+        <tr><td><code>No vault key was found</code></td><td>Neither a configured key nor the development key exists. Ask whoever runs the server.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="prose">
+    <p>Without the double-click, the same thing in PowerShell:</p>
+<pre><code>cd $HOME\Data-Masking
+$env:DEIDKIT_VAULT_KEY = (Get-Content out\dev-vault.key -Raw).Trim()
+.\.venv\Scripts\deidkit.exe serve --open</code></pre>
+    <p>The second line sets the key for <strong>that one window only</strong>; a new PowerShell window needs it again. <code>serve.bat</code> exists so nobody has to remember that.</p>
+    <p>This guide is served by the console, so it cannot be opened from the console until the console is running. Before that, open the file directly: <code>src\deidkit\guide.html</code> in the same folder.</p>
   </div>
 </section>
 

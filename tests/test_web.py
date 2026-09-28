@@ -282,3 +282,35 @@ def test_the_guide_is_self_contained():
     for host in ("http://", "https://", "//cdn", "googleapis"):
         # the one http:// allowed is the loopback address the guide tells you to open
         assert text.replace("http://127.0.0.1", "").count(host) == 0, host
+
+
+def test_a_port_already_in_use_is_a_sentence_not_a_traceback(capsys):
+    """The usual cause is the console already running in another window."""
+    import socket
+
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen(1)
+        port = busy.getsockname()[1]
+        assert web.serve(port=port) == 1
+    err = capsys.readouterr().err
+    assert "may already be running" in err
+    assert f"--port {port + 1}" in err
+
+
+def test_the_launchers_find_the_key_the_right_way_round():
+    """A key already configured on the machine wins; the dev key is a fallback.
+
+    Reading the dev key first would silently override a production KMS setup
+    with the key that sits beside the vault -- the exact arrangement the
+    production configuration exists to avoid.
+    """
+    root = Path(web.__file__).resolve().parents[2]
+    bat = (root / "serve.bat").read_text()
+    sh = (root / "serve.sh").read_text()
+    assert bat.index("if defined DEIDKIT_KEY_URI") < bat.index("dev-vault.key\" (")
+    assert bat.index("if defined DEIDKIT_VAULT_KEY") < bat.index("set /p DEIDKIT_VAULT_KEY")
+    assert sh.index("DEIDKIT_KEY_URI:-") < sh.index("tr -d")
+    for text in (bat, sh):
+        assert "DEVELOPMENT" in text
+        assert "serve --open" in text

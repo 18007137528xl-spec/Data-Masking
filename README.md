@@ -35,9 +35,14 @@ interval, not a date element, and it preserves every interval quantity exactly.
 The five steps below are also a local web console, for the person who owns the
 decisions but does not own a shell:
 
+On Windows, double-click `serve.bat` (elsewhere, `./serve.sh`). It uses the
+key configured on the machine if there is one, falls back to the development
+key from setup with a warning, starts the console and opens the browser. By
+hand:
+
 ```bash
 export DEIDKIT_VAULT_KEY=...     # the key comes from the environment, as always
-deidkit serve                    # http://127.0.0.1:8765
+deidkit serve --open             # http://127.0.0.1:8765
 ```
 
 It runs **on the server holding the data**. Nothing is uploaded: the drop is

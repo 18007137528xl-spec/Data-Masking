@@ -1088,6 +1088,11 @@ def build_parser() -> argparse.ArgumentParser:
         "reads the quarantine drop and shows unredacted free text. Reach it "
         "from another machine through an SSH tunnel, not by binding wider.",
     )
+    sp.add_argument(
+        "--open",
+        action="store_true",
+        help="open the console in the default browser once it is listening",
+    )
     sp.set_defaults(func=cmd_serve)
 
     sp = sub.add_parser("vault", help="inspect the crosswalk")
@@ -1114,8 +1119,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_serve(args: argparse.Namespace) -> int:
     from . import web
 
-    web.serve(host=args.host, port=args.port)
-    return 0
+    return web.serve(host=args.host, port=args.port, open_browser=args.open)
 
 
 def main(argv: list[str] | None = None) -> int:

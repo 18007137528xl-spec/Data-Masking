@@ -32,6 +32,7 @@ that cannot be installed is not a review console.
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import traceback
 from dataclasses import dataclass, field
@@ -509,10 +510,28 @@ def make_handler(session: Session):
     return Handler
 
 
-def serve(host: str = "127.0.0.1", port: int = 8765) -> None:
+def serve(host: str = "127.0.0.1", port: int = 8765, *, open_browser: bool = False) -> int:
+    """Run the console until interrupted. Returns a process exit code."""
     session = Session()
-    httpd = ThreadingHTTPServer((host, port), make_handler(session))
-    print(f"deidkit console on http://{host}:{port}")
+    url = f"http://{host}:{port}"
+    try:
+        httpd = ThreadingHTTPServer((host, port), make_handler(session))
+    except OSError as exc:
+        # The ordinary cause is the console already running in another window
+        # -- a double-click launcher makes that easy -- and the ordinary
+        # message is "[WinError 10048] Only one usage of each socket address".
+        # Say what it probably means and what to do instead.
+        print(
+            f"error: cannot listen on {url} -- {exc.strerror or exc}.\n\n"
+            f"The console may already be running in another window: try opening\n"
+            f"  {url}\n"
+            f"in the browser. Otherwise start it on another port:\n"
+            f"  deidkit serve --port {port + 1}",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"deidkit console on {url}")
     if host not in ("127.0.0.1", "localhost", "::1"):
         print(
             "  WARNING: bound to a non-loopback address. This console reads the\n"
@@ -522,10 +541,18 @@ def serve(host: str = "127.0.0.1", port: int = 8765) -> None:
             "  an SSH tunnel unless something else is already authenticating it."
         )
     print("  the vault key is read from this process's environment, not the browser")
+    print("  keep this window open while you work; closing it stops the console")
     print("  Ctrl-C to stop")
+    if open_browser:
+        # The socket is already listening, so the browser's first request
+        # queues until serve_forever picks it up -- no race, no refresh.
+        import webbrowser
+
+        threading.Timer(0.3, webbrowser.open, args=(url + "/",)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\nstopped")
     finally:
         httpd.server_close()
+    return 0

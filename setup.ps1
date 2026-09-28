@@ -412,6 +412,9 @@ Write-Host ""
 Write-Host "  The second command has no --unreviewed, and it will only work" -ForegroundColor DarkGray
 Write-Host "  because of the first." -ForegroundColor DarkGray
 Write-Host ""
+Write-Host "  To review a real drop in the browser instead: double-click serve.bat" -ForegroundColor Cyan
+Write-Host "  in this folder. It starts the console and opens it for you." -ForegroundColor Cyan
+Write-Host ""
 Write-Host "  To use the tools directly in a new shell:" -ForegroundColor DarkGray
 Write-Host "    .venv\Scripts\Activate.ps1        (then: deidkit --help)" -ForegroundColor DarkGray
 Write-Host "  or without activating:" -ForegroundColor DarkGray
