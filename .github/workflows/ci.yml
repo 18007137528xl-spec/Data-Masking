@@ -1,0 +1,167 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# No secrets are needed and none should be added: this workflow runs against
+# fabricated data only. A CI job that needs a vault key is a CI job touching
+# something it should not.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ------------------------------------------------------------------
+  # Unit tests across the supported Python range.
+  # ------------------------------------------------------------------
+  test:
+    name: tests (${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install pytest
+
+      - name: Run the suite
+        run: python -m pytest tests/ -q
+
+  # ------------------------------------------------------------------
+  # End-to-end on Linux: the guarantees, checked against real output.
+  # ------------------------------------------------------------------
+  e2e-linux:
+    name: end-to-end (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install and self-check
+        run: |
+          chmod +x setup.sh
+          ./setup.sh --core --skip-model
+
+      - name: Confirm the manifest was written
+        run: |
+          test -f out/tier_deidentified/manifest.json
+          python -c "
+          import json
+          m = json.load(open('out/tier_deidentified/manifest.json'))
+          assert m['tier'] == 'deidentified', m['tier']
+          assert m['contract']['contract_version']
+          assert m['risk']['k_min'] >= 1
+          assert m['transformation']['AE']['retained_in_full'] is True
+          assert m['transformation']['MH']['retained_in_full'] is True
+          print('manifest ok:', m['contract']['contract_version'])
+          "
+
+      - name: Upload the run artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-tier
+          path: |
+            out/tier_deidentified/manifest.json
+            out/tier_deidentified/review_queue.csv
+            out/steward_review.csv
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ------------------------------------------------------------------
+  # End-to-end on Windows. This job exists to validate setup.ps1 on a real
+  # Windows runner -- it cannot be exercised from a Linux dev machine, and an
+  # installer nobody has run is an installer that does not work.
+  # ------------------------------------------------------------------
+  e2e-windows:
+    name: end-to-end (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Run setup.ps1
+        shell: pwsh
+        run: |
+          .\setup.ps1 -Core -SkipModel
+          if ($LASTEXITCODE -ne 0) {
+              throw "setup.ps1 exited with $LASTEXITCODE"
+          }
+
+      - name: Run the suite in the created venv
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -m pip install pytest --quiet
+          .\.venv\Scripts\python.exe -m pytest tests\ -q
+
+      - name: Confirm CRLF survived checkout
+        shell: pwsh
+        run: |
+          # .gitattributes should have delivered CRLF for the Windows scripts.
+          # If this fails, a clone on Windows produces a broken installer.
+          $bytes = [System.IO.File]::ReadAllBytes("setup.bat")
+          $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+          if ($text -notmatch "`r`n") {
+              throw "setup.bat has no CRLF line endings; check .gitattributes"
+          }
+          Write-Host "setup.bat line endings ok"
+
+      - name: Upload the run artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-tier
+          path: |
+            out\tier_deidentified\manifest.json
+            out\tier_deidentified\review_queue.csv
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ------------------------------------------------------------------
+  # The container builds and its entry point works.
+  # ------------------------------------------------------------------
+  docker:
+    name: container
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: docker build -t deidkit:ci .
+
+      - name: Entry point runs as non-root
+        run: |
+          docker run --rm deidkit:ci --help > /dev/null
+          user=$(docker run --rm --entrypoint id deidkit:ci -un)
+          test "$user" = "deid" || { echo "container runs as $user, expected deid"; exit 1; }
+          echo "container ok, running as $user"
+
+      - name: Report which free-text detector the image carries
+        run: |
+          docker run --rm --entrypoint python deidkit:ci \
+            -c "from deidkit.freetext import build_detector; print('detector:', build_detector().name)"
