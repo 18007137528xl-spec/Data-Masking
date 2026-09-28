@@ -274,6 +274,9 @@ class DomainContract(BaseModel):
             allowed = NON_MUTATING | {
                 Treatment.DATE_TO_STUDY_DAY,
                 Treatment.PARTIAL_DATE_TO_YEAR_OFFSET,
+                # A uniform per-subject shift is a translation, not a loss:
+                # every interval within a subject is unchanged.
+                Treatment.DATE_SHIFT,
                 Treatment.SURROGATE_ID,
             }
             bad = [

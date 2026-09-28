@@ -151,7 +151,7 @@ _RETAIN_SUFFIXES = (
     "SCAT", "ORRES", "ORRESU", "STRESC", "STRESN", "STRESU", "TESTCD",
     "TEST", "SPEC", "POS", "LOC", "LAT", "DIR", "METHOD", "BLFL", "DRVFL",
     "STAT", "REASND", "TPT", "TPTNUM", "ELTM", "TOXGR", "GRPID", "REFID",
-    "DOSE", "DOSU", "DOSFRM", "DOSFRQ", "ROUTE", "TRT", "ONGO",
+    "DOSE", "DOSU", "DOSFRM", "DOSFRQ", "ROUTE", "ONGO",
     # relative-timing flags: ONGOING / BEFORE / DURING / AFTER
     "ENRF", "STRF", "ENRTPT", "STRTPT", "ENTPT",
     # reference-range and baseline indicators
@@ -182,7 +182,11 @@ _DROP_PATTERN = re.compile(
     r"PASSPORT|LICENSE|LICENCE|ACCOUNTNO|IPADDR|DEVICEID|BIOMETRIC)"
 )
 
-_VERBATIM_SUFFIXES = ("TERM", "MODIFY", "LLT", "PTCD", "SPID")
+#: Investigator-entered verbatim fields. --TRT belongs here, not with the
+#: coded content: CMTRT is the reported name of a concomitant medication,
+#: typed by a human, and after AETERM it is the free-text field most likely to
+#: carry an identifier. CMDECOD is the coded counterpart and stays untouched.
+_VERBATIM_SUFFIXES = ("TERM", "TRT", "MODIFY", "LLT", "PTCD", "SPID")
 _FREETEXT_NAMES = re.compile(
     r"(TERM|COMMENT|CMNT|NARR|NARRATIVE|DESC|DESCRIP|REASON|SPECIFY|"
     r"OTH|OTHER|NOTE|TEXT)$"
@@ -202,6 +206,7 @@ def suggest(
     domain: str,
     anchor_column: str | None = None,
     sibling_columns: frozenset[str] = frozenset(),
+    sdtm_conformant: bool = False,
 ) -> Suggestion:
     """Suggest a treatment for one profiled column.
 
@@ -209,6 +214,17 @@ def suggest(
     decisions genuinely depend on: SDTM ``DM`` carries both ``BRTHDTC`` and
     ``AGE``, and deriving age from the date of birth when age is already
     present would both collide and pointlessly retain a direct identifier.
+
+    ``sdtm_conformant`` changes how dates are handled, and it is the more
+    consequential switch:
+
+    * **False** (analysis output): ``--DTC`` becomes a ``--DY`` study day and
+      the date column goes away. Smallest attack surface, but the result is
+      not SDTM -- ``--DTC`` is a required variable and Pinnacle 21 will say so.
+    * **True** (SDTM output): ``--DTC`` keeps its ISO form and is shifted by a
+      per-subject offset held in the vault. The dataset stays conformant, and
+      any existing ``--DY`` stays correct for free, because it is measured
+      from ``RFSTDTC`` -- which shifts by the same amount.
     """
     col = profile.column
     up = col.upper()
@@ -279,14 +295,14 @@ def suggest(
     # interval, not a date element, so it is already in the form this pipeline
     # would have produced.
     if up.endswith("DY") and not up.endswith("BODY") and len(up) > 2:
-        return Suggestion(
-            rule(
-                Treatment.RETAIN,
-                note="already a study day: an interval, not a date element",
-            ),
-            "high",
-            "derived study day",
-        )
+        note = "already a study day: an interval, not a date element"
+        if sdtm_conformant:
+            note += (
+                "; stays correct under date shifting, because the reference "
+                "date it is measured from shifts by the same offset"
+            )
+        return Suggestion(rule(Treatment.RETAIN, note=note), "high",
+                          "derived study day")
 
     # --- dates --------------------------------------------------------
     if up in {"BRTHDTC", "BIRTHDTC", "DOB"}:
@@ -313,7 +329,32 @@ def suggest(
             "date of birth",
         )
     if up.endswith("DTC") or profile.looks_date:
-        if anchor_column and up == anchor_column.upper():
+        is_anchor = bool(anchor_column and up == anchor_column.upper())
+
+        if sdtm_conformant:
+            # Every date shifts, the anchor included. Shifting the anchor is
+            # what keeps --DY valid: study day is measured from the reference
+            # start, so if both move by the same offset the difference holds.
+            # Converting the anchor to "1" instead would leave a required SDTM
+            # variable holding something that is not a date.
+            note = (
+                "shifted by a per-subject offset: --DTC stays a valid ISO date "
+                "so the dataset remains SDTM-conformant, and every interval "
+                "survives because one subject's dates all move together"
+            )
+            if is_anchor:
+                note = (
+                    "the reference start, shifted with the rest of the subject's "
+                    "dates -- which is precisely why any --DY stays correct"
+                )
+            return Suggestion(
+                rule(Treatment.DATE_SHIFT, entity="subject", note=note),
+                "high",
+                "anchor date (SDTM-conformant shift)" if is_anchor
+                else "event date (SDTM-conformant shift)",
+            )
+
+        if is_anchor:
             return Suggestion(
                 rule(
                     Treatment.DATE_TO_STUDY_DAY,
@@ -342,9 +383,10 @@ def suggest(
                 rule(
                     Treatment.DROP,
                     redundant_with=derived,
-                    note=f"{derived} is already present and is the de-identified "
-                    "form of this date; keeping both would emit the same column "
-                    "twice",
+                    note=f"{derived} is already present and carries this date's "
+                    "analytic content as an interval. NOTE: this makes the "
+                    "dataset non-conformant, since --DTC is required in SDTM. "
+                    "Use sdtm_conformant=True if the output must validate.",
                 ),
                 "high",
                 "event date, already derived to a study day",
@@ -352,7 +394,9 @@ def suggest(
         return Suggestion(
             rule(
                 Treatment.DATE_TO_STUDY_DAY,
-                note="reparameterisation, not redaction: intervals preserved",
+                note="reparameterisation, not redaction: intervals preserved. "
+                "NOTE: removes a required SDTM variable; use sdtm_conformant=True "
+                "if the output must validate.",
             ),
             "high",
             "event date",
@@ -457,6 +501,7 @@ def draft_contract(
     anchor_date_column: str | None = None,
     subject_column: str = "USUBJID",
     k_target: int = 5,
+    sdtm_conformant: bool = False,
 ) -> tuple[Contract, dict[str, dict[str, Suggestion]]]:
     """Draft a contract from profiled data.
 
@@ -487,6 +532,7 @@ def draft_contract(
                 domain=name,
                 anchor_column=anchor_date_column if name == anchor_domain else None,
                 sibling_columns=siblings - {col.upper()},
+                sdtm_conformant=sdtm_conformant,
             )
             for col, p in profs.items()
         }

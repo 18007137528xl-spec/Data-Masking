@@ -36,7 +36,38 @@ RACES = [
 ]
 RACE_WEIGHTS = [58, 20, 16, 4, 2]
 ETHNIC = ["NOT HISPANIC OR LATINO", "HISPANIC OR LATINO"]
-ARMS = ["Placebo", "Drug A 10mg", "Drug A 25mg"]
+# Real drug names, deliberately. A placeholder like "Drug A" makes it
+# impossible to see from the output whether the pipeline masks drug names --
+# and the answer matters: it does not, because a treatment arm is the exposure
+# under study, identical for everyone in it, and identifies no one.
+ARMS = [
+    "Placebo",
+    "Pembrolizumab 200 mg Q3W",
+    "Pembrolizumab 400 mg Q6W",
+]
+
+# Concomitant medications: real names again, and the verbatim field is where
+# investigators type free text, so it is also where identifiers turn up.
+CM_MEDS = [
+    ("Lisinopril", "LISINOPRIL", "Hypertension", 10, "mg", "ORAL"),
+    ("Metformin HCl 500mg", "METFORMIN HYDROCHLORIDE", "Type 2 diabetes", 500, "mg", "ORAL"),
+    ("Atorvastatin", "ATORVASTATIN", "Hyperlipidaemia", 20, "mg", "ORAL"),
+    ("Levothyroxine sodium", "LEVOTHYROXINE SODIUM", "Hypothyroidism", 75, "ug", "ORAL"),
+    ("Amlodipine besylate", "AMLODIPINE BESILATE", "Hypertension", 5, "mg", "ORAL"),
+    ("Omeprazole", "OMEPRAZOLE", "GERD", 20, "mg", "ORAL"),
+    ("Paracetamol prn", "PARACETAMOL", "Headache", 500, "mg", "ORAL"),
+    ("Ondansetron", "ONDANSETRON", "Nausea", 8, "mg", "INTRAVENOUS"),
+    ("Warfarin sodium", "WARFARIN SODIUM", "Atrial fibrillation", 5, "mg", "ORAL"),
+    ("Adalimumab", "ADALIMUMAB", "Crohn's disease", 40, "mg", "SUBCUTANEOUS"),
+]
+
+# Verbatim conmed entries carrying identifiers -- the realistic failure mode.
+CM_MEDS_WITH_PHI = [
+    ("Insulin glargine, started by Dr. Halvorsen at Riverside Clinic",
+     "INSULIN GLARGINE", "Type 2 diabetes", 20, "U", "SUBCUTANEOUS"),
+    ("Amoxicillin prescribed 04/12/2026 by GP, see fax 617-555-0198",
+     "AMOXICILLIN", "Infection", 500, "mg", "ORAL"),
+]
 
 AE_TERMS = [
     ("Headache", "Headache", "Nervous system disorders"),
@@ -98,7 +129,7 @@ def main(outdir: str) -> None:
     out.mkdir(parents=True, exist_ok=True)
 
     study = "TIG-2026-001"
-    dm_rows, ae_rows, mh_rows, lb_rows, vs_rows = [], [], [], [], []
+    dm_rows, ae_rows, mh_rows, lb_rows, vs_rows, cm_rows = [], [], [], [], [], []
 
     for i in range(1, N_SUBJECTS + 1):
         site = rng.choices(SITES, weights=SITE_WEIGHTS, k=1)[0]
@@ -212,6 +243,29 @@ def main(outdir: str) -> None:
                 }
             )
 
+        # --- concomitant medications ---------------------------------
+        for seq in range(1, rng.randrange(1, 5)):
+            if rng.random() < 0.05:
+                verbatim, decod, indc, dose, unit, route = rng.choice(CM_MEDS_WITH_PHI)
+            else:
+                verbatim, decod, indc, dose, unit, route = rng.choice(CM_MEDS)
+            start = enrol - timedelta(days=rng.randrange(0, 900))
+            cm_rows.append(
+                {
+                    "STUDYID": study,
+                    "DOMAIN": "CM",
+                    "USUBJID": usubjid,
+                    "CMSEQ": seq,
+                    "CMTRT": verbatim,
+                    "CMDECOD": decod,
+                    "CMINDC": indc,
+                    "CMDOSE": dose,
+                    "CMDOSU": unit,
+                    "CMROUTE": route,
+                    "CMSTDTC": iso(start),
+                }
+            )
+
         # --- labs and vitals: the analytic payload -------------------
         for visit_day in (1, 29, 57, 85):
             vdate = enrol + timedelta(days=visit_day - 1)
@@ -251,6 +305,7 @@ def main(outdir: str) -> None:
         ("mh", mh_rows),
         ("lb", lb_rows),
         ("vs", vs_rows),
+        ("cm", cm_rows),
     ):
         frame = pd.DataFrame(rows)
         frame.to_csv(out / f"{name}.csv", index=False)
