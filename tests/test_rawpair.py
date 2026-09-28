@@ -618,3 +618,54 @@ def test_the_shaped_column_round_trips_through_the_transform(vault):
     assert out.iloc[0] == out.iloc[3]
     assert out.iloc[0] != out.iloc[1]
     assert all(len(v) == 8 for v in out.dropna())
+
+
+def test_profile_proposes_shaping_when_the_column_has_room():
+    """The steward should not have to know this setting exists.
+
+    A subject column wide enough to draw from gets preserve_format in the
+    proposal; a two-character site code does not, because its shape admits so
+    few strings that most of the real codes would end up published as
+    somebody's surrogate.
+    """
+    wide = {
+        "LB": pd.DataFrame(
+            {
+                "SUBJECT": [f"00{i % 4 + 1}-{i:04d}" for i in range(40)],
+                "SITEID": [f"{i % 4 + 1:03d}" for i in range(40)],
+            }
+        )
+    }
+    contract, _ = draft_contract(wide, source="s", raw_edc=True)
+    rules = {f.column: f for f in contract.domains[0].fields}
+    assert rules["SUBJECT"].preserve_format is True
+    assert rules["SITEID"].preserve_format is True
+
+    narrow = {
+        "LB": pd.DataFrame(
+            {
+                "SUBJECT": [f"{i:04d}" for i in range(30)],
+                "SITEID": [f"{i % 3 + 1:02d}" for i in range(30)],
+            }
+        )
+    }
+    contract, _ = draft_contract(narrow, source="s", raw_edc=True)
+    rules = {f.column: f for f in contract.domains[0].fields}
+    assert rules["SUBJECT"].preserve_format is True
+    assert rules["SITEID"].preserve_format is False
+
+
+def test_a_site_name_is_never_shaped():
+    """Shaping a free-text name would publish its length and word structure."""
+    frames = {
+        "DM": pd.DataFrame(
+            {
+                "USUBJID": [f"STUDY-{i:04d}" for i in range(20)],
+                "SITENAME": ["Royal Infirmary", "St Thomas Hospital"] * 10,
+            }
+        )
+    }
+    contract, _ = draft_contract(frames, source="s")
+    rules = {f.column: f for f in contract.domains[0].fields}
+    if rules["SITENAME"].treatment is Treatment.SURROGATE_ID:
+        assert rules["SITENAME"].preserve_format is False
