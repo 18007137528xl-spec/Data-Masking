@@ -20,6 +20,7 @@ from deidkit import Contract, DeidPipeline, Vault, load_study
 from deidkit.contract import Treatment
 from deidkit.freetext import PatternDetector, apply_adjudication
 from deidkit.profile import draft_contract
+from pydantic import ValidationError
 from deidkit.risk import measure
 from deidkit.transforms import cap_numeric, parse_dtc, study_day, zip3
 
@@ -384,3 +385,119 @@ def test_risk_reports_a_reduction_path_when_the_target_is_missed():
     assert not r.k_met
     assert r.reduction_path, "a missed target must come with a way forward"
     assert r.reduction_path[-1]["k_min"] >= r.k_min
+
+
+# ----------------------------------------------------------------------
+# profiling real-shaped SDTM
+# ----------------------------------------------------------------------
+def _realish_sdtm() -> dict[str, pd.DataFrame]:
+    """SDTM as it actually arrives: derived --DY columns beside the --DTC
+    dates, design variables, flags, and relative-timing columns."""
+    return {
+        "DM": pd.DataFrame(
+            {
+                "STUDYID": ["S"] * 3, "DOMAIN": ["DM"] * 3,
+                "USUBJID": ["S-01-001", "S-01-002", "S-01-003"],
+                "SITEID": ["01"] * 3, "AGE": [54, 61, 47], "AGEU": ["YEARS"] * 3,
+                "SEX": list("MFM"), "RACE": ["WHITE"] * 3,
+                "ARM": ["Drug A", "Placebo", "Drug A"], "ARMCD": ["A", "P", "A"],
+                "COUNTRY": ["USA"] * 3,
+                "RFSTDTC": ["2026-02-18", "2026-02-19", "2026-02-20"],
+                "DTHDTC": [None, None, "2026-06-01"], "DTHFL": [None, None, "Y"],
+            }
+        ),
+        "AE": pd.DataFrame(
+            {
+                "STUDYID": ["S"] * 3, "DOMAIN": ["AE"] * 3,
+                "USUBJID": ["S-01-001", "S-01-002", "S-01-003"],
+                "AESEQ": [1, 2, 3],
+                "AETERM": ["Headache", "Nausea", "Rash"],
+                "AEDECOD": ["Headache", "Nausea", "Rash"],
+                "AESTDTC": ["2026-03-01", "2026-03-05", "2026-03-09"],
+                "AESTDY": [12, 16, 20],
+                "AEENDTC": ["2026-03-04", "2026-03-08", None],
+                "AEENDY": [15, 19, None],
+                "AEENRF": [None, None, "ONGOING"],
+                "EPOCH": ["TREATMENT"] * 3,
+            }
+        ),
+    }
+
+
+def test_derived_study_days_do_not_collide_with_their_dates():
+    """Real SDTM ships AESTDY beside AESTDTC. Converting the date would emit a
+    second AESTDY and fail contract validation, so the date is dropped instead
+    -- and the drop has to name the survivor."""
+    contract, _ = draft_contract(_realish_sdtm(), source="REALISH")
+
+    ae = contract.domain("AE")
+    for date_col, derived in (("AESTDTC", "AESTDY"), ("AEENDTC", "AEENDY")):
+        r = ae.rule(date_col)
+        assert r.treatment is Treatment.DROP, f"{date_col}: {r.treatment}"
+        assert r.redundant_with == derived
+        assert ae.rule(derived).treatment is Treatment.RETAIN
+
+    outputs = [f.resolved_output() for f in ae.fields if f.treatment is not Treatment.DROP]
+    assert len(outputs) == len(set(outputs)), "duplicate output columns"
+
+
+def test_redundant_drop_is_allowed_in_a_retained_in_full_domain():
+    """AE is retained in full, yet dropping a date whose study day survives is
+    not a loss -- provided the contract says where it survives."""
+    from deidkit.contract import DomainContract, FieldRule
+
+    ok = DomainContract(
+        name="AE", retained_in_full=True,
+        fields=[
+            FieldRule(column="AESTDY", treatment=Treatment.RETAIN),
+            FieldRule(column="AESTDTC", treatment=Treatment.DROP,
+                      redundant_with="AESTDY"),
+        ],
+    )
+    assert ok.rule("AESTDTC").redundant_with == "AESTDY"
+
+    # An unexplained drop still fails.
+    with pytest.raises(ValidationError, match="retained_in_full"):
+        DomainContract(
+            name="AE", retained_in_full=True,
+            fields=[FieldRule(column="AETERM", treatment=Treatment.DROP)],
+        )
+
+    # Naming a survivor that is itself dropped fails: nothing survives.
+    with pytest.raises(ValidationError, match="survives nowhere"):
+        DomainContract(
+            name="AE",
+            fields=[
+                FieldRule(column="AESTDY", treatment=Treatment.DROP),
+                FieldRule(column="AESTDTC", treatment=Treatment.DROP,
+                          redundant_with="AESTDY"),
+            ],
+        )
+
+    # Naming a column that does not exist fails.
+    with pytest.raises(ValidationError, match="no rule in this domain"):
+        DomainContract(
+            name="AE",
+            fields=[FieldRule(column="AESTDTC", treatment=Treatment.DROP,
+                              redundant_with="NOPE")],
+        )
+
+
+def test_profiler_recognises_ordinary_sdtm_columns():
+    """Flagging correct decisions as 'unrecognised' teaches reviewers to click
+    through, so the flag has to mean something."""
+    _, suggestions = draft_contract(_realish_sdtm(), source="REALISH")
+    low = [
+        f"{dom}.{col}"
+        for dom, cols in suggestions.items()
+        for col, s in cols.items()
+        if s.confidence == "low"
+    ]
+    assert not low, f"ordinary SDTM columns left unrecognised: {low}"
+
+
+def test_sequence_keys_are_not_called_clinical_content():
+    """--SEQ is a record key. Calling it 'the analytic payload' is a plausible
+    lie, which is worse for a reviewer than an honest 'unrecognised'."""
+    _, suggestions = draft_contract(_realish_sdtm(), source="REALISH")
+    assert "sequence key" in suggestions["AE"]["AESEQ"].rationale

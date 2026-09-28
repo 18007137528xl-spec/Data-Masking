@@ -147,12 +147,30 @@ _DROP_EXACT = {
 
 #: Coded / graded clinical content. Retained verbatim.
 _RETAIN_SUFFIXES = (
-    "DECOD", "BODSYS", "SEV", "SER", "REL", "OUT", "ACN", "SEQ", "CAT",
+    "DECOD", "BODSYS", "SEV", "SER", "REL", "OUT", "ACN", "CAT",
     "SCAT", "ORRES", "ORRESU", "STRESC", "STRESN", "STRESU", "TESTCD",
     "TEST", "SPEC", "POS", "LOC", "LAT", "DIR", "METHOD", "BLFL", "DRVFL",
     "STAT", "REASND", "TPT", "TPTNUM", "ELTM", "TOXGR", "GRPID", "REFID",
     "DOSE", "DOSU", "DOSFRM", "DOSFRQ", "ROUTE", "TRT", "ONGO",
+    # relative-timing flags: ONGOING / BEFORE / DURING / AFTER
+    "ENRF", "STRF", "ENRTPT", "STRTPT", "ENTPT",
+    # reference-range and baseline indicators
+    "NRIND", "LOBXFL",
+    # SDTM's Y/N flag convention: --FL (BLFL, DTHFL, DRVFL, ...)
+    "FL",
 )
+
+#: Record sequence keys. Retained, but they are not clinical content -- saying
+#: so would invite a steward to wave through a column they have not thought
+#: about. A wrong-but-plausible rationale is worse than "unrecognised".
+_SEQUENCE_SUFFIXES = ("SEQ", "SPID", "REFID", "GRPID")
+
+#: Study design and visit structure. Retained: these are what the analysis is
+#: organised around, and they identify a protocol, not a person.
+_DESIGN_EXACT = {
+    "ARM", "ARMCD", "ACTARM", "ACTARMCD", "ARMNRS", "ACTARMUD",
+    "EPOCH", "VISIT", "VISITNUM", "VISITDY", "TAETORD", "AGEU",
+}
 
 #: Substring cues for direct identifiers whose column name is decorated
 #: (``SUBJPHONE``, ``PATEMAIL``, ``HOMEADDR1``). Exact-name matching alone
@@ -212,6 +230,7 @@ def suggest(
             return Suggestion(
                 rule(
                     Treatment.DROP,
+                    redundant_with="USUBJID",
                     note="redundant with USUBJID, and encodes site and "
                     "enrolment order",
                 ),
@@ -247,12 +266,35 @@ def suggest(
             rule(Treatment.DROP), "high", "direct identifier, no analytic value"
         )
 
+    # --- study design and visit structure -----------------------------
+    if up in _DESIGN_EXACT:
+        return Suggestion(
+            rule(Treatment.RETAIN),
+            "high",
+            "study design / visit structure",
+        )
+
+    # --- already-derived study days -----------------------------------
+    # Real SDTM exports usually carry --DY alongside --DTC. A study day is an
+    # interval, not a date element, so it is already in the form this pipeline
+    # would have produced.
+    if up.endswith("DY") and not up.endswith("BODY") and len(up) > 2:
+        return Suggestion(
+            rule(
+                Treatment.RETAIN,
+                note="already a study day: an interval, not a date element",
+            ),
+            "high",
+            "derived study day",
+        )
+
     # --- dates --------------------------------------------------------
     if up in {"BRTHDTC", "BIRTHDTC", "DOB"}:
         if "AGE" in sibling_columns:
             return Suggestion(
                 rule(
                     Treatment.DROP,
+                    redundant_with="AGE",
                     note="AGE is already present in this domain, so the date of "
                     "birth adds nothing analytically and is a direct identifier",
                 ),
@@ -294,6 +336,19 @@ def suggest(
                 "high",
                 "frequently-partial date",
             )
+        derived = up[:-3] + "DY" if up.endswith("DTC") else None
+        if derived and derived in sibling_columns:
+            return Suggestion(
+                rule(
+                    Treatment.DROP,
+                    redundant_with=derived,
+                    note=f"{derived} is already present and is the de-identified "
+                    "form of this date; keeping both would emit the same column "
+                    "twice",
+                ),
+                "high",
+                "event date, already derived to a study day",
+            )
         return Suggestion(
             rule(
                 Treatment.DATE_TO_STUDY_DAY,
@@ -333,6 +388,14 @@ def suggest(
             rule(Treatment.ZIP3, is_quasi_identifier=True),
             "high",
             "postal geography",
+        )
+
+    # --- record keys ---------------------------------------------------
+    if any(up.endswith(s) for s in _SEQUENCE_SUFFIXES):
+        return Suggestion(
+            rule(Treatment.RETAIN),
+            "high",
+            "record sequence key, not clinical content",
         )
 
     # --- coded clinical content --------------------------------------
