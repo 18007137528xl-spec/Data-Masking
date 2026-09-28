@@ -313,9 +313,14 @@ Write-Ok "contract draft at contracts\demo.yaml"
 Write-Step "Running the pipeline"
 
 $operator = if ($env:USERNAME) { $env:USERNAME } else { 'unknown' }
+# --unreviewed: nobody has signed off this contract, and on real data the run
+# would refuse. The manifest records "reviewed": false so this output cannot be
+# mistaken for a published tier. The real path is:
+#   deidkit profile <dir> --decisions plan.csv   (fill in the decision column)
+#   deidkit approve plan.csv -c <draft> --data <dir> -o approved.yaml
 $r = Invoke-Native $venvPython @('-m','deidkit.cli','run','out\quarantine\study_demo',
     '-c','contracts\demo.yaml','-o','out\tier_deidentified',
-    '--vault','out\vault\demo.db','--operator',$operator,'--format','csv')
+    '--vault','out\vault\demo.db','--operator',$operator,'--unreviewed','--format','csv')
 $r.Output | ForEach-Object { Write-Info $_ }
 if (-not $r.Ok) { Write-Fail "pipeline run failed"; exit 1 }
 Write-Ok "published tier at out\tier_deidentified"

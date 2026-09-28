@@ -2,6 +2,7 @@
 
     deidkit keygen                    generate a vault key
     deidkit profile   <dir>           profile a drop and draft a contract
+    deidkit approve   <plan.csv>      sign off a decision sheet -> contract
     deidkit run       <dir>           transform, screen, measure, publish
     deidkit adjudicate <dir>          apply a reviewed free-text queue
     deidkit risk      <dir>           re-measure risk on a published tier
@@ -23,7 +24,14 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import freetext, io as dio, profile as prof, risk as risk_mod, textcheck
+from . import (
+    decisions as dec,
+    freetext,
+    io as dio,
+    profile as prof,
+    risk as risk_mod,
+    textcheck,
+)
 from .contract import Contract
 from .pipeline import ContractMismatch, DeidPipeline
 from .vault import Vault, VaultError
@@ -35,6 +43,42 @@ from .vault import Vault, VaultError
 def _err(msg: str) -> int:
     print(f"error: {msg}", file=sys.stderr)
     return 1
+
+
+class ContractLoadError(RuntimeError):
+    """A contract file that will not load. Reported, never raised at a user."""
+
+
+def _load_contract(path: str) -> Contract:
+    """Load a contract, turning validation failures into readable errors.
+
+    The tamper check in particular has to read well: someone hitting it is
+    being told that a file they were about to run against patient data has
+    been edited since it was approved, and a pydantic traceback is not how to
+    say that.
+    """
+    try:
+        return Contract.from_yaml(path)
+    except FileNotFoundError:
+        raise ContractLoadError(f"no such contract file: {path}") from None
+    except Exception as exc:
+        # Pydantic wraps the validator's message in its own framing and then
+        # appends the whole input dict. Both are noise here, and the input
+        # dump in particular is a wall of YAML in the middle of a sentence
+        # someone needs to read carefully.
+        detail = str(exc)
+        detail = re.split(r"\s*\[type=[a-z_]+,\s*input_value=", detail)[0]
+        keep = []
+        for line in detail.splitlines():
+            line = line.strip()
+            if not line or re.match(r"^\d+ validation error", line):
+                continue
+            if line.startswith("For further information"):
+                continue
+            keep.append(re.sub(r"^Value error,\s*", "", line))
+        raise ContractLoadError(
+            f"{path} will not load:\n  " + "\n  ".join(keep)
+        ) from None
 
 
 def _operator(args: argparse.Namespace) -> str:
@@ -190,6 +234,35 @@ def cmd_profile(args: argparse.Namespace) -> int:
 
     contract.to_yaml(args.out)
     print(f"contract draft written to {args.out}")
+
+    if args.decisions:
+        sheet = dec.build_sheet(contract, suggestions)
+        if args.carry_forward:
+            try:
+                previous = _load_contract(args.carry_forward)
+                sheet = dec.carry_forward(sheet, previous)
+            except (dec.DecisionError, ContractLoadError) as exc:
+                return _err(str(exc))
+            prefilled = int((sheet["decision"] != "").sum())
+            print(
+                f"carried {prefilled} decision(s) forward from "
+                f"{args.carry_forward}; {len(sheet) - prefilled} still need one"
+            )
+        Path(args.decisions).parent.mkdir(parents=True, exist_ok=True)
+        sheet.to_csv(args.decisions, index=False, encoding="utf-8-sig")
+        print(f"decision sheet written to {args.decisions}")
+        print(
+            "\nNEXT: open the decision sheet. Lowest confidence is at the top.\n"
+            "  decision = OK      accept the proposal\n"
+            "  decision = CHANGE  overrule it, and say what in "
+            "decision_treatment\n"
+            "Then: deidkit approve "
+            f"{args.decisions} -c {args.out} --data {args.directory} "
+            "-o <approved.yaml>\n"
+            "A blank row blocks the run. That is deliberate: it is the "
+            "difference between\n"
+            "a contract that runs and a contract someone agreed with."
+        )
     if args.review:
         Path(args.review).parent.mkdir(parents=True, exist_ok=True)
         table.to_csv(args.review, index=False)
@@ -202,8 +275,95 @@ def cmd_profile(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_approve(args: argparse.Namespace) -> int:
+    try:
+        contract = _load_contract(args.contract)
+    except ContractLoadError as exc:
+        return _err(str(exc))
+
+    if contract.approval is not None:
+        print(
+            f"note: {args.contract} is already approved by "
+            f"{contract.approval.approved_by} on "
+            f"{contract.approval.approved_at[:10]}. Re-approving replaces that "
+            "signature."
+        )
+
+    try:
+        sheet = dec.read_sheet(args.plan)
+    except dec.DecisionError as exc:
+        return _err(str(exc))
+
+    frames = None
+    if args.data:
+        frames, _ = dio.load_study(args.data)
+        if not frames:
+            return _err(f"no readable tables in {args.data}")
+    else:
+        print(
+            "note: --data was not given, so the sheet was checked against the\n"
+            "      contract but not against a dataset. Passing it catches a "
+            "sheet\n      written for a different drop."
+        )
+
+    try:
+        approved, stats = dec.apply_sheet(
+            sheet,
+            contract,
+            approved_by=args.approved_by or _operator(args),
+            frames=frames,
+            plan_file=args.plan,
+            note=args.note,
+        )
+    except dec.DecisionError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    approved.to_yaml(args.out)
+    print()
+    print(f"approved by  : {approved.approval.approved_by}")
+    print(f"at           : {approved.approval.approved_at}")
+    print(f"decisions    : {stats['accepted']} accepted as proposed, "
+          f"{stats['changed']} changed  (of {stats['total']})")
+    print(f"fingerprint  : {approved.approval.rules_fingerprint}")
+    print(f"tier         : {approved.tier}")
+    print(f"written to   : {args.out}")
+    if stats["changed"] == 0:
+        print(
+            "\nEvery row was accepted as proposed. That is a legitimate "
+            "outcome, and it is\nalso what a sheet filled in by dragging one "
+            "value down the column looks like.\nThe tool cannot tell those "
+            "apart; only your process can."
+        )
+    print(
+        "\nCommit this file. The signature covers these exact rules, so any "
+        "later edit\nto any rule stops the contract from loading at all."
+    )
+    return 0
+
+
 def cmd_run(args: argparse.Namespace) -> int:
-    contract = Contract.from_yaml(args.contract)
+    try:
+        contract = _load_contract(args.contract)
+    except ContractLoadError as exc:
+        return _err(str(exc))
+
+    # A contract with no approval is a machine's guess about someone's study.
+    # Refusing it here is the whole point of the decision sheet -- and the
+    # escape hatch is explicit and recorded, because development convenience
+    # should never depend on a check being easy to forget.
+    if contract.approval is None and not args.unreviewed:
+        return _err(
+            f"{args.contract} has not been approved.\n\n"
+            "  deidkit profile <dir> --decisions plan.csv\n"
+            "  # fill in the decision column\n"
+            f"  deidkit approve plan.csv -c {args.contract} --data "
+            "<dir> -o approved.yaml\n\n"
+            "Suggestions come from naming convention and content heuristics, "
+            "not from\nunderstanding your study, so an unreviewed contract is "
+            "an untested claim.\nFor synthetic data or CI, pass --unreviewed: "
+            "it runs, and the manifest\nrecords that nobody reviewed it."
+        )
     frames, sums = dio.load_study(args.directory)
     if not frames:
         return _err(f"no readable tables in {args.directory}")
@@ -229,6 +389,17 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     manifest_path = args.manifest or f"{str(args.out).rstrip('/')}/manifest.json"
     result.manifest["vault"] = {"key_source": vault.key_source}
+    # Recorded either way. A manifest that is silent about review lets an
+    # unreviewed run be mistaken for a reviewed one later, which is exactly
+    # the confusion this block exists to remove.
+    result.manifest["review"] = (
+        {"reviewed": True, **contract.approval.model_dump(mode="json")}
+        if contract.approval is not None
+        else {
+            "reviewed": False,
+            "reason": "--unreviewed: no steward approved this contract",
+        }
+    )
     dio.write_text(
         json.dumps(result.manifest, indent=2, default=str), manifest_path
     )
@@ -246,6 +417,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     for name, p in written.items():
         print(f"  wrote {name:<6} -> {p}")
     print(f"  wrote manifest -> {manifest_path}")
+    if contract.approval is None:
+        print(
+            "\n  NOT REVIEWED: this ran on an unapproved contract and the "
+            "manifest says so.\n  Do not treat this output as a published tier."
+        )
     if not result.review_queue.empty:
         print(f"  wrote review queue -> {queue_path}")
         print(
@@ -455,6 +631,23 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("directory")
     sp.add_argument("-o", "--out", default="contract.draft.yaml")
     sp.add_argument("--review", help="also write a steward review sheet (CSV)")
+    sp.add_argument(
+        "--decisions",
+        help="write the DECISION SHEET here (CSV): one row per column, the "
+        "proposed treatment and its parameters, lowest confidence first. Fill "
+        "in the decision column, then 'deidkit approve' turns it back into a "
+        "contract signed against those exact rules. Without an approval, "
+        "'deidkit run' refuses to execute.",
+    )
+    sp.add_argument(
+        "--carry-forward",
+        metavar="APPROVED.YAML",
+        help="pre-fill decisions from a previously APPROVED contract for this "
+        "source. A column whose proposed rule is identical to the approved one "
+        "comes back marked OK; anything new or changed comes back blank, and "
+        "therefore blocking. This is what makes the second drop of a study "
+        "cheap to review without making it a formality.",
+    )
     sp.add_argument("--source", help="study / source identifier")
     sp.add_argument(
         "--tier", choices=["lds", "deidentified"], default="deidentified"
@@ -517,6 +710,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sp.set_defaults(func=cmd_profile)
 
+    # approve
+    sp = sub.add_parser(
+        "approve",
+        help="sign off a filled-in decision sheet -> an approved contract",
+    )
+    sp.add_argument("plan", help="the decision sheet CSV, with decisions filled in")
+    sp.add_argument(
+        "-c", "--contract", required=True,
+        help="the DRAFT contract the sheet was written from. The sheet carries "
+        "per-column decisions; structure (anchor, subject keys, k target) lives "
+        "here, because a flat CSV cannot express the structural checks.",
+    )
+    sp.add_argument(
+        "-o", "--out", required=True, help="where to write the approved contract"
+    )
+    sp.add_argument(
+        "--data",
+        help="the drop the sheet was written for. Strongly recommended: it is "
+        "the only check that catches a sheet approved against a different "
+        "extract.",
+    )
+    sp.add_argument(
+        "--approved-by",
+        help="who is approving. Defaults to --operator / $USER. Should be a "
+        "person, not a service account.",
+    )
+    sp.add_argument("--note", help="free text recorded with the approval")
+    sp.add_argument("--operator")
+    sp.set_defaults(func=cmd_approve)
+
     # run
     sp = sub.add_parser("run", help="transform, screen, measure, publish")
     sp.add_argument("directory")
@@ -528,6 +751,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--format", choices=["parquet", "csv"], default="parquet")
     sp.add_argument("--allow-missing", action="store_true")
     sp.add_argument("--no-screen", action="store_true")
+    sp.add_argument(
+        "--unreviewed",
+        action="store_true",
+        help="run a contract that no steward has approved. For synthetic data, "
+        "development and CI. The manifest records \"reviewed\": false, so the "
+        "output cannot later be mistaken for a reviewed tier.",
+    )
     sp.set_defaults(func=cmd_run)
 
     # adjudicate

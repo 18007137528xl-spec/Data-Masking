@@ -11,6 +11,8 @@ halts the run. Unknown columns are never emitted.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
@@ -457,6 +459,39 @@ class RiskSpec(BaseModel):
     )
 
 
+class Approval(BaseModel):
+    """A steward's sign-off, bound to the exact rule set it was given.
+
+    ``rules_fingerprint`` is what makes this more than a date stamp. It is a
+    digest of every rule in the contract, so editing a single treatment after
+    approval invalidates the signature and the contract refuses to load. What
+    was approved is a specific set of decisions, not a filename.
+
+    The counts are kept because they are the honest summary: how many columns
+    the steward accepted as drafted, and how many they changed. A review where
+    nothing was ever changed, across several drops, is a review worth asking
+    about.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    approved_by: str = Field(description="Who approved. A person, not a service.")
+    approved_at: str = Field(description="UTC ISO 8601 timestamp.")
+    rules_fingerprint: str = Field(
+        description="SHA-256 over the rule set as approved. Any later edit to "
+        "any rule breaks this and the contract will not load."
+    )
+    decisions_accepted: int = 0
+    decisions_changed: int = 0
+    plan_file: str | None = Field(
+        default=None,
+        description="Basename of the decision sheet this came from. Recorded "
+        "for traceability; never read back, because a path in a file is not "
+        "evidence of anything.",
+    )
+    note: str | None = None
+
+
 class Contract(BaseModel):
     """The full versioned field contract for one data source."""
 
@@ -475,6 +510,46 @@ class Contract(BaseModel):
     anchor: AnchorSpec
     risk: RiskSpec = Field(default_factory=RiskSpec)
     domains: list[DomainContract]
+    approval: Approval | None = Field(
+        default=None,
+        description="A steward's sign-off. Absent means this contract is a "
+        "DRAFT: 'deidkit run' refuses it unless --unreviewed is passed, and "
+        "that refusal is the point. Suggestions come from naming convention "
+        "and content heuristics, so an unreviewed contract is a machine's "
+        "guess about someone's study.",
+    )
+
+    # ------------------------------------------------------------------
+    def rules_digest(self) -> str:
+        """SHA-256 over every rule, and nothing else.
+
+        Deliberately excludes the approval block (it would be circular) and
+        the contract_version string (bumping a version number must not be able
+        to launder a rule change). Everything that decides what happens to
+        data is in here: the tier, the anchor, the risk target, and every
+        field rule with all of its parameters.
+        """
+        payload = {
+            "source": self.source,
+            "tier": self.tier,
+            "anchor": self.anchor.model_dump(mode="json"),
+            "risk": self.risk.model_dump(mode="json"),
+            "domains": [
+                {
+                    "name": d.name,
+                    "subject_key": d.subject_key,
+                    "join_key_template": d.join_key_template,
+                    "retained_in_full": d.retained_in_full,
+                    "fields": [
+                        f.model_dump(mode="json", exclude={"note"})
+                        for f in sorted(d.fields, key=lambda r: r.column)
+                    ],
+                }
+                for d in sorted(self.domains, key=lambda x: x.name)
+            ],
+        }
+        blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return "sha256:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
     @model_validator(mode="after")
     def _check(self) -> Contract:
@@ -487,6 +562,24 @@ class Contract(BaseModel):
             )
         if self.risk.domain not in names:
             raise ValueError(f"risk domain {self.risk.domain!r} is not in the contract")
+
+        # An approval signs a rule set, not a file. Checking it here means a
+        # post-approval edit fails at load time, in every command, rather than
+        # at whichever point someone remembered to look.
+        if self.approval is not None:
+            actual = self.rules_digest()
+            if actual != self.approval.rules_fingerprint:
+                raise ValueError(
+                    "this contract was edited after it was approved.\n"
+                    f"  approved : {self.approval.rules_fingerprint}\n"
+                    f"  now      : {actual}\n"
+                    f"  approver : {self.approval.approved_by} "
+                    f"at {self.approval.approved_at}\n"
+                    "The approval covers a specific set of rules, so it does "
+                    "not carry over to a changed one. Re-run 'deidkit approve' "
+                    "on the decision sheet -- and if the edit was not yours, "
+                    "that is the finding."
+                )
 
         # A calendar date is not merely "possibly sensitive": HIPAA enumerates
         # dates as identifiers (164.514(b)(2)(i)(C)), and they are the strongest
@@ -544,8 +637,23 @@ class Contract(BaseModel):
         data["tier"] = self.tier
         data["anchor"] = self.anchor.model_dump(mode="json", exclude_none=True)
         data["risk"] = self.risk.model_dump(mode="json", exclude_none=True)
-        # Reorder so the decisions a human makes come first.
-        order = ["contract_version", "source", "tier", "anchor", "risk", "domains"]
+        if self.approval is not None:
+            # Written in full, defaults included: a count of zero changes is a
+            # fact about the review, not an absent value, and the fingerprint
+            # must survive the round trip or the signature is decorative.
+            data["approval"] = self.approval.model_dump(mode="json")
+        # Reorder so the decisions a human makes come first. Any key omitted
+        # here is dropped from the file entirely, so a new top-level field has
+        # to be added to this list as well as to the model.
+        order = [
+            "contract_version",
+            "source",
+            "tier",
+            "approval",
+            "anchor",
+            "risk",
+            "domains",
+        ]
         data = {k: data[k] for k in order if k in data}
         parent = Path(path).parent
         if str(parent) not in ("", "."):

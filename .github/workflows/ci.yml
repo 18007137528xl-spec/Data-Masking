@@ -74,6 +74,10 @@ jobs:
           assert m['risk']['k_min'] >= 1
           assert m['transformation']['AE']['retained_in_full'] is True
           assert m['transformation']['MH']['retained_in_full'] is True
+          # setup.sh runs with --unreviewed, and the manifest has to say so:
+          # an unreviewed run that looked reviewed is the failure the decision
+          # sheet exists to prevent.
+          assert m['review']['reviewed'] is False, m['review']
           print('manifest ok:', m['contract']['contract_version'])
           "
 
