@@ -26,7 +26,7 @@ from typing import Any
 
 import pandas as pd
 
-from . import freetext, risk as risk_mod, transforms as tf
+from . import blinding, freetext, risk as risk_mod, transforms as tf
 from .contract import (
     NEEDS_VAULT,
     Contract,
@@ -70,6 +70,7 @@ class RunResult:
     risk_report: risk_mod.RiskReport | None
     manifest: dict[str, Any]
     domains: dict[str, DomainResult]
+    blinding_report: blinding.BlindingReport | None = None
 
     def summary(self) -> str:
         lines = [
@@ -85,6 +86,8 @@ class RunResult:
         lines.append(
             f"review queue    : {len(self.review_queue)} rows flagged for adjudication"
         )
+        if self.blinding_report and self.blinding_report.terms_checked:
+            lines.append(self.blinding_report.summary())
         if self.risk_report:
             lines.append("")
             lines.append(self.risk_report.summary())
@@ -320,6 +323,34 @@ class DeidPipeline:
             raise ContractMismatch(f"unhandled treatment {t!r}")
 
     # ------------------------------------------------------------------
+    # blinding
+    # ------------------------------------------------------------------
+    def blind_terms(self, frames: dict[str, pd.DataFrame]) -> list[str]:
+        """Terms the blinding has to keep out of the published data.
+
+        Derived from the values the contract is already relabelling, so the
+        detector knows exactly what to look for rather than guessing at a drug
+        dictionary. Values the rule passes through -- Placebo -- are excluded:
+        they are not what the blind protects.
+        """
+        values: set[str] = set()
+        for dom in self.contract.domains:
+            if dom.name not in frames:
+                continue
+            for f in dom.fields:
+                if f.treatment is not Treatment.LABEL_MAP:
+                    continue
+                if f.column not in frames[dom.name].columns:
+                    continue
+                keep = {str(k).lower() for k in f.keep_values}
+                values.update(
+                    str(v)
+                    for v in frames[dom.name][f.column].dropna().unique()
+                    if str(v).lower() not in keep
+                )
+        return blinding.derive_terms(values)
+
+    # ------------------------------------------------------------------
     # run
     # ------------------------------------------------------------------
     def run(
@@ -333,6 +364,16 @@ class DeidPipeline:
         self.validate(frames, allow_missing=allow_missing)
         anchors = self.anchor_map(frames)
 
+        terms = self.blind_terms(frames)
+        detector = self._detector or freetext.build_detector()
+        if terms:
+            # A drug name in AETERM defeats the label on ARM, and free text is
+            # where a model memorises -- so it goes through the same review
+            # queue as PHI, tagged so a reviewer can tell the two apart.
+            detector = blinding.CompositeDetector(
+                detector, blinding.StudyDrugRecognizer(terms)
+            )
+
         # --- 3. screen free text on the raw data ----------------------
         queue = pd.DataFrame(columns=freetext.REVIEW_COLUMNS)
         screen_summary: dict[str, Any] = {"flagged_rows": 0, "by_column": {}}
@@ -344,9 +385,7 @@ class DeidPipeline:
                 if f.treatment is Treatment.SCREEN_FREETEXT
             ]
             if targets:
-                queue = freetext.screen(
-                    frames, targets, detector=self._detector
-                )
+                queue = freetext.screen(frames, targets, detector=detector)
                 screen_summary = freetext.screening_summary(queue, frames)
 
         # --- 4. transform ---------------------------------------------
@@ -381,16 +420,29 @@ class DeidPipeline:
                         f"{spec.k_target}\n{report.summary()}"
                     )
 
-        # --- 6. manifest ----------------------------------------------
+        # --- 6. verify the blinding actually held ---------------------
+        # Everything upstream is intent; this is outcome. Skip the columns the
+        # relabelling already rewrote -- their new values are the labels.
+        relabelled = [
+            (d.name, f.resolved_output())
+            for d in self.contract.domains
+            for f in d.fields
+            if f.treatment is Treatment.LABEL_MAP
+        ]
+        blind_report = blinding.audit(out_frames, terms, skip=relabelled)
+
+        # --- 7. manifest ----------------------------------------------
         manifest = self._manifest(
             results, checksums or {}, screen_summary, report, anchors
         )
+        manifest["blinding"] = blind_report.to_dict()
         return RunResult(
             frames=out_frames,
             review_queue=queue,
             risk_report=report,
             manifest=manifest,
             domains=results,
+            blinding_report=blind_report,
         )
 
     def _manifest(

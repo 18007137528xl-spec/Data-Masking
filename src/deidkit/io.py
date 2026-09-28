@@ -20,6 +20,22 @@ import pandas as pd
 
 READABLE = {".csv", ".tsv", ".txt", ".parquet", ".pq", ".xpt", ".sas7bdat"}
 
+#: Working files that live beside published data but are not domains.
+#:
+#: The review queue matters most here. It holds the ORIGINAL text of every
+#: flagged row -- that is its whole purpose, a human has to read the untouched
+#: value to adjudicate it -- so it carries raw PHI and, in a blinded study, the
+#: compound name. Discovering it as a domain would feed it back through the
+#: pipeline; leaving it in the published tier would put unredacted text in the
+#: directory analysts read. It belongs with the vault, under the same controls.
+NOT_DOMAINS = frozenset(
+    {
+        "REVIEW_QUEUE", "REVIEW-QUEUE", "RQ", "QUEUE",
+        "STEWARD_REVIEW", "STEWARD-REVIEW",
+        "MANIFEST", "CONTRACT", "README",
+    }
+)
+
 #: Remote URI schemes handled through fsspec. Object storage is how the three
 #: zones stay genuinely separate in a cloud deployment: quarantine, the LDS
 #: tier, and the de-identified tier each get their own bucket with its own
@@ -132,8 +148,9 @@ def discover(directory: str | Path) -> dict[str, str]:
         scheme = text.split("://", 1)[0]
         for entry in sorted(fs.ls(inner, detail=False)):
             name = entry.rsplit("/", 1)[-1]
-            if Path(name).suffix.lower() in READABLE:
-                out[Path(name).stem.upper()] = f"{scheme}://{entry.lstrip('/')}"
+            stem = Path(name).stem.upper()
+            if Path(name).suffix.lower() in READABLE and stem not in NOT_DOMAINS:
+                out[stem] = f"{scheme}://{entry.lstrip('/')}"
         if not out:
             raise FileNotFoundError(f"no readable tables under {text}")
         return out
@@ -143,7 +160,11 @@ def discover(directory: str | Path) -> dict[str, str]:
         raise NotADirectoryError(d)
     local: dict[str, str] = {}
     for p in sorted(d.iterdir()):
-        if p.is_file() and p.suffix.lower() in READABLE:
+        if (
+            p.is_file()
+            and p.suffix.lower() in READABLE
+            and p.stem.upper() not in NOT_DOMAINS
+        ):
             local[p.stem.upper()] = str(p)
     return local
 

@@ -645,3 +645,67 @@ def test_treatment_names_are_kept_unless_blinding_is_asked_for():
     not PHI."""
     contract, _ = draft_contract(_realish_sdtm(), source="S")
     assert contract.domain("DM").rule("ARM").treatment is Treatment.RETAIN
+
+
+# ----------------------------------------------------------------------
+# blinding beyond the ARM column
+# ----------------------------------------------------------------------
+def test_blind_terms_are_derived_not_guessed():
+    from deidkit.blinding import derive_terms
+
+    terms = derive_terms(["Pembrolizumab 200 mg Q3W", "Placebo", "Placebo tablet"])
+    assert "pembrolizumab" in terms
+    assert "q3w" in terms
+    # words that would match everywhere and mean nothing
+    for noise in ("mg", "placebo", "tablet", "200"):
+        assert noise not in terms, f"{noise!r} would flood the queue"
+
+
+def test_study_drug_in_free_text_is_flagged():
+    """Relabelling ARM is undone by one investigator writing the compound into
+    AETERM -- and free text is where a model memorises."""
+    from deidkit.blinding import CompositeDetector, StudyDrugRecognizer
+
+    det = CompositeDetector(PatternDetector(), StudyDrugRecognizer(["pembrolizumab"]))
+    found = det.detect("Rash 3 days after pembrolizumab infusion")
+    assert [f.entity_type for f in found] == ["STUDY_DRUG"]
+    assert det.detect("Rash on forearm") == []
+
+
+def test_blinding_audit_reports_what_relabelling_cannot_reach():
+    """Everything upstream is intent; the audit is outcome."""
+    from deidkit.blinding import audit
+
+    frames = {
+        "AE": pd.DataFrame({"AETERM": ["Rash after pembrolizumab", "Headache"]}),
+        "EX": pd.DataFrame({"EXDOSFRQ": ["Q3W", "Q6W"]}),
+        "DM": pd.DataFrame({"ARM": ["TRT A", "TRT B"]}),
+    }
+    rep = audit(frames, ["pembrolizumab", "q3w"], skip=[("DM", "ARM")])
+    assert not rep.held
+    found = {(x.domain, x.column, x.term) for x in rep.leaks}
+    assert ("AE", "AETERM", "pembrolizumab") in found
+    assert ("EX", "EXDOSFRQ", "q3w") in found
+
+    clean = audit(
+        {"AE": pd.DataFrame({"AETERM": ["Rash after study drug"]})},
+        ["pembrolizumab"],
+    )
+    assert clean.held
+
+
+def test_review_queue_is_not_a_domain_and_not_published(tmp_path):
+    """The queue holds the ORIGINAL text of every flagged row -- that is what
+    makes it reviewable, and what makes it unredacted PHI. It must not be
+    discovered as data, nor sit in the directory analysts read."""
+    from deidkit.io import discover
+
+    tier = tmp_path / "tier"
+    tier.mkdir()
+    pd.DataFrame({"USUBJID": ["A"]}).to_csv(tier / "dm.csv", index=False)
+    pd.DataFrame({"text": ["Fell at St Mary's Hospital"]}).to_csv(
+        tier / "review_queue.csv", index=False
+    )
+    (tier / "manifest.json").write_text("{}")
+
+    assert set(discover(tier)) == {"DM"}, "the queue must not be read back as data"
