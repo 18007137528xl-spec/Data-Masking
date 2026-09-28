@@ -96,6 +96,163 @@ _INT_PARAMS = {"cap", "min_count"}
 _BOOL_PARAMS = {"is_quasi_identifier", "is_date"}
 _LIST_PARAMS = {"bins", "keep_values"}
 
+
+#: What a steward can write in ``decision_treatment``, and what each one needs.
+#:
+#: Kept here rather than in a docstring or the README because three places read
+#: it: the ``deidkit treatments`` reference, the error raised when an override
+#: names something that is not a treatment, and the tests that assert the two
+#: agree. A reference that drifts from the validators is worse than none --
+#: someone follows it and the run fails anyway.
+TREATMENT_HELP: dict[str, dict[str, object]] = {
+    "retain": {
+        "does": "publish the column unchanged",
+        "requires": (),
+        "optional": ("is_quasi_identifier", "output_column"),
+        "cost": "none",
+    },
+    "drop": {
+        "does": "remove the column entirely",
+        "requires": (),
+        "optional": ("redundant_with",),
+        "cost": "total, unless redundant_with names a surviving column",
+    },
+    "surrogate_id": {
+        "does": "random non-derived surrogate + vault crosswalk",
+        "requires": ("entity",),
+        "optional": ("prefix", "output_template"),
+        "cost": "none; joins and reversibility both survive",
+    },
+    "faker": {
+        "does": "replace with a plausible synthetic value",
+        "requires": ("faker_provider",),
+        "optional": (),
+        "cost": "the real value is gone and NOT recoverable -- unlike "
+        "surrogate_id, nothing is written to the vault",
+    },
+    "date_to_study_day": {
+        "does": "date -> signed day relative to the subject's anchor",
+        "requires": (),
+        "optional": ("output_column",),
+        "cost": "none for intervals; the calendar is gone, and so is --DTC, "
+        "so the output is no longer conformant SDTM",
+    },
+    "partial_date_to_year_offset": {
+        "does": "partial date -> relative year offset + granularity flag",
+        "requires": (),
+        "optional": (),
+        "cost": "low; never imputes a day",
+    },
+    "dob_to_age": {
+        "does": "date of birth -> age at anchor, capped",
+        "requires": (),
+        "optional": ("cap",),
+        "cost": "low; cap defaults to 90 per Safe Harbor",
+    },
+    "date_shift": {
+        "does": "keep an ISO date, moved by the subject's vault offset",
+        "requires": ("entity",),
+        "optional": (),
+        "cost": "approximate; --DTC stays valid so SDTM still conforms",
+    },
+    "date_shift_raw": {
+        "does": "same shift, re-emitted in the format it arrived in",
+        "requires": ("entity",),
+        "optional": ("date_order", "on_unparsed", "is_date"),
+        "cost": "approximate; for the raw side of a raw -> SDTM pair",
+    },
+    "cap_numeric": {
+        "does": "exact below the cap, one band at or above it",
+        "requires": ("cap",),
+        "optional": ("is_quasi_identifier",),
+        "cost": "low; only the tail loses precision",
+    },
+    "generalize_numeric": {
+        "does": "band a number into intervals",
+        "requires": ("bins",),
+        "optional": ("cap", "is_quasi_identifier"),
+        "cost": "moderate; every value loses precision",
+    },
+    "zip3": {
+        "does": "truncate to 3-digit ZIP, low-population prefixes -> 000",
+        "requires": (),
+        "optional": ("is_quasi_identifier",),
+        "cost": "low",
+    },
+    "pool_rare": {
+        "does": "categories below a threshold -> a pooled value",
+        "requires": ("min_count",),
+        "optional": ("pooled_value", "is_quasi_identifier"),
+        "cost": "minor overall, total for the rare categories -- do not use "
+        "in MH/AE, where the rare term is often the finding",
+    },
+    "label_map": {
+        "does": "distinct values -> TRT A / TRT B, stable and reversible",
+        "requires": ("entity",),
+        "optional": ("prefix", "keep_values"),
+        "cost": "none analytically; this is blinding, not privacy",
+    },
+    "screen_freetext": {
+        "does": "detect PHI candidates into a review queue; DATA UNCHANGED",
+        "requires": (),
+        "optional": (),
+        "cost": "none -- and note that it publishes every value as received; "
+        "the protection is the adjudication step, not this rule",
+    },
+    "redact_freetext": {
+        "does": "detect and replace in place",
+        "requires": (),
+        "optional": (),
+        "cost": "high on clinical verbatim -- destroys content regulatory "
+        "review needs; prefer screen_freetext and adjudicate",
+    },
+}
+
+
+def treatment_reference() -> str:
+    """The printable answer to "what can I put in decision_treatment?"."""
+    lines = [
+        "decision_treatment -- what you can write, and what it needs",
+        "",
+        "  decision = OK      accept the proposal as it stands",
+        "  decision = CHANGE  overrule it; name the treatment below",
+        "",
+    ]
+    width = max(len(k) for k in TREATMENT_HELP)
+    for name, meta in TREATMENT_HELP.items():
+        req = ", ".join(meta["requires"]) or "-"
+        lines.append(f"  {name:<{width}}  {meta['does']}")
+        lines.append(f"  {'':<{width}}  requires : {req}")
+        if meta["optional"]:
+            lines.append(
+                f"  {'':<{width}}  optional : {', '.join(meta['optional'])}"
+            )
+        lines.append(f"  {'':<{width}}  cost     : {meta['cost']}")
+        lines.append("")
+    lines += [
+        "decision_params -- key=value, separated by ';'",
+        "",
+        "  cap=90                     one band at 90 and above",
+        "  bins=0,18,40,65,90         band edges for generalize_numeric",
+        "  min_count=5                pool_rare threshold",
+        "  entity=subject             which surrogate namespace",
+        "  keep_values=Placebo        label_map: pass these through",
+        "  date_order=dmy             date_shift_raw: 03/04/2025 is 3 April",
+        "  on_unparsed=redact         date_shift_raw: null what will not parse",
+        "  redundant_with=AESTDY      drop: the column the content survives in",
+        "  is_quasi_identifier=true   count this column in the k measurement",
+        "",
+        "A parameter the treatment does not take is rejected by name, and a",
+        "required one that is missing names itself. Neither is guesswork.",
+        "",
+        "What a steward CANNOT change here: the structural checks. Two rules",
+        "writing one output column, a de-identified tier retaining dates, a",
+        "retained_in_full domain given a value-destroying treatment -- these",
+        "are refused whoever asks, because they are what the tier means.",
+    ]
+    return "\n".join(lines)
+
+
 _CONFIDENCE_ORDER = {"low": 0, "medium": 1, "high": 2}
 
 
@@ -105,6 +262,29 @@ class DecisionError(RuntimeError):
     Always raised with the specific rows named. A compliance step that fails
     with "invalid input" teaches people to guess.
     """
+
+
+def _readable(exc: Exception) -> str:
+    """Pull the message out of a pydantic ValidationError.
+
+    The raw form wraps one useful sentence in a location path, a type tag, a
+    truncated dump of the input and a documentation URL. A steward reading a
+    refusal in a terminal needs the sentence; the rest trains them to skim
+    past the part that matters.
+    """
+    errors = getattr(exc, "errors", None)
+    if not callable(errors):
+        return str(exc)
+    try:
+        raw = errors()
+    except Exception:  # pragma: no cover
+        return str(exc)
+    out = []
+    for err in raw:
+        msg = str(err.get("msg", "")).removeprefix("Value error, ")
+        loc = ".".join(str(p) for p in err.get("loc", ()) if not isinstance(p, int))
+        out.append(f"{loc}: {msg}" if loc and loc not in msg else msg)
+    return "\n  ".join(out) or str(exc)
 
 
 # ----------------------------------------------------------------------
@@ -455,7 +635,7 @@ def apply_sheet(
             except Exception as exc:  # pydantic validation, deliberately wide
                 raise DecisionError(
                     f"{where}: {chosen.value} with {params or 'no parameters'} "
-                    f"is not a valid rule.\n  {exc}"
+                    f"is not a valid rule.\n  {_readable(exc)}"
                 ) from exc
             changed += 1
 
@@ -471,7 +651,7 @@ def apply_sheet(
         approved = Contract.model_validate(approved.model_dump(mode="json"))
     except Exception as exc:
         raise DecisionError(
-            f"the decisions do not make a valid contract.\n  {exc}\n"
+            f"the decisions do not make a valid contract.\n  {_readable(exc)}\n"
             "A steward can overrule a suggestion, but not the checks -- these "
             "hold whoever asked for the change."
         ) from exc

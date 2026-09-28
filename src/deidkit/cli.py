@@ -3,6 +3,7 @@
     deidkit keygen                    generate a vault key
     deidkit profile   <dir>           profile a drop and draft a contract
     deidkit approve   <plan.csv>      sign off a decision sheet -> contract
+    deidkit treatments                what a decision sheet may ask for
     deidkit run       <dir>           transform, screen, measure, publish
     deidkit adjudicate <dir>          apply a reviewed free-text queue
     deidkit risk      <dir>           re-measure risk on a published tier
@@ -272,6 +273,13 @@ def cmd_profile(args: argparse.Namespace) -> int:
         "is committed -- the suggestions come from naming convention and content\n"
         "heuristics, not from understanding your study."
     )
+    return 0
+
+
+def cmd_treatments(args: argparse.Namespace) -> int:
+    print()
+    print(dec.treatment_reference())
+    print()
     return 0
 
 
@@ -709,6 +717,13 @@ def build_parser() -> argparse.ArgumentParser:
         "Placebo passes through.",
     )
     sp.set_defaults(func=cmd_profile)
+
+    # treatments
+    sp = sub.add_parser(
+        "treatments",
+        help="what decision_treatment may be set to, and what each one needs",
+    )
+    sp.set_defaults(func=cmd_treatments)
 
     # approve
     sp = sub.add_parser(
