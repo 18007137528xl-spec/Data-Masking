@@ -43,6 +43,50 @@ function Write-Warn   ($m) { Write-Host "  [warn] $m" -ForegroundColor Yellow }
 function Write-Fail   ($m) { Write-Host "  [FAIL] $m" -ForegroundColor Red; $script:failed = $true }
 function Write-Info   ($m) { Write-Host "         $m" -ForegroundColor DarkGray }
 
+# ----------------------------------------------------------------------
+# running external programs
+# ----------------------------------------------------------------------
+function Invoke-Native {
+    <#
+    .SYNOPSIS
+        Run an external program, returning its combined output and exit code.
+
+    .DESCRIPTION
+        Windows PowerShell 5.1 turns anything a native program writes to
+        stderr into an error record, and under $ErrorActionPreference = 'Stop'
+        that record is fatal. So a perfectly ordinary probe -- asking python
+        whether a package imports, and expecting it to fail -- kills the whole
+        script with a NativeCommandError instead of returning a non-zero exit
+        code to be handled.
+
+        PowerShell 7 does not behave this way, which is exactly how this
+        shipped: CI runs pwsh 7, users run 5.1, and the difference is
+        invisible until someone without pytest installed runs the installer.
+
+        Every caller here checks the exit code and decides what it means, so
+        stderr must stay informational. This helper drops the preference to
+        'Continue' for the duration of the call and restores it after.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Exe,
+        [string[]]$Arguments = @()
+    )
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = & $Exe @Arguments 2>&1
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+    [pscustomobject]@{
+        Output   = ($output | ForEach-Object { "$_" })
+        Text     = (($output | ForEach-Object { "$_" }) -join "`n")
+        ExitCode = $code
+        Ok       = ($code -eq 0)
+    }
+}
+
 Set-Location -Path $PSScriptRoot
 
 Write-Host ""
@@ -58,8 +102,9 @@ Write-Step "Checking Python"
 $python = $null
 foreach ($candidate in @('python', 'python3', 'py')) {
     try {
-        $probe = & $candidate -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null
-        if ($LASTEXITCODE -eq 0 -and $probe -match '^\d+\.\d+$') {
+        $r = Invoke-Native $candidate @('-c', "import sys; print('%d.%d' % sys.version_info[:2])")
+        $probe = $r.Text.Trim()
+        if ($r.Ok -and $probe -match '^\d+\.\d+$') {
             $parts = $probe.Split('.')
             if ([int]$parts[0] -eq 3 -and [int]$parts[1] -ge 10) {
                 $python = $candidate
@@ -89,9 +134,10 @@ $venvPython = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
 if (Test-Path $venvPython) {
     Write-Ok "reusing the existing .venv"
 } else {
-    & $python -m venv .venv
+    $r = Invoke-Native $python @('-m','venv','.venv')
     if (-not (Test-Path $venvPython)) {
         Write-Fail "could not create .venv"
+        $r.Output | ForEach-Object { Write-Info $_ }
         exit 1
     }
     Write-Ok "created .venv"
@@ -100,8 +146,6 @@ if (Test-Path $venvPython) {
 # Call the venv's python directly rather than activating. Activation needs a
 # permissive execution policy and only affects the current shell; invoking the
 # interpreter by path works regardless and leaves no state behind.
-$pip = @($venvPython, '-m', 'pip')
-
 Write-Info "using $venvPython"
 
 # ----------------------------------------------------------------------
@@ -109,14 +153,15 @@ Write-Info "using $venvPython"
 # ----------------------------------------------------------------------
 Write-Step "Installing dependencies"
 
-& $venvPython -m pip install --upgrade pip --quiet
-if ($LASTEXITCODE -ne 0) { Write-Warn "could not upgrade pip; continuing" }
+$r = Invoke-Native $venvPython @('-m','pip','install','--upgrade','pip','--quiet')
+if (-not $r.Ok) { Write-Warn "could not upgrade pip; continuing" }
 
 $target = if ($Core) { '-e', '.' } else { '-e', '.[all]' }
 Write-Info ("pip install " + ($target -join ' '))
 
-& $venvPython -m pip install @target --quiet
-if ($LASTEXITCODE -ne 0) {
+$r = Invoke-Native $venvPython (@('-m','pip','install') + $target + @('--quiet'))
+if (-not $r.Ok) {
+    $r.Output | ForEach-Object { Write-Info $_ }
     Write-Fail "dependency installation failed"
     Write-Info "If this is a network or proxy problem, set HTTP_PROXY and"
     Write-Info "HTTPS_PROXY, or add your internal index with --index-url."
@@ -131,8 +176,8 @@ if (-not $Core -and -not $SkipModel) {
     Write-Step "Downloading the spaCy language model"
     Write-Info "about 560 MB; needed for Presidio's person-name detection"
 
-    & $venvPython -m spacy download en_core_web_lg 2>$null
-    if ($LASTEXITCODE -eq 0) {
+    $r = Invoke-Native $venvPython @('-m','spacy','download','en_core_web_lg')
+    if ($r.Ok) {
         Write-Ok "model installed"
     } else {
         Write-Warn "model download failed -- the pipeline will fall back to the"
@@ -149,12 +194,13 @@ if (-not $Core -and -not $SkipModel) {
 # ----------------------------------------------------------------------
 Write-Step "Verifying the free-text detector"
 
-$detector = & $venvPython -c "from deidkit.freetext import build_detector; print(build_detector().name)" 2>$null
-if ($LASTEXITCODE -ne 0) {
+$r = Invoke-Native $venvPython @('-c', 'from deidkit.freetext import build_detector; print(build_detector().name)')
+if (-not $r.Ok) {
     Write-Fail "deidkit did not import; the installation is broken"
+    $r.Output | ForEach-Object { Write-Info $_ }
     exit 1
 }
-$detector = $detector.Trim()
+$detector = $r.Text.Trim()
 if ($detector -eq 'presidio') {
     Write-Ok "Presidio NER is active"
 } else {
@@ -175,16 +221,18 @@ if ($SkipSelfCheck) {
 # ----------------------------------------------------------------------
 Write-Step "Running the test suite"
 
-& $venvPython -c "import pytest" 2>$null
-if ($LASTEXITCODE -ne 0) {
+# find_spec returns $null rather than raising, so a missing pytest is a
+# clean 'no' instead of a traceback on stderr.
+$r = Invoke-Native $venvPython @('-c', 'import importlib.util,sys; sys.exit(0 if importlib.util.find_spec("pytest") else 1)')
+if (-not $r.Ok) {
     Write-Warn "pytest is not installed, so the suite was not run"
     Write-Info "A missing test runner is not a test failure, so this is a warning --"
     Write-Info "but it does mean this install is unverified. Install it with:"
     Write-Info "  .venv\Scripts\python.exe -m pip install pytest"
 } else {
-    $testOut = & $venvPython -m pytest tests\ -q 2>&1
-    $testRc = $LASTEXITCODE
-    $testOut | ForEach-Object { Write-Info $_ }
+    $r = Invoke-Native $venvPython @('-m','pytest','tests','-q')
+    $testRc = $r.ExitCode
+    $r.Output | ForEach-Object { Write-Info $_ }
     if ($testRc -eq 0) {
         Write-Ok "all tests passed"
     } else {
@@ -198,9 +246,9 @@ if ($LASTEXITCODE -ne 0) {
 Write-Step "Generating a synthetic study"
 Write-Info "entirely fabricated: no real subject, site or investigator"
 
-& $venvPython scripts\make_synthetic_study.py out\quarantine\study_demo 2>&1 |
-    ForEach-Object { Write-Info $_ }
-if ($LASTEXITCODE -ne 0) { Write-Fail "could not generate synthetic data"; exit 1 }
+$r = Invoke-Native $venvPython @('scripts\make_synthetic_study.py','out\quarantine\study_demo')
+$r.Output | ForEach-Object { Write-Info $_ }
+if (-not $r.Ok) { Write-Fail "could not generate synthetic data"; exit 1 }
 Write-Ok "synthetic study written to out\quarantine\study_demo"
 
 # ----------------------------------------------------------------------
@@ -213,8 +261,12 @@ if (Test-Path $keyFile) {
     $key = (Get-Content $keyFile -Raw).Trim()
     Write-Ok "reusing the existing development key"
 } else {
-    $key = (& $venvPython -m deidkit.cli keygen 2>$null).Trim()
-    if (-not $key) { Write-Fail "keygen produced no key"; exit 1 }
+    $r = Invoke-Native $venvPython @('-m','deidkit.cli','keygen')
+    # keygen prints the key on stdout and its warning on stderr; the merged
+    # stream means the key is the first line that looks like a Fernet key.
+    $key = ($r.Output | Where-Object { $_ -match '^[A-Za-z0-9_=-]{40,}$' } | Select-Object -First 1)
+    if (-not $r.Ok -or -not $key) { Write-Fail "keygen produced no key"; exit 1 }
+    $key = $key.Trim()
     New-Item -ItemType Directory -Force -Path (Split-Path $keyFile) | Out-Null
     Set-Content -Path $keyFile -Value $key -NoNewline
     Write-Ok "wrote out\dev-vault.key"
@@ -232,19 +284,20 @@ $env:DEIDKIT_VAULT_KEY = $key
 # ----------------------------------------------------------------------
 Write-Step "Profiling the drop and drafting a contract"
 
-& $venvPython -m deidkit.cli profile out\quarantine\study_demo `
-    -o contracts\demo.yaml --review out\steward_review.csv 2>&1 |
-    ForEach-Object { Write-Info $_ }
-if ($LASTEXITCODE -ne 0) { Write-Fail "profile failed"; exit 1 }
+$r = Invoke-Native $venvPython @('-m','deidkit.cli','profile','out\quarantine\study_demo',
+    '-o','contracts\demo.yaml','--review','out\steward_review.csv')
+$r.Output | ForEach-Object { Write-Info $_ }
+if (-not $r.Ok) { Write-Fail "profile failed"; exit 1 }
 Write-Ok "contract draft at contracts\demo.yaml"
 
 Write-Step "Running the pipeline"
 
-& $venvPython -m deidkit.cli run out\quarantine\study_demo `
-    -c contracts\demo.yaml -o out\tier_deidentified `
-    --vault out\vault\demo.db --operator "$env:USERNAME" --format csv 2>&1 |
-    ForEach-Object { Write-Info $_ }
-if ($LASTEXITCODE -ne 0) { Write-Fail "pipeline run failed"; exit 1 }
+$operator = if ($env:USERNAME) { $env:USERNAME } else { 'unknown' }
+$r = Invoke-Native $venvPython @('-m','deidkit.cli','run','out\quarantine\study_demo',
+    '-c','contracts\demo.yaml','-o','out\tier_deidentified',
+    '--vault','out\vault\demo.db','--operator',$operator,'--format','csv')
+$r.Output | ForEach-Object { Write-Info $_ }
+if (-not $r.Ok) { Write-Fail "pipeline run failed"; exit 1 }
 Write-Ok "published tier at out\tier_deidentified"
 
 # ----------------------------------------------------------------------
@@ -252,10 +305,10 @@ Write-Ok "published tier at out\tier_deidentified"
 # ----------------------------------------------------------------------
 Write-Step "Checking the published tier against the design guarantees"
 
-$checkOut = & $venvPython scripts\selfcheck.py `
-    out\quarantine\study_demo out\tier_deidentified 2>&1
-$checkRc = $LASTEXITCODE
-$checkOut | ForEach-Object {
+$r = Invoke-Native $venvPython @('scripts\selfcheck.py',
+    'out\quarantine\study_demo','out\tier_deidentified')
+$checkRc = $r.ExitCode
+$r.Output | ForEach-Object {
     if ($_ -like 'FAIL *') { Write-Fail ($_ -replace '^FAIL ', '') }
     elseif ($_ -like 'PASS *') { Write-Ok ($_ -replace '^PASS ', '') }
     else { Write-Info $_ }
