@@ -98,6 +98,67 @@ The profiler's output is a **draft**. Suggestions come from SDTM naming
 convention plus content heuristics, not from understanding your study. Rules it
 is unsure about are printed as low-confidence and must be reviewed.
 
+## Training a model to derive SDTM from raw EDC
+
+This is a different job from publishing an analysis dataset, and it changes
+what the dates are for. A training example here is a **pair**: the raw record
+is the input, the SDTM record is the label. The date is part of the label —
+`19/03/2025` has to become `2025-03-19`, a year-only onset has to stay
+year-only, `--DY` has to be counted from the reference start. Remove the dates
+and the task is gone; keep the real ones and the tier is a Limited Data Set,
+which is PHI and cannot feed a corpus.
+
+Shifting is what fits: what the model needs is the format and the mapping
+logic, not the calendar. Move both sides of the pair by the **same per-subject
+offset** and the correspondence holds exactly — raw day X still maps to SDTM
+day X, every interval survives, and no real date survives on either side.
+
+```bash
+export DEIDKIT_VAULT_KEY=$(deidkit keygen)
+
+# the SDTM side: --DTC shifted, still valid ISO, still conformant
+deidkit profile data/quarantine/sdtm_abc -o contracts/abc_sdtm.yaml \
+    --sdtm --blind-treatment \
+    --id-template '{STUDYID}-US-{value}'
+
+# the raw side: dates found by their VALUES, shifted in their own format
+deidkit profile data/quarantine/raw_abc -o contracts/abc_raw.yaml \
+    --raw --blind-treatment \
+    --offset-key 'STUDY-001-US-{SUBJECT}'
+
+# both against ONE vault -- this is what makes the offsets agree
+deidkit run data/quarantine/sdtm_abc -c contracts/abc_sdtm.yaml \
+    -o tiers/sdtm --vault vault/abc.db --operator xli
+deidkit run data/quarantine/raw_abc  -c contracts/abc_raw.yaml \
+    -o tiers/raw  --vault vault/abc.db --operator xli
+```
+
+Three things keep the pair intact, and each fails silently if it is missing:
+
+| | What it does | What breaks without it |
+|---|---|---|
+| one vault | issues each subject's offset once | the two sides move by unrelated amounts |
+| `--offset-key` | rebuilds the SDTM key from the raw columns | raw `SUBJECT` and SDTM `USUBJID` never meet in the vault, so every offset is newly minted |
+| `--raw` | shifts in the value's own written form | the raw side arrives pre-normalised to ISO and the conversion the model is meant to learn is already done |
+
+`--id-template` covers the fourth: both sides share one surrogate, so without
+it the SDTM identifier equals the raw one and the corpus teaches
+`USUBJID = SUBJECT`, which is true of no real study.
+
+Two things this mode refuses to guess. An all-numeric date column where
+nothing exceeds 12 (`03/04/2025`) has no readable day/month order, so the run
+halts until `date_order` is declared — a wrong order moves every date into the
+wrong month and the output still looks like dates. And a value the parser does
+not recognise would be published **unshifted**, so by default that halts too;
+`on_unparsed: redact` or `pass` makes it a decision on the record instead.
+
+See the whole path end to end, on fabricated data, with the correspondence
+checked arithmetically at the end:
+
+```bash
+python scripts/demo_pair.py
+```
+
 ## Field treatments
 
 | Treatment | Use | Analytic cost |
@@ -110,7 +171,8 @@ is unsure about are printed as low-confidence and must be reviewed.
 | `partial_date_to_year_offset` | Frequently-partial dates (MH start) | None; no day imputed |
 | `dob_to_age` | Date of birth | Negligible |
 | `cap_numeric` | Age — exact below 90, one `90+` band above | Negligible |
-| `date_shift` | Only where seasonality is analysed | Approximate |
+| `date_shift` | SDTM output, or where seasonality is analysed | Approximate |
+| `date_shift_raw` | The raw side of a raw → SDTM pair; keeps the written format | Approximate |
 | `zip3` | Postal geography, low-population prefixes suppressed | Low |
 | `generalize_numeric` | Band a quasi-identifier to lift *k* | Moderate |
 | `pool_rare` | Low-frequency categories **outside** MH/AE | Minor |

@@ -63,6 +63,24 @@ class Treatment(str, Enum):
     Only for genuine seasonality analysis. Prefer DATE_TO_STUDY_DAY.
     """
 
+    DATE_SHIFT_RAW = "date_shift_raw"
+    """DATE_SHIFT for the raw side of a raw -> SDTM pair: the format survives.
+
+    Same offset, same vault, same subject -- but the value is re-emitted in the
+    form it arrived in (``19/03/2025`` stays ``19/03/2025``-shaped) instead of
+    being normalised to ISO.
+
+    That matters for exactly one reason. Training a model to derive SDTM from
+    raw EDC means the raw value is the input and the ISO value is the label,
+    so the format conversion *is* the thing being learned. Normalising the raw
+    side hands the model the answer, and a corpus built that way teaches a
+    mapping that never has to be performed.
+
+    Requires ``date_order`` where the column's day/month order is genuinely
+    ambiguous: ``03/04/2025`` is two different dates, and guessing produces a
+    plausible-looking value in the wrong month.
+    """
+
     # --- quasi-identifiers --------------------------------------------
     CAP_NUMERIC = "cap_numeric"
     """Keep the exact value, but collapse everything at or above a cap.
@@ -123,7 +141,12 @@ NEEDS_ANCHOR: frozenset[Treatment] = frozenset(
 
 #: Treatments that write to (or read from) the crosswalk vault.
 NEEDS_VAULT: frozenset[Treatment] = frozenset(
-    {Treatment.SURROGATE_ID, Treatment.DATE_SHIFT, Treatment.LABEL_MAP}
+    {
+        Treatment.SURROGATE_ID,
+        Treatment.DATE_SHIFT,
+        Treatment.DATE_SHIFT_RAW,
+        Treatment.LABEL_MAP,
+    }
 )
 
 #: Treatments that leave a date as a real calendar date.
@@ -158,6 +181,18 @@ class FieldRule(BaseModel):
         description="Rename the output. Defaults to a treatment-specific name "
         "for date conversions (e.g. AESTDTC -> AESTDY).",
     )
+    output_template: str | None = Field(
+        default=None,
+        description="Rebuild the emitted value from the treated one, e.g. "
+        "'{STUDYID}-US-{value}'. '{value}' is the treated value; any other "
+        "name is a column of the same row.\n\n"
+        "For composite identifiers on a raw -> SDTM pair. USUBJID really is "
+        "STUDYID + country + the raw subject number, and a derivation model "
+        "should learn that. Give both sides the same surrogate and nothing "
+        "else, and the corpus instead teaches 'USUBJID = SUBJECT', which is "
+        "false of every real study. This keeps the composition intact over "
+        "the surrogate.",
+    )
     cap: int | None = Field(
         default=None, description="Top cap for DOB_TO_AGE / GENERALIZE_NUMERIC (e.g. 90)."
     )
@@ -179,6 +214,31 @@ class FieldRule(BaseModel):
     is_quasi_identifier: bool = Field(
         default=False,
         description="Include the OUTPUT column in the k-anonymity QI set.",
+    )
+    is_date: bool = Field(
+        default=False,
+        description="This column holds a date, established from its values "
+        "rather than its name. Raw EDC columns are called VISITDT, AE_START, "
+        "dt_onset -- no suffix convention to rely on -- so the profiler "
+        "records what it found. The tier check reads this: a column marked as "
+        "a date and then retained blocks a 'deidentified' tier exactly as a "
+        "--DTC column would.",
+    )
+    date_order: Literal["dmy", "mdy", "ymd"] | None = Field(
+        default=None,
+        description="DATE_SHIFT_RAW: day/month order for all-numeric values "
+        "such as 03/04/2025. Required only when the column cannot settle it "
+        "itself (no value with a component above 12). Declared wrong, every "
+        "date lands in the wrong month and still looks like a date.",
+    )
+    on_unparsed: Literal["fail", "redact", "pass"] = Field(
+        default="fail",
+        description="DATE_SHIFT_RAW: what to do with a non-blank value the "
+        "parser does not recognise. 'fail' halts the run (the default, because "
+        "an unrecognised date passes through UNSHIFTED and that is a real date "
+        "in a published tier); 'redact' nulls them; 'pass' allows them through "
+        "and records the count in the manifest -- a decision a steward makes "
+        "after seeing the samples, not a default.",
     )
     redundant_with: str | None = Field(
         default=None,
@@ -216,10 +276,15 @@ class FieldRule(BaseModel):
             raise ValueError(f"{self.column}: 'keep_values' only applies to label_map")
         if t is Treatment.CAP_NUMERIC and self.cap is None:
             raise ValueError(f"{self.column}: cap_numeric requires 'cap'")
-        if t is Treatment.DATE_SHIFT and not self.entity:
+        if t in {Treatment.DATE_SHIFT, Treatment.DATE_SHIFT_RAW} and not self.entity:
             raise ValueError(
-                f"{self.column}: date_shift requires 'entity' (the offset key, "
+                f"{self.column}: {t.value} requires 'entity' (the offset key, "
                 "normally 'subject')"
+            )
+        if self.date_order and t is not Treatment.DATE_SHIFT_RAW:
+            raise ValueError(
+                f"{self.column}: 'date_order' only applies to date_shift_raw; "
+                "every other date treatment reads ISO 8601, which has one order"
             )
         return self
 
@@ -250,6 +315,20 @@ class DomainContract(BaseModel):
         default=None,
         description="Column holding the subject identifier, used to look up the "
         "anchor date and the per-subject date offset. Usually USUBJID.",
+    )
+    join_key_template: str | None = Field(
+        default=None,
+        description="How to build the date-offset key from this domain's own "
+        "columns, e.g. 'TIG-2026-001-US-{SUBJECT}'. Defaults to the "
+        "subject_key column's value.\n\n"
+        "This exists for raw -> SDTM pairs. The offset is per subject, so both "
+        "sides move together only if both look the offset up under the SAME "
+        "string -- and they do not by default: the SDTM side keys on USUBJID "
+        "('STUDY-US-101-0004') while the raw extract holds only SUBJECT "
+        "('101-0004'). Left alone, each side mints its own unrelated offset, "
+        "the mapping between them silently stops being true, and every file "
+        "still looks perfectly well-formed. The template reconstructs one "
+        "side's key from the other's columns.",
     )
     retained_in_full: bool = Field(
         default=False,
@@ -310,6 +389,7 @@ class DomainContract(BaseModel):
                 # A uniform per-subject shift is a translation, not a loss:
                 # every interval within a subject is unchanged.
                 Treatment.DATE_SHIFT,
+                Treatment.DATE_SHIFT_RAW,
                 Treatment.SURROGATE_ID,
             }
             bad = [
@@ -422,7 +502,7 @@ class Contract(BaseModel):
                 f"{d.name}.{f.column}"
                 for d in self.domains
                 for f in d.fields
-                if f.column.upper().endswith("DTC")
+                if (f.column.upper().endswith("DTC") or f.is_date)
                 and f.treatment in KEEPS_CALENDAR_DATE
             ]
             if kept:
