@@ -669,3 +669,168 @@ def test_a_site_name_is_never_shaped():
     rules = {f.column: f for f in contract.domains[0].fields}
     if rules["SITENAME"].treatment is Treatment.SURROGATE_ID:
         assert rules["SITENAME"].preserve_format is False
+
+
+# ----------------------------------------------------------------------
+# composed identifiers
+# ----------------------------------------------------------------------
+def test_the_subject_prefix_follows_the_site_surrogate(vault):
+    """002-0001 at site 002 must stay 'that subject is at that site'.
+
+    Shaped independently the two columns disagree: SUBJECT becomes 141-8215
+    while SITEID becomes 387, and every subject at one site gets a different
+    leading segment. The input says the first segment of SUBJECT is the site;
+    the output would say it is not.
+    """
+    frames = {
+        "DM": pd.DataFrame(
+            {
+                "SUBJECT": ["002-0001", "002-0002", "003-0007", "003-0009"],
+                "SITEID": ["002", "002", "003", "003"],
+            }
+        )
+    }
+    contract = Contract(
+        contract_version="t", source="s", tier="deidentified",
+        anchor=__import__("deidkit.contract", fromlist=["AnchorSpec"]).AnchorSpec(
+            domain="DM", subject_column="SUBJECT", date_column="X"
+        ),
+        risk=__import__("deidkit.contract", fromlist=["RiskSpec"]).RiskSpec(
+            domain="DM", k_target=5
+        ),
+        domains=[
+            DomainContract(
+                name="DM", subject_key="SUBJECT",
+                fields=[
+                    FieldRule(
+                        column="SUBJECT", treatment=Treatment.SURROGATE_ID,
+                        entity="subject", preserve_format=True,
+                        shape_prefix_from="SITEID",
+                    ),
+                    FieldRule(
+                        column="SITEID", treatment=Treatment.SURROGATE_ID,
+                        entity="site", preserve_format=True,
+                    ),
+                ],
+            )
+        ],
+    )
+    out = DeidPipeline(contract, vault, operator="t").run(frames)
+    df = out.domains["DM"].frame
+    for subj, site in zip(df["SUBJECT"], df["SITEID"]):
+        assert subj.startswith(site), (subj, site)
+    # same site -> same prefix; different site -> different prefix
+    assert df["SITEID"].iloc[0] == df["SITEID"].iloc[1]
+    assert df["SITEID"].iloc[0] != df["SITEID"].iloc[2]
+    assert df["SUBJECT"].nunique() == 4
+
+
+def test_a_template_publishes_the_treated_value_not_the_original(vault):
+    """The leak this replaced: {SITEID} used to resolve from the INPUT frame.
+
+    A composed USUBJID then carried the real site code while the SITEID column
+    beside it carried a surrogate -- a real identifier published in the clear,
+    and two columns disagreeing about one site.
+    """
+    from deidkit.contract import AnchorSpec, RiskSpec
+
+    frames = {"DM": pd.DataFrame({"SUBJECT": ["0001", "0002"], "SITEID": ["002", "003"]})}
+    contract = Contract(
+        contract_version="t", source="s", tier="deidentified",
+        anchor=AnchorSpec(domain="DM", subject_column="SUBJECT", date_column="X"),
+        risk=RiskSpec(domain="DM", k_target=5),
+        domains=[
+            DomainContract(
+                name="DM", subject_key="SUBJECT",
+                fields=[
+                    FieldRule(
+                        column="SUBJECT", treatment=Treatment.SURROGATE_ID,
+                        entity="subject", preserve_format=True,
+                        output_template="{SITEID}-{value}",
+                    ),
+                    FieldRule(
+                        column="SITEID", treatment=Treatment.SURROGATE_ID,
+                        entity="site", preserve_format=True,
+                    ),
+                ],
+            )
+        ],
+    )
+    df = DeidPipeline(contract, vault, operator="t").run(frames).domains["DM"].frame
+    for subj, site in zip(df["SUBJECT"], df["SITEID"]):
+        assert subj.startswith(site + "-"), (subj, site)
+    assert not any(s.startswith(("002", "003")) for s in df["SUBJECT"]), df["SUBJECT"].tolist()
+
+
+def test_a_template_cannot_republish_a_dropped_column(vault):
+    from deidkit.contract import AnchorSpec, RiskSpec
+
+    frames = {"DM": pd.DataFrame({"SUBJECT": ["0001"], "SITENAME": ["Royal Infirmary"]})}
+    contract = Contract(
+        contract_version="t", source="s", tier="deidentified",
+        anchor=AnchorSpec(domain="DM", subject_column="SUBJECT", date_column="X"),
+        risk=RiskSpec(domain="DM", k_target=5),
+        domains=[
+            DomainContract(
+                name="DM", subject_key="SUBJECT",
+                fields=[
+                    FieldRule(
+                        column="SUBJECT", treatment=Treatment.SURROGATE_ID,
+                        entity="subject", output_template="{SITENAME}-{value}",
+                    ),
+                    FieldRule(column="SITENAME", treatment=Treatment.DROP),
+                ],
+            )
+        ],
+    )
+    with pytest.raises(ContractMismatch, match="drops"):
+        DeidPipeline(contract, vault, operator="t").run(frames)
+
+
+def test_a_declared_prefix_that_is_not_true_of_the_data_halts(vault):
+    from deidkit.contract import AnchorSpec, RiskSpec
+
+    frames = {"DM": pd.DataFrame({"SUBJECT": ["0001-77"], "SITEID": ["002"]})}
+    contract = Contract(
+        contract_version="t", source="s", tier="deidentified",
+        anchor=AnchorSpec(domain="DM", subject_column="SUBJECT", date_column="X"),
+        risk=RiskSpec(domain="DM", k_target=5),
+        domains=[
+            DomainContract(
+                name="DM", subject_key="SUBJECT",
+                fields=[
+                    FieldRule(
+                        column="SUBJECT", treatment=Treatment.SURROGATE_ID,
+                        entity="subject", preserve_format=True,
+                        shape_prefix_from="SITEID",
+                    ),
+                    FieldRule(
+                        column="SITEID", treatment=Treatment.SURROGATE_ID,
+                        entity="site", preserve_format=True,
+                    ),
+                ],
+            )
+        ],
+    )
+    with pytest.raises(ContractMismatch, match="do not start with it"):
+        DeidPipeline(contract, vault, operator="t").run(frames)
+
+
+def test_profile_finds_the_embedded_site_on_its_own():
+    frames = {
+        "LB": pd.DataFrame(
+            {
+                "SUBJECT": [f"00{i % 4 + 1}-{i:04d}" for i in range(40)],
+                "SITEID": [f"00{i % 4 + 1}" for i in range(40)],
+            }
+        )
+    }
+    contract, _ = draft_contract(frames, source="s", raw_edc=True)
+    rules = {f.column: f for f in contract.domains[0].fields}
+    assert rules["SUBJECT"].shape_prefix_from == "SITEID"
+
+    # and not when the relationship is not in the data
+    frames["LB"]["SITEID"] = ["009"] * 40
+    contract, _ = draft_contract(frames, source="s", raw_edc=True)
+    rules = {f.column: f for f in contract.domains[0].fields}
+    assert rules["SUBJECT"].shape_prefix_from is None
