@@ -100,6 +100,7 @@ def cmd_profile(args: argparse.Namespace) -> int:
         k_target=args.k_target,
         sdtm_conformant=args.sdtm,
         blind_treatment=args.blind_treatment,
+        keep_dates=args.keep_dates,
     )
 
     table = prof.suggestion_table(suggestions)
@@ -108,10 +109,13 @@ def cmd_profile(args: argparse.Namespace) -> int:
     print(f"profiled {len(frames)} domain(s): {', '.join(sorted(frames))}")
     print(f"drafted {len(table)} column rules")
     print(f"anchor: {contract.anchor.domain}.{contract.anchor.date_column}")
-    if args.sdtm:
+    if args.keep_dates:
+        print("dates : retained as recorded -- tier forced to 'lds'")
+    elif args.sdtm:
         print("dates : shifted per subject (SDTM-conformant; --DTC retained)")
     else:
         print("dates : converted to study days (--DTC dropped; NOT SDTM-conformant)")
+    print(f"tier  : {contract.tier}")
     retained = [d.name for d in contract.domains if d.retained_in_full]
     if retained:
         print(f"retained in full: {', '.join(retained)}")
@@ -403,6 +407,14 @@ def build_parser() -> argparse.ArgumentParser:
         "per-subject offset instead of being replaced by study days, so --DTC "
         "survives as a valid ISO date. Use this whenever the deliverable is "
         "SDTM rather than an analysis dataset.",
+    )
+    sp.add_argument(
+        "--keep-dates",
+        action="store_true",
+        help="retain --DTC exactly as recorded, no shift and no study-day "
+        "conversion. Forces tier: lds, because HIPAA enumerates dates as "
+        "identifiers and only a Limited Data Set may carry them -- an LDS "
+        "remains PHI, needs a DUA, and cannot feed a training corpus.",
     )
     sp.add_argument(
         "--blind-treatment",

@@ -771,3 +771,64 @@ def test_textcheck_fails_toward_review():
     p = characterise(shorthand, "MHTERM")
     assert p.verdict == "mixed", p.verdict
     assert p.match_coded_rate is not None and p.match_coded_rate < 0.95
+
+
+# ----------------------------------------------------------------------
+# the configuration this project asked for
+# ----------------------------------------------------------------------
+def test_keep_dates_retains_dtc_verbatim_and_forces_the_lds_tier(tmp_path):
+    """Dates as recorded, no shift and no study-day conversion. HIPAA
+    enumerates dates as identifiers, so this is only lawful on a Limited Data
+    Set -- the contract sets the tier to match rather than letting a tier
+    claim to be de-identified while shipping a calendar."""
+    frames = _realish_sdtm()
+    contract, _ = draft_contract(frames, source="S", keep_dates=True)
+
+    assert contract.tier == "lds"
+    for dom, col in (("AE", "AESTDTC"), ("DM", "RFSTDTC"), ("DM", "DTHDTC")):
+        assert contract.domain(dom).rule(col).treatment is Treatment.RETAIN
+
+    with Vault(tmp_path / "v.db", key=Vault.generate_key()) as vault:
+        out = DeidPipeline(contract, vault).run(frames)
+
+    for col in ("AESTDTC", "AEENDTC"):
+        pd.testing.assert_series_equal(
+            frames["AE"][col].astype("string").reset_index(drop=True),
+            out.frames["AE"][col].astype("string").reset_index(drop=True),
+            check_names=False, obj=col,
+        )
+
+
+def test_arm_and_product_columns_get_separate_label_namespaces(tmp_path):
+    """ARM is a regimen, EXTRT is the compound. One shared namespace gave EXTRT
+    a label that read like a third arm."""
+    frames = _realish_sdtm()
+    frames["DM"]["ARM"] = ["Pembro 200 mg Q3W", "Placebo", "Pembro 400 mg Q6W"]
+    frames["EX"] = pd.DataFrame(
+        {
+            "STUDYID": ["S"] * 3, "DOMAIN": ["EX"] * 3,
+            "USUBJID": frames["DM"]["USUBJID"],
+            "EXSEQ": [1, 2, 3],
+            "EXTRT": ["Pembro", "Placebo", "Pembro"],
+            "EXDOSE": [200, 0, 400],
+        }
+    )
+    contract, _ = draft_contract(frames, source="S", blind_treatment=True)
+
+    arm = contract.domain("DM").rule("ARM")
+    ext = contract.domain("EX").rule("EXTRT")
+    assert arm.treatment is ext.treatment is Treatment.LABEL_MAP
+    assert arm.entity != ext.entity
+    assert arm.prefix == "TRT" and ext.prefix == "DRUG"
+
+    with Vault(tmp_path / "v.db", key=Vault.generate_key()) as vault:
+        out = DeidPipeline(contract, vault).run(frames)
+
+    arms = set(out.frames["DM"]["ARM"].dropna())
+    prods = set(out.frames["EX"]["EXTRT"].dropna())
+    assert "Placebo" in arms and "Placebo" in prods
+    assert all(a.startswith("TRT ") for a in arms - {"Placebo"})
+    assert all(p.startswith("DRUG ") for p in prods - {"Placebo"})
+    # two arms, one compound: the labels no longer imply a third arm
+    assert len(arms - {"Placebo"}) == 2
+    assert len(prods - {"Placebo"}) == 1

@@ -168,6 +168,11 @@ _SEQUENCE_SUFFIXES = ("SEQ", "SPID", "REFID", "GRPID")
 #: Dose and regimen separate the arms even when the arm is relabelled.
 from .blinding import DOSE_COLUMNS as _DOSE_COLUMNS  # noqa: E402
 
+#: Columns naming the administered product rather than the arm. EXTRT holds
+#: the compound; ARM holds the regimen. Different granularity, so they get
+#: different label namespaces.
+_PRODUCT_COLUMNS = {"EXTRT", "EXTRTV"}
+
 #: Columns naming the treatment. Relabelling ARM while EXTRT still spells out
 #: the compound achieves nothing, so these move together.
 _TREATMENT_EXACT = {
@@ -217,6 +222,7 @@ def suggest(
     sibling_columns: frozenset[str] = frozenset(),
     sdtm_conformant: bool = False,
     blind_treatment: bool = False,
+    keep_dates: bool = False,
 ) -> Suggestion:
     """Suggest a treatment for one profiled column.
 
@@ -308,19 +314,26 @@ def suggest(
 
     # --- treatment naming ----------------------------------------------
     if up in _TREATMENT_EXACT and blind_treatment:
+        # Arm columns and product columns describe the treatment at different
+        # granularity: ARM is a regimen ("Pembrolizumab 200 mg Q3W"), EXTRT is
+        # the compound ("Pembrolizumab"). Sharing one namespace gave EXTRT a
+        # label that looked like a third arm. Separate namespaces, separate
+        # prefixes, so the labels no longer masquerade as the same scale.
+        is_product = up in _PRODUCT_COLUMNS
         return Suggestion(
             rule(
                 Treatment.LABEL_MAP,
-                entity="treatment",
-                prefix="TRT",
+                entity="treatment_product" if is_product else "treatment",
+                prefix="DRUG" if is_product else "TRT",
                 keep_values=["Placebo", "PLACEBO", "placebo"],
                 note="blinding and commercial confidentiality, NOT privacy -- a "
-                "treatment arm identifies nobody. One namespace across every "
-                "column that names the treatment, or the labels disagree. "
-                "Placebo passes through: most analyses need to know the control.",
+                "treatment arm identifies nobody. Arm columns share one "
+                "namespace so their labels agree; product columns get their "
+                "own, because a compound is not an arm. Placebo passes "
+                "through: most analyses need to know the control.",
             ),
             "high",
-            "treatment name (blinded)",
+            "product name (blinded)" if is_product else "treatment arm (blinded)",
         )
 
     # --- study design and visit structure -----------------------------
@@ -371,6 +384,24 @@ def suggest(
         )
     if up.endswith("DTC") or profile.looks_date:
         is_anchor = bool(anchor_column and up == anchor_column.upper())
+
+        if keep_dates:
+            # Retained as recorded. HIPAA enumerates dates as identifiers, so
+            # this is only available on a Limited Data Set, which 164.514(e)
+            # permits to carry full dates -- the contract sets tier: lds to
+            # match, because the alternative is a tier that calls itself
+            # de-identified while shipping a calendar.
+            return Suggestion(
+                rule(
+                    Treatment.RETAIN,
+                    note="retained as recorded. Requires tier: lds -- an LDS may "
+                    "keep full dates (164.514(e)) but remains PHI: it needs a "
+                    "data use agreement, and a model trained on it inherits "
+                    "that scope",
+                ),
+                "high",
+                "date, retained (LDS)",
+            )
 
         if sdtm_conformant:
             # Every date shifts, the anchor included. Shifting the anchor is
@@ -544,6 +575,7 @@ def draft_contract(
     k_target: int = 5,
     sdtm_conformant: bool = False,
     blind_treatment: bool = False,
+    keep_dates: bool = False,
 ) -> tuple[Contract, dict[str, dict[str, Suggestion]]]:
     """Draft a contract from profiled data.
 
@@ -576,6 +608,7 @@ def draft_contract(
                 sibling_columns=siblings - {col.upper()},
                 sdtm_conformant=sdtm_conformant,
                 blind_treatment=blind_treatment,
+                keep_dates=keep_dates,
             )
             for col, p in profs.items()
         }
@@ -588,6 +621,12 @@ def draft_contract(
                 fields=[s.rule for s in per_col.values()],
             )
         )
+
+    if keep_dates and tier != "lds":
+        # Not a silent override: retaining calendar dates is only lawful on an
+        # LDS, and the contract validator enforces that. Setting it here means
+        # the tier label matches the data instead of failing later.
+        tier = "lds"
 
     risk_domain = anchor_domain if anchor_domain in frames else next(iter(frames))
     contract = Contract(

@@ -300,8 +300,12 @@ Write-Info "keeping .venv and out\dev-vault.key: both are reused on purpose"
 
 Write-Step "Profiling the drop and drafting a contract"
 
+# --keep-dates and --blind-treatment are the configuration this project asked
+# for: dates retained as recorded, treatment names relabelled. Retaining dates
+# forces tier: lds, which the run output states.
 $r = Invoke-Native $venvPython @('-m','deidkit.cli','profile','out\quarantine\study_demo',
-    '-o','contracts\demo.yaml','--review','out\steward_review.csv')
+    '-o','contracts\demo.yaml','--review','out\steward_review.csv',
+    '--keep-dates','--blind-treatment')
 $r.Output | ForEach-Object { Write-Info $_ }
 if (-not $r.Ok) { Write-Fail "profile failed"; exit 1 }
 Write-Ok "contract draft at contracts\demo.yaml"
