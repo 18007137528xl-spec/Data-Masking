@@ -1,6 +1,71 @@
 # deidkit
 
-De-identification pipeline for inbound EDC / SDTM clinical data.
+De-identification for inbound EDC / SDTM clinical data. It reads a drop,
+proposes a treatment for every column, waits for a person to confirm each one,
+and only then publishes a de-identified copy — with a manifest recording who
+approved what, and what was done.
+
+Day to day it runs as a **review console in the browser**. The command line is
+still there for scripting, CI, and the few steps the console does not have yet.
+
+## Quick start
+
+On the server that holds the data:
+
+1. **Install once.** Double-click `setup.bat`. It builds the environment, runs
+   the whole pipeline on an invented study, and checks the result. Wait for
+   `Setup complete and verified`.
+2. **Start the console.** Double-click `serve.bat`. A window opens and stays
+   open — that window *is* the console — and the browser opens at
+   `http://127.0.0.1:8765`.
+3. **Work through the five steps** on the page.
+
+On Linux or macOS: `./setup.sh`, then `./serve.sh`.
+
+| | On screen | What you do |
+|---|---|---|
+| 01 | Read the drop | Point it at the folder holding the extract; tick *raw EDC extract* for one |
+| 02 | Review every column | OK or Change each proposal, least confident first; any blank row blocks what follows |
+| 03 | Sign it off | Put your name to the rules; the contract is saved with a signature over them |
+| 04 | Run | Choose the output folder and the study's vault; the tiers are written |
+| 05 | Results | Read the risk verdict; if free text was flagged, adjudicate it before delivering |
+
+Where to read more:
+
+- **User guide** — English, one annotated screenshot per screen. The *User
+  guide* link at the foot of the console's left-hand column; before the console
+  is running, open `src/deidkit/guide.html` directly.
+- **Operating manual** — Chinese, for a steward who does not read code:
+  [`docs/manual.html`](docs/manual.html).
+- **This README** — why the tool is built the way it is, and the reference.
+
+### What the console keeps fixed
+
+- **It runs on the server holding the data.** Nothing is uploaded: the drop is
+  read where it sits and the tiers are written beside it. The browser sees
+  column names, rules and counts — and, only when asked, the free-text queue,
+  which is labelled as unredacted when shown.
+- **The key never comes from the page.** `serve.bat` takes it from the machine
+  (`DEIDKIT_KEY_URI`, then `DEIDKIT_VAULT_KEY`) and only then falls back to the
+  development key from setup, saying so. A key typed into a browser is a key in
+  the request log, the autofill store, and any screen-share.
+- **The gate is the same gate.** Approval runs through the same code as the
+  command line: it refuses a blank row, signs the rules, and the manifest
+  records who signed. Change a decision after signing and the signature is
+  withdrawn until someone signs again.
+- **Loopback only.** Reach it from another machine by remote desktop or an SSH
+  tunnel (`ssh -L 8765:127.0.0.1:8765 you@phi-server`), never `--host 0.0.0.0`:
+  the console has no login of its own, and it can display unredacted text.
+- **One person at a time.** A second browser session shares — and overwrites —
+  the first one's review.
+
+Not in the console yet, and so still on the command line: adjudicating flagged
+free text (`deidkit adjudicate`), carrying decisions forward to a study's next
+drop (`deidkit profile --carry-forward`), and break-glass re-identification
+(`deidkit reverse` — command-line only on purpose). See
+[From the command line](#from-the-command-line).
+
+## Why it is built this way
 
 Built for one specific set of constraints, and opinionated because of them:
 
@@ -12,12 +77,7 @@ Built for one specific set of constraints, and opinionated because of them:
 | MH and AE retained in full | Verbatim text is **screened for review, never rewritten**; rare coded terms are not pooled |
 | Internal model training is a downstream use | Only the de-identified tier may feed a corpus; the LDS tier may not |
 
-**Operating the tool day to day:** [`docs/manual.html`](docs/manual.html) — a
-step-by-step manual in Chinese, written for a steward who does not read code.
-Open it in a browser; it is a single self-contained file. The rest of this
-README is the design rationale and the reference.
-
-## Why not Safe Harbor
+### Why not Safe Harbor
 
 Safe Harbor requires removing every date element more specific than a year.
 That removes TEAE window determination, time to onset, duration, resolution,
@@ -30,46 +90,10 @@ So: surrogates here are **randomly generated and stored in a vault**, and dates
 are **reparameterised to study day** rather than redacted. Study day is an
 interval, not a date element, and it preserves every interval quantity exactly.
 
-## Without a terminal
-
-The five steps below are also a local web console, for the person who owns the
-decisions but does not own a shell:
-
-On Windows, double-click `serve.bat` (elsewhere, `./serve.sh`). It uses the
-key configured on the machine if there is one, falls back to the development
-key from setup with a warning, starts the console and opens the browser. By
-hand:
-
-```bash
-export DEIDKIT_VAULT_KEY=...     # the key comes from the environment, as always
-deidkit serve --open             # http://127.0.0.1:8765
-```
-
-It runs **on the server holding the data**. Nothing is uploaded: the drop is
-read where it sits and the tiers are written back beside it; the browser sees
-counts, column names and rules. The key is never accepted from the page — a key
-typed into a browser is a key in the request log, the autofill store, and any
-screen-share.
-
-It is a different way to fill the decision sheet, not a way around it. Approval
-goes through the same code, still refuses a sheet with a blank row, and still
-produces a contract signed over the rules.
-
-An illustrated, screen-by-screen guide for stewards is served by the console
-itself at `/guide` (linked at the foot of its step rail). It is built from a
-live console on synthetic data by `python scripts/console_guide.py`; rerun that
-whenever `console.html` changes, because a guide whose pictures no longer
-match the screen is worse than none.
-
-Bound to loopback. Reach it from another machine with an SSH tunnel
-(`ssh -L 8765:127.0.0.1:8765 you@phi-server`) rather than `--host 0.0.0.0`: this
-console reads the quarantine drop and displays unredacted free text from the
-review queue, so putting it on an external interface is a bigger exposure than
-the manual workflow it replaces.
-
 ## Install
 
-One-shot install with a verified self-check:
+The double-click in [Quick start](#quick-start) is the whole install. The
+detail:
 
 ```bash
 ./setup.sh              # Linux / macOS
@@ -107,7 +131,10 @@ Optional extras and what you lose without them:
 | `parquet` | Parquet tiers | CSV output |
 | `aws` / `azure` / `gcp` | KMS-backed vault keys and `s3://` / `az://` / `gs://` storage | Local filesystem only |
 
-## Workflow
+## From the command line
+
+Every console step is a command, and the console calls the same code. Use
+these for scripting and CI, and for the steps the console does not have yet.
 
 ```bash
 # 0. one vault key, held in a KMS -- never beside the vault file
@@ -467,6 +494,19 @@ Read the numbers with the small-trial caveat in mind. On the bundled
 fill the class space five quasi-identifiers create. The reduction path says so
 plainly and shows that reaching *k*=5 costs three of the five columns.
 
+**k counts records, not people.** It is measured on the contract's risk
+domain — DM by default, where each subject is one row. A drop with no DM falls
+back to its first table, and in EX or LB one subject is many rows, so k there is
+the size of the smallest group of *records*, grouped only by whatever
+quasi-identifiers that table carries (usually just site). It overstates
+protection, sometimes by an order of magnitude: an EX drop reporting
+`k = 97, PASS` can be three people at its smallest site. On such a drop read k
+as a site-level record count, not a measure of how easily a person is found.
+
+For a trial of a few dozen subjects, the honest per-person figure is almost
+always k = 1 as soon as any demographic is counted: thirty people cannot fill
+groups of five once age is in the key. That is arithmetic, not a finding to fix.
+
 That is why `fail_on_target_miss` defaults to **false**. Expert Determination
 explicitly permits weighing context — internal-only recipients, no egress,
 audited access — so a missed threshold is a finding to document as an accepted
@@ -542,6 +582,14 @@ than object storage, and the pre-flight checklist.
 ```bash
 python scripts/make_synthetic_study.py out/quarantine/study_demo
 python -m pytest tests/ -q
+```
+
+The console's user guide is built from a live console on synthetic data, with
+the screenshots taken by a headless browser. Rerun it whenever `console.html`
+changes — a guide whose pictures no longer match the screen is worse than none:
+
+```bash
+python scripts/console_guide.py      # writes src/deidkit/guide.html
 ```
 
 The synthetic study is entirely fabricated and plants identifiers of the kind

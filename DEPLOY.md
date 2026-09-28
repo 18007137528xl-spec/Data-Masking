@@ -185,6 +185,22 @@ cost of this pipeline is the **review effort** — the steward confirming rules,
 the data manager adjudicating the free-text queue, the statistician writing the
 determination — not the infrastructure.
 
+## The review console
+
+The steward's console (`serve.bat`, or `deidkit serve`) is a second way in,
+and it runs where the data is, not in the batch job:
+
+- **Loopback only.** It has no login of its own; its access control is the
+  server's. Reach it by remote desktop or an SSH tunnel. Do not publish its
+  port, put it behind a load balancer, or bind it with `--host 0.0.0.0` — it
+  reads quarantine and can display unredacted free text.
+- **The key comes from the machine.** Set `DEIDKIT_KEY_URI` for the account
+  that runs it. `serve.bat` uses that first, and falls back to
+  `out\dev-vault.key` only if no key is configured — so on a production server
+  that file must not exist at all.
+- **One steward at a time.** It holds one review in memory; two people in it at
+  once overwrite each other.
+
 ## Before the first real run
 
 - [ ] BAA signed, and every service used confirmed against the provider's
@@ -197,6 +213,9 @@ determination — not the infrastructure.
 - [ ] Key provisioned in the KMS, deletion protection on, recovery path
       documented
 - [ ] `DEIDKIT_REQUIRE_MANAGED_KEY=1` confirmed in the deployed task definition
+- [ ] `out\dev-vault.key` absent from the production server, so the console
+      cannot fall back to it; `DEIDKIT_KEY_URI` set for the account that
+      runs `serve.bat`
 - [ ] Detector confirmed as `presidio`, not `pattern`
 - [ ] Log driver reviewed; variable-capturing error reporters disabled
 - [ ] Crosswalk destruction date on the retention schedule

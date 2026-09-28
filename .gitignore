@@ -16,3 +16,17 @@ dev-vault.key
 # must not be sitting in a repo looking like someone's sign-off.
 contracts/demo.yaml
 contracts/demo.approved.yaml
+
+# The virtualenv setup creates.
+.venv/
+
+# Working files from reviewing real drops. Contracts, plans and drafts made
+# from a real extract name the study and describe its columns; this repository
+# holds the tool, not any study's paperwork. Keep them beside the data, under
+# the same access controls. Root-anchored so the tool's own files are unaffected.
+/*.draft.yaml
+/test*.yaml
+/*_plan.csv
+/*.patch
+/deidkit-*.md
+/Claude outputs/
