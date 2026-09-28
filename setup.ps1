@@ -303,14 +303,39 @@ Write-Step "Profiling the drop and drafting a contract"
 # --keep-dates and --blind-treatment are the configuration this project asked
 # for: dates retained as recorded, treatment names relabelled. Retaining dates
 # forces tier: lds, which the run output states.
-$r = Invoke-Native $venvPython @('-m','deidkit.cli','profile','out\quarantine\study_demo',
-    '-o','contracts\demo.yaml','--review','out\steward_review.csv',
-    '--decisions','out\plan.csv',
-    '--keep-dates','--blind-treatment')
+# If a decision sheet already carries decisions, someone has reviewed it, and
+# re-profiling would overwrite an afternoon's work that exists in exactly one
+# place. So the sheet is left alone and only the draft is refreshed.
+$filled = 0
+if (Test-Path 'out\plan.csv') {
+    $probe = Invoke-Native $venvPython @('-c', @'
+import pandas as pd
+try:
+    f = pd.read_csv("out/plan.csv", dtype=str, keep_default_na=False, encoding="utf-8-sig")
+    print(int((f.get("decision", pd.Series(dtype=str)).astype(str).str.strip() != "").sum()))
+except Exception:
+    print(0)
+'@)
+    if ($probe.Ok) { [int]::TryParse($probe.Text.Trim(), [ref]$filled) | Out-Null }
+}
+
+$decisionArgs = @('--decisions','out\plan.csv')
+if ($filled -gt 0) {
+    $decisionArgs = @()
+    Write-Warn "out\plan.csv already has $filled decision(s): leaving it untouched"
+    Write-Info "Re-profiling would overwrite a review that exists in one place only."
+    Write-Info "To use it:  .venv\Scripts\python.exe -m deidkit.cli approve out\plan.csv ``"
+    Write-Info "              -c contracts\demo.yaml --data out\quarantine\study_demo ``"
+    Write-Info "              -o contracts\demo.approved.yaml --approved-by you@example.com"
+}
+
+$r = Invoke-Native $venvPython (@('-m','deidkit.cli','profile','out\quarantine\study_demo',
+    '-o','contracts\demo.yaml','--review','out\steward_review.csv') +
+    $decisionArgs + @('--keep-dates','--blind-treatment'))
 $r.Output | ForEach-Object { Write-Info $_ }
 if (-not $r.Ok) { Write-Fail "profile failed"; exit 1 }
 Write-Ok "contract draft at contracts\demo.yaml"
-Write-Ok "decision sheet at out\plan.csv -- one row per column, open it"
+if ($filled -eq 0) { Write-Ok "decision sheet at out\plan.csv -- one row per column, open it" }
 
 Write-Step "Running the pipeline -- WITHOUT a steward's approval"
 Write-Warn "nobody has signed off contracts\demo.yaml, so this runs with --unreviewed"

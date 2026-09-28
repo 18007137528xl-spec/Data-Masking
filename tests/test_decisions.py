@@ -550,3 +550,59 @@ def test_a_writable_path_passes_and_leaves_nothing_behind(tmp_path):
     assert cli._check_writable(str(fresh)) is None
     assert fresh.parent.is_dir(), "the parent should be created, ready to write"
     assert not fresh.exists(), "a pre-flight check must not leave a stub file"
+
+
+# ----------------------------------------------------------------------
+# not overwriting a review
+# ----------------------------------------------------------------------
+def test_profiling_refuses_to_overwrite_a_filled_sheet(tmp_path, study):
+    """A reviewed sheet is the only copy of that work.
+
+    It is not in version control, it took someone an afternoon, and
+    re-profiling would rewrite it with blanks. The refusal also says what the
+    person almost certainly meant to do instead.
+    """
+    from deidkit import cli
+
+    plan = tmp_path / "plan.csv"
+    args = cli.build_parser().parse_args(
+        ["profile", str(study), "-o", str(tmp_path / "d.yaml"), "--decisions", str(plan)]
+    )
+    assert cli.cmd_profile(args) == 0
+
+    sheet = pd.read_csv(plan, dtype=str, keep_default_na=False, encoding="utf-8-sig")
+    sheet["decision"] = "OK"
+    sheet.to_csv(plan, index=False, encoding="utf-8-sig")
+    before = plan.read_bytes()
+
+    assert cli.cmd_profile(args) == 1, "a filled sheet must not be overwritten"
+    assert plan.read_bytes() == before, "the sheet was modified anyway"
+
+    # Starting over is legitimate -- it just has to be said out loud.
+    forced = cli.build_parser().parse_args(
+        [
+            "profile",
+            str(study),
+            "-o",
+            str(tmp_path / "d.yaml"),
+            "--decisions",
+            str(plan),
+            "--force-decisions",
+        ]
+    )
+    assert cli.cmd_profile(forced) == 0
+    reset = pd.read_csv(plan, dtype=str, keep_default_na=False, encoding="utf-8-sig")
+    assert (reset["decision"].str.strip() == "").all()
+
+
+def test_a_blank_sheet_is_not_protected(tmp_path, study):
+    """Only decisions are precious. An unfilled sheet is regenerated freely,
+    or the ordinary re-profile loop would need a flag every time."""
+    from deidkit import cli
+
+    plan = tmp_path / "plan.csv"
+    args = cli.build_parser().parse_args(
+        ["profile", str(study), "-o", str(tmp_path / "d.yaml"), "--decisions", str(plan)]
+    )
+    assert cli.cmd_profile(args) == 0
+    assert cli.cmd_profile(args) == 0

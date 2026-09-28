@@ -82,6 +82,27 @@ def _load_contract(path: str) -> Contract:
         ) from None
 
 
+def _filled_decisions(path: str | None) -> int:
+    """How many decisions a sheet already carries. 0 if it is blank or absent.
+
+    Used to refuse to overwrite work. A steward may have spent an afternoon on
+    83 rows, and 'profile' rewriting the sheet would destroy that silently and
+    irreversibly -- the file is not in git, and the only copy is the one being
+    overwritten.
+    """
+    if not path or not Path(path).exists():
+        return 0
+    try:
+        frame = pd.read_csv(
+            path, dtype=str, keep_default_na=False, encoding="utf-8-sig"
+        )
+    except Exception:
+        return 0  # unreadable is not "filled in"; let the write proceed
+    if "decision" not in frame.columns:
+        return 0
+    return int((frame["decision"].fillna("").astype(str).str.strip() != "").sum())
+
+
 def _check_writable(*paths: str | None) -> str | None:
     """Confirm every output path can be written, before doing any work.
 
@@ -180,6 +201,21 @@ def cmd_profile(args: argparse.Namespace) -> int:
     # Before profiling seven domains, check the three files this will write.
     if problem := _check_writable(args.out, args.review, args.decisions):
         return _err(problem)
+
+    # And before overwriting a decision sheet, check nobody has filled it in.
+    filled = _filled_decisions(args.decisions)
+    if filled and not args.force_decisions:
+        return _err(
+            f"{args.decisions} already has {filled} decision(s) in it, and "
+            "profiling would overwrite them.\n\n"
+            "If you have reviewed the sheet, the next step is not to profile "
+            "again -- it is:\n"
+            f"  deidkit approve {args.decisions} -c {args.out} "
+            f"--data {args.directory} -o <approved.yaml>\n\n"
+            "If you meant to start the review over, delete the sheet or pass "
+            "--force-decisions.\nThe sheet is not in version control, so this "
+            "refusal is the only copy of that work."
+        )
 
     frames, _ = dio.load_study(args.directory)
     if not frames:
@@ -746,6 +782,13 @@ def build_parser() -> argparse.ArgumentParser:
         "normalising it here would delete the task. Point this and the SDTM "
         "drop at the SAME vault: the offset is per subject, so both sides move "
         "together and the mapping between them holds exactly.",
+    )
+    sp.add_argument(
+        "--force-decisions",
+        action="store_true",
+        help="overwrite a decision sheet that already has decisions in it. "
+        "Starting a review over is a legitimate thing to do; doing it by "
+        "accident is not, which is why it needs saying.",
     )
     sp.add_argument(
         "--offset-key",
