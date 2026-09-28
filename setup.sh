@@ -151,6 +151,16 @@ DEIDKIT_VAULT_KEY=$(tr -d '\n' < "$KEYFILE")
 export DEIDKIT_VAULT_KEY
 
 # ----------------------------------------------------------------------
+# Clear the previous run's published output. The virtualenv and the dev key
+# are deliberately reused -- they are slow to rebuild and the vault depends on
+# the key -- but a stale tier is a trap: the layout has changed before, and a
+# leftover file from an older version fails today's checks for a reason that
+# has nothing to do with this install.
+step "Clearing any previous published output"
+rm -rf out/tier_deidentified out/tier_deidentified_review contracts/demo.yaml
+ok "removed the previous tier, review directory and draft contract"
+info "keeping .venv and out/dev-vault.key: both are reused on purpose"
+
 step "Profiling the drop and drafting a contract"
 "$VENV_PY" -m deidkit.cli profile out/quarantine/study_demo \
     -o contracts/demo.yaml --review out/steward_review.csv 2>&1 | sed 's/^/         /'

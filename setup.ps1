@@ -282,6 +282,22 @@ $env:DEIDKIT_VAULT_KEY = $key
 # ----------------------------------------------------------------------
 # 9. pipeline end to end
 # ----------------------------------------------------------------------
+# Clear the previous run's published output. The virtualenv and the dev key
+# are deliberately reused -- they are slow to rebuild and the vault depends on
+# the key -- but a stale tier is a trap: the layout has changed before, and a
+# leftover file from an older version fails today's checks for a reason that
+# has nothing to do with this install.
+Write-Step "Clearing any previous published output"
+foreach ($stale in @(
+    "out\tier_deidentified",
+    "out\tier_deidentified_review",
+    "contracts\demo.yaml"
+)) {
+    if (Test-Path $stale) { Remove-Item -Recurse -Force $stale }
+}
+Write-Ok "removed the previous tier, review directory and draft contract"
+Write-Info "keeping .venv and out\dev-vault.key: both are reused on purpose"
+
 Write-Step "Profiling the drop and drafting a contract"
 
 $r = Invoke-Native $venvPython @('-m','deidkit.cli','profile','out\quarantine\study_demo',
