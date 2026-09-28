@@ -1231,3 +1231,67 @@ def test_a_clinical_false_positive_stays_visible():
     assert DEFAULT_SCREEN_POLICY[CLINICAL_TERM] == "pass"
     # never a study drug: that finding is the blinding audit's input
     assert reclassify("STUDY_DRUG", "Pembrolizumab") == "STUDY_DRUG"
+
+
+# ----------------------------------------------------------------------
+# Excel input
+# ----------------------------------------------------------------------
+def test_a_workbook_with_one_sheet_per_domain_is_three_tables(tmp_path):
+    """Excel is how clinical data actually moves between people, and one
+    workbook per study with a sheet per domain is the common shape."""
+    from deidkit.io import discover, load_study
+
+    pytest.importorskip("openpyxl")
+    book = tmp_path / "STUDY-001.xlsx"
+    with pd.ExcelWriter(book) as w:
+        pd.DataFrame({"USUBJID": ["S-1"], "AGE": ["47"]}).to_excel(
+            w, sheet_name="DM", index=False
+        )
+        pd.DataFrame({"USUBJID": ["S-1"], "AETERM": ["Headache"]}).to_excel(
+            w, sheet_name="AE", index=False
+        )
+    found = discover(tmp_path)
+    assert set(found) == {"DM", "AE"}
+    frames, sums = load_study(tmp_path)
+    assert list(frames["DM"].columns) == ["USUBJID", "AGE"]
+    # Both sheets came out of one file, so they share its checksum. That is
+    # the truth about the input, not a collision.
+    assert sums["DM"] == sums["AE"]
+
+
+def test_a_single_sheet_workbook_is_named_by_its_file(tmp_path):
+    from deidkit.io import discover
+
+    pytest.importorskip("openpyxl")
+    pd.DataFrame({"USUBJID": ["S-1"]}).to_excel(tmp_path / "lb.xlsx", index=False)
+    assert set(discover(tmp_path)) == {"LB"}
+
+
+def test_excel_values_are_read_as_strings(tmp_path):
+    """Excel has usually already damaged the file -- 2015-03 to a datetime,
+    the leading zero off site 002. Reading as strings cannot undo that; it
+    can only avoid adding to it."""
+    from deidkit.io import read_table
+
+    pytest.importorskip("openpyxl")
+    path = tmp_path / "dm.xlsx"
+    pd.DataFrame({"SITEID": ["002"], "RFSTDTC": ["2025-03-01"]}).to_excel(
+        path, index=False
+    )
+    frame = read_table(path)
+    assert frame["SITEID"].iloc[0] == "002"
+    assert frame["RFSTDTC"].iloc[0] == "2025-03-01"
+
+
+def test_an_unreadable_folder_says_what_it_found(tmp_path):
+    """"no readable tables in D:\\study" is true and useless: it does not say
+    what was looked at, what is accepted, or which of the two is wrong."""
+    from deidkit.io import explain_empty
+
+    (tmp_path / "EDC_RawData_2025-001.xls").write_bytes(b"")
+    (tmp_path / "notes.docx").write_bytes(b"")
+    msg = explain_empty(tmp_path)
+    assert "EDC_RawData_2025-001.xls" in msg
+    assert ".xlsx" in msg               # names what IS accepted
+    assert "Save As .xlsx" in msg       # and the specific way out
+    assert "does not exist" in explain_empty(tmp_path / "nope")

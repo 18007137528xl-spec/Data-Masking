@@ -21,6 +21,9 @@ dependencies = [
 screening = ["presidio-analyzer>=2.2", "spacy>=3.7"]
 # SAS transport and sas7bdat readers, for real EDC exports.
 sas = ["pyreadstat>=1.2"]
+# Excel workbooks. Not an exotic format here: it is how clinical data
+# actually moves between people, whatever the transfer spec says.
+excel = ["openpyxl>=3.1"]
 # Realistic surrogate values for direct identifiers whose column must persist.
 surrogates = ["faker>=24.0"]
 # Parquet output for the published tiers.
@@ -41,6 +44,7 @@ all = [
     # pytest is included here on purpose: the setup scripts run the suite as an
     # install self-check, and a validated install is the point of running them.
     "pytest>=8.0",
+    "openpyxl>=3.1",
 ]
 
 [project.scripts]

@@ -60,6 +60,7 @@ Optional extras and what you lose without them:
 |---|---|---|
 | `screening` | Presidio NER for free text | Built-in pattern detector: solid on emails, phones, facilities; weaker on bare person names |
 | `sas` | `.xpt` / `.sas7bdat` input | CSV / TSV / Parquet only |
+| `excel` | `.xlsx` / `.xlsm` input, one sheet per domain | CSV / TSV / Parquet only |
 | `surrogates` | Realistic Faker values | `PROVIDER-000001`-style placeholders |
 | `parquet` | Parquet tiers | CSV output |
 | `aws` / `azure` / `gcp` | KMS-backed vault keys and `s3://` / `az://` / `gs://` storage | Local filesystem only |
