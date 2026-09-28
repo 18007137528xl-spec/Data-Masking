@@ -51,6 +51,18 @@ _GENERIC = frozenset(
         "high", "low", "mid", "medium", "and", "the", "with", "plus",
         "open", "label", "blinded", "double", "single", "active", "titration",
         "mg", "mcg", "ug", "kg", "ml", "unit", "units", "iu",
+        # The vocabulary of blinding itself. When the arm value in the source
+        # is something like "BLINDED STUDY TREATMENT" -- which is what a
+        # properly blinded EDC export contains -- every one of these words
+        # gets derived as a "distinctive term", and the audit then reports
+        # 2916 rows of EXCAT='BLINDED STUDY TREATMENT' as a blinding leak.
+        # It says BLINDED. It is the opposite of a leak, and a report that
+        # cries wolf on 5800 rows is a report nobody reads.
+        "study", "studies", "drug", "drugs", "medication", "medicinal",
+        "product", "treatment", "treatments", "trial", "investigational",
+        "imp", "regimen", "therapy", "administration", "administered",
+        "not", "available", "site", "unknown", "other", "none", "randomised",
+        "randomized", "assignment", "assigned", "sequence", "period",
     )
 )
 
@@ -74,9 +86,17 @@ def derive_terms(values: Iterable[str]) -> list[str]:
         text = str(value).strip()
         if not text or text.lower() in _GENERIC:
             continue
+        tokens = [t.lower() for t in re.findall(r"[A-Za-z][A-Za-z0-9-]{2,}", text)]
+        # A phrase built entirely from the vocabulary of blinding carries no
+        # information about which arm anyone is in. "BLINDED STUDY TREATMENT"
+        # is what a correctly blinded export CONTAINS, and searching the tier
+        # for it reported 2916 rows as a leak -- rejecting the tokens one by
+        # one was not enough, because the whole string was added before them.
+        if tokens and all(t in _GENERIC or t.isdigit() for t in tokens):
+            continue
         terms.add(text.lower())
-        for tok in re.findall(r"[A-Za-z][A-Za-z0-9-]{2,}", text):
-            low = tok.lower()
+        for tok in tokens:
+            low = tok
             if low in _GENERIC or low.isdigit():
                 continue
             # Drug names are long; regimen codes (Q3W, BIW) are short but

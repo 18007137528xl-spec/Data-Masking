@@ -409,16 +409,45 @@ def suggest(
     # data, and none of these names appear in SDTM, so every one of them fell
     # through to "unrecognised -> retain". Two of them are identifiers.
     if _SITE_NAME.search(up):
+        # Two columns naming one site. Surrogating both was wrong, and the
+        # output said so: SITEID=SITE-1KDNWNJT beside SITENAME=SITE-JSEA16VR,
+        # because the surrogate is issued per VALUE and "101" is not "Beijing
+        # Hospital". Same namespace does not mean same surrogate. That leaves
+        # the tier with two unrelated site identifiers, doubles the apparent
+        # site cardinality, and puts both in the quasi-identifier set where
+        # they make every combination look unique.
+        #
+        # It is the same mistake the SUBJID rule exists to prevent -- two
+        # labels for one entity -- so it gets the same answer.
+        site_code = next(
+            (c for c in ("SITEID", "SITENUM", "SITECODE", "SITEOID")
+             if c in sibling_columns),
+            None,
+        )
+        if site_code:
+            return Suggestion(
+                rule(
+                    Treatment.DROP,
+                    redundant_with=site_code,
+                    note=f"the site's NAME beside its code. {site_code} already "
+                    "carries the site identity, and surrogating both would "
+                    "issue two unrelated surrogates for one site -- the "
+                    "surrogate is per value, and '101' is not 'Beijing "
+                    "Hospital'. Keep the name only if something genuinely "
+                    "needs it, and then surrogate it with an explicit "
+                    "output_column so the pairing is visible.",
+                ),
+                "high",
+                "site name, redundant with the site code",
+            )
         return Suggestion(
             rule(
                 Treatment.SURROGATE_ID,
                 entity="site",
                 prefix="SITE",
-                note="the site's NAME, not its code. SITEID already gets a "
-                "surrogate; leaving 'Massachusetts General Hospital' beside it "
-                "makes that surrogate decorative, and a named institution is a "
-                "strong geographic identifier on its own. Surrogated into the "
-                "same namespace as SITEID so the two stay consistent.",
+                note="the site's NAME, and no site code column to defer to. A "
+                "named institution is a strong geographic identifier, so it "
+                "gets a surrogate rather than being published.",
             ),
             "high",
             "site name (institution)",

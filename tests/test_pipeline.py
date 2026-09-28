@@ -1403,3 +1403,51 @@ def test_an_xlsx_tier_round_trips_without_excel_reinterpreting_it(tmp_path, resu
     ws = openpyxl.load_workbook(book)["DM"]
     cells = [c.number_format for row in ws.iter_rows(min_row=2, max_row=2) for c in row]
     assert set(cells) == {"@"}, "every cell must be text so Excel stops guessing"
+
+
+# ----------------------------------------------------------------------
+# blinding on a study that is already blinded
+# ----------------------------------------------------------------------
+def test_the_blinding_vocabulary_is_not_a_blinding_leak():
+    """A correctly blinded EDC export contains values like "BLINDED STUDY
+    TREATMENT". Deriving terms from that gave 'study', 'drug', 'treatment'
+    and the whole phrase, and the audit then reported 2916 rows of
+    EXCAT='BLINDED STUDY TREATMENT' as a leak. It says BLINDED. A report
+    that cries wolf on 5800 rows is a report nobody reads."""
+    from deidkit.blinding import derive_terms
+
+    for blinded in (
+        ["BLINDED STUDY TREATMENT"],
+        ["Study Drug"],
+        ["Investigational Product"],
+        ["ACTIVE TREATMENT"],
+        ["Study drug not available"],
+    ):
+        assert derive_terms(blinded) == [], blinded
+
+
+def test_a_real_compound_is_still_derived():
+    from deidkit.blinding import derive_terms
+
+    terms = derive_terms(["Pembrolizumab 200 mg Q3W", "Placebo"])
+    assert "pembrolizumab" in terms
+    assert "q3w" in terms
+    assert "placebo" not in terms
+    assert "mg" not in terms
+
+
+def test_a_site_name_beside_a_site_code_is_dropped_not_double_surrogated():
+    """Surrogating both issued two unrelated surrogates for one site --
+    SITEID=SITE-1KDNWNJT beside SITENAME=SITE-JSEA16VR -- because the
+    surrogate is per VALUE and "101" is not "Beijing Hospital". Same
+    namespace does not mean same surrogate. It is the mistake the SUBJID
+    rule exists to prevent."""
+    from deidkit.profile import profile_column, suggest
+
+    p = profile_column(pd.Series(["Beijing Hospital"] * 20, name="SITENAME"))
+    with_code = suggest(p, domain="EX", sibling_columns=frozenset({"SITEID"}))
+    assert with_code.rule.treatment.value == "drop"
+    assert with_code.rule.redundant_with == "SITEID"
+    # with no code column to defer to, the name must still not be published
+    alone = suggest(p, domain="EX", sibling_columns=frozenset())
+    assert alone.rule.treatment.value == "surrogate_id"
