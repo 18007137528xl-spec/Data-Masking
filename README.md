@@ -334,6 +334,7 @@ rejected, and so is a parameter the treatment does not take.
 | `retain` | Coded clinical content, measurements, MH/AE | — | None |
 | `drop` | Direct identifiers with no analytic value | — | Total, unless `redundant_with` names a surviving column |
 | `surrogate_id` | Join keys — random, non-derived, vaulted | `entity` | None; joins and reversibility preserved |
+| `surrogate_id` + `preserve_format=true` | Same, but the surrogate keeps the original's length and layout (`001-0042` → `394-9212`) | `entity` | None; realism for a training corpus, no change in protection |
 | `faker` | Direct identifiers whose column must persist | `faker_provider` | The real value is **not recoverable** — unlike `surrogate_id`, nothing is written to the vault |
 | `date_to_study_day` | All event dates | — | **None** for intervals; the calendar goes, and so does `--DTC` |
 | `partial_date_to_year_offset` | Frequently-partial dates (MH start) | — | Low; no day imputed |

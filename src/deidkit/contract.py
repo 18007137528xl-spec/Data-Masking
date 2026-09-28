@@ -175,6 +175,19 @@ class FieldRule(BaseModel):
     prefix: str | None = Field(
         default=None, description="Human-readable surrogate prefix, e.g. 'SUBJ'."
     )
+    preserve_format: bool = Field(
+        default=False,
+        description="Issue the surrogate with the original's own length and "
+        "layout -- digits stay digits, letters stay letters, separators are "
+        "copied -- instead of 'PREFIX-XXXXXXXX'. 'prefix' is then unused.\n\n"
+        "For the raw side of a raw -> SDTM pair, where the identifier's shape "
+        "is part of what the model has to learn: a column that is '001-0042' "
+        "in production and 'SUBJ-3D7M2YVY' in the corpus teaches a format no "
+        "study uses. This is a realism setting, not a privacy one -- the value "
+        "is random and vault-held either way. The vault refuses a shaped "
+        "surrogate that collides with any real identifier it has seen, so the "
+        "output never becomes a permutation of the real IDs.",
+    )
     faker_provider: str | None = Field(
         default=None, description="Faker provider name, e.g. 'name', 'street_address'."
     )

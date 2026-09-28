@@ -77,6 +77,7 @@ COLUMNS = PROPOSED + DECISION + CONTEXT
 SETTABLE = (
     "entity",
     "prefix",
+    "preserve_format",
     "faker_provider",
     "output_column",
     "output_template",
@@ -94,7 +95,7 @@ SETTABLE = (
 )
 
 _INT_PARAMS = {"cap", "min_count"}
-_BOOL_PARAMS = {"is_quasi_identifier", "is_date"}
+_BOOL_PARAMS = {"is_quasi_identifier", "is_date", "preserve_format"}
 _LIST_PARAMS = {"bins", "keep_values"}
 #: Written as PERSON:redact|DATE_IN_TEXT:pass -- one cell, no nested commas
 #: fighting the CSV.
@@ -124,7 +125,7 @@ TREATMENT_HELP: dict[str, dict[str, object]] = {
     "surrogate_id": {
         "does": "random non-derived surrogate + vault crosswalk",
         "requires": ("entity",),
-        "optional": ("prefix", "output_template"),
+        "optional": ("prefix", "preserve_format", "output_template"),
         "cost": "none; joins and reversibility both survive",
     },
     "faker": {

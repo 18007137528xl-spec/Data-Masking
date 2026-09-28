@@ -85,6 +85,18 @@ CREATE TABLE IF NOT EXISTS vault_meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- Every original this vault has been shown, by lookup index only. The
+-- surrogate table already holds one row per original that has been ISSUED a
+-- surrogate, which is not the same set: within one batch, subject 01 is issued
+-- a surrogate before subject 08 has been seen at all, so a shaped draw could
+-- hand 01 the string "08" and only later discover that 08 is a real person.
+-- Recording the whole batch before issuing anything closes that window.
+CREATE TABLE IF NOT EXISTS seen_original (
+    entity TEXT NOT NULL,
+    lookup BLOB NOT NULL,
+    PRIMARY KEY (entity, lookup)
+);
 """
 
 
@@ -211,20 +223,123 @@ class Vault:
         h.update(original.encode("utf-8"))
         return h.finalize()
 
+    def _taken(self, entity: str, candidate: str) -> bool:
+        """Is this string already a surrogate, or a REAL identifier?
+
+        The second half matters only for format-preserving surrogates, and it
+        matters a lot. A shaped surrogate is drawn from the very space the real
+        identifiers occupy, so it can land exactly on another subject's real
+        ID. That single value would then be a real identifier, published in the
+        clear, attached to the wrong person's records -- the failure mode of
+        permuting identifiers, arrived at by accident and in one row rather
+        than all of them, which makes it far harder to notice.
+
+        The originals are encrypted and cannot be scanned, but the lookup index
+        answers exactly this question: an HMAC hit means some original in this
+        entity space is this string.
+        """
+        hit = self._db.execute(
+            "SELECT 1 FROM surrogate WHERE entity = ? AND surrogate = ?",
+            (entity, candidate),
+        ).fetchone()
+        if hit is not None:
+            return True
+        lk = self._lookup(entity, candidate)
+        hit = self._db.execute(
+            "SELECT 1 FROM surrogate WHERE entity = ? AND lookup = ?", (entity, lk)
+        ).fetchone()
+        if hit is not None:
+            return True
+        hit = self._db.execute(
+            "SELECT 1 FROM seen_original WHERE entity = ? AND lookup = ?",
+            (entity, lk),
+        ).fetchone()
+        return hit is not None
+
+    def _note_original(self, entity: str, original: str) -> None:
+        """Record that this string is a real identifier in this entity space."""
+        self._db.execute(
+            "INSERT OR IGNORE INTO seen_original (entity, lookup) VALUES (?, ?)",
+            (entity, self._lookup(entity, original)),
+        )
+
     def _new_surrogate(self, entity: str, prefix: str, length: int) -> str:
         """A random, non-derived surrogate unique within the entity space."""
         for _ in range(64):
             body = "".join(secrets.choice(_ALPHABET) for _ in range(length))
             cand = f"{prefix}-{body}" if prefix else body
-            hit = self._db.execute(
-                "SELECT 1 FROM surrogate WHERE entity = ? AND surrogate = ?",
-                (entity, cand),
-            ).fetchone()
-            if hit is None:
+            if not self._taken(entity, cand):
                 return cand
         raise VaultError(
             f"could not find a free surrogate for entity {entity!r} at length "
             f"{length}; raise 'length'"
+        )
+
+    def _new_shaped_surrogate(self, entity: str, original: str) -> str:
+        """A random surrogate with the same shape as ``original``.
+
+        Same length, same layout: a digit stays a digit, a letter stays a
+        letter of the same case, and everything else -- hyphens, slashes,
+        underscores, spaces -- is copied through as written. ``001-0042``
+        becomes another ``ddd-dddd``; ``TIG-US-001`` keeps its literal
+        structure and gets new letters and digits.
+
+        This exists because the surrogate's *shape* is part of what a
+        raw -> SDTM model has to learn. A subject column that arrives as
+        ``SUBJ-3D7M2YVY`` in training and ``001-0042`` in production teaches the
+        model a format that no study uses. It is not a privacy measure and buys
+        no additional protection: the protection is that the value is random
+        and stored in the vault, exactly as for an unshaped surrogate.
+
+        Separators are copied verbatim rather than randomised, which does leak
+        the layout of the original identifier -- deliberately, since that is
+        the point. It leaks nothing about the subject: every ID in a study
+        shares one layout.
+        """
+        slots = [
+            i
+            for i, ch in enumerate(original)
+            if ch.isdigit() or (ch.isalpha() and ch.isascii())
+        ]
+        if not slots:
+            raise VaultError(
+                f"cannot shape a surrogate on {original!r}: it has no letters "
+                "or digits to replace. Use an unshaped surrogate for this "
+                "column, or drop it."
+            )
+        # How many distinct values this shape admits. Below the subject count
+        # the vault would thrash and eventually fail; say so now, naming the
+        # column's own values, rather than after a partial run.
+        space = 1
+        for i in slots:
+            space *= 10 if original[i].isdigit() else 26
+            if space > 1 << 40:
+                break
+        if space < 64:
+            raise VaultError(
+                f"the shape of {original!r} admits only {space} value(s), too "
+                "few to draw a distinct surrogate for every subject. Use an "
+                "unshaped surrogate, or a wider identifier."
+            )
+
+        chars = list(original)
+        for _ in range(64):
+            for i in slots:
+                ch = original[i]
+                if ch.isdigit():
+                    chars[i] = secrets.choice("0123456789")
+                elif ch.isupper():
+                    chars[i] = secrets.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+                else:
+                    chars[i] = secrets.choice("abcdefghijklmnopqrstuvwxyz")
+            cand = "".join(chars)
+            # Never hand back the value we were given. A one-in-a-million
+            # self-map is still an identifier published in the clear.
+            if cand != original and not self._taken(entity, cand):
+                return cand
+        raise VaultError(
+            f"could not find a free surrogate shaped like {original!r} in 64 "
+            "draws; the shape's space is too crowded for this many subjects"
         )
 
     # ------------------------------------------------------------------
@@ -237,11 +352,16 @@ class Vault:
         *,
         prefix: str = "",
         length: int = 8,
+        preserve_format: bool = False,
     ) -> str:
         """Return the surrogate for ``original``, issuing one if needed.
 
         Idempotent: the same original always maps to the same surrogate, which
         is what keeps joins intact across domains and across drops.
+
+        ``preserve_format`` issues a surrogate with the original's own length
+        and layout instead of ``PREFIX-XXXXXXXX``; ``prefix`` and ``length``
+        are then unused, since the shape comes from the data.
         """
         lk = self._lookup(entity, original)
         row = self._db.execute(
@@ -251,7 +371,34 @@ class Vault:
         if row is not None:
             return row[0]
 
-        surrogate = self._new_surrogate(entity, prefix, length)
+        # This original is a real identifier. Note it before issuing, so that
+        # no later draw in this entity space can land on it.
+        self._note_original(entity, original)
+
+        # And if it is ALREADY published as someone else's surrogate -- a
+        # shaped draw in an earlier drop that happened to produce this string
+        # before this subject existed in the data -- then two people now share
+        # one identifier in the corpus. Nothing downstream could detect that,
+        # so it stops here.
+        clash = self._db.execute(
+            "SELECT 1 FROM surrogate WHERE entity = ? AND surrogate = ?",
+            (entity, original),
+        ).fetchone()
+        if clash is not None:
+            raise VaultError(
+                f"{original!r} is already published as another subject's "
+                f"surrogate in entity {entity!r}. Issuing a surrogate for it "
+                "now would put two people behind one identifier. This can only "
+                "happen with preserve_format, where surrogates are drawn from "
+                "the same space the real identifiers occupy; re-issue this "
+                "entity with a wider shape, or without preserve_format."
+            )
+
+        surrogate = (
+            self._new_shaped_surrogate(entity, original)
+            if preserve_format
+            else self._new_surrogate(entity, prefix, length)
+        )
         self._db.execute(
             "INSERT INTO surrogate (entity, lookup, surrogate, original_ct, created_at)"
             " VALUES (?, ?, ?, ?, ?)",
@@ -272,13 +419,27 @@ class Vault:
         *,
         prefix: str = "",
         length: int = 8,
+        preserve_format: bool = False,
     ) -> dict[str, str]:
-        """Batch form of :meth:`surrogate_for`. Commits once."""
+        """Batch form of :meth:`surrogate_for`. Commits once.
+
+        Every original in the batch is recorded before any surrogate is drawn.
+        Issuing one at a time would let the first subject's shaped surrogate
+        land on the last subject's real identifier, which no later check could
+        catch -- by then it is already published.
+        """
+        originals = list(dict.fromkeys(str(o) for o in originals))
+        if preserve_format:
+            for o in originals:
+                self._note_original(entity, o)
         out: dict[str, str] = {}
         for o in originals:
             if o in out:
                 continue
-            out[o] = self.surrogate_for(entity, o, prefix=prefix, length=length)
+            out[o] = self.surrogate_for(
+                entity, o, prefix=prefix, length=length,
+                preserve_format=preserve_format,
+            )
         self._db.commit()
         return out
 

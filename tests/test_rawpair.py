@@ -533,3 +533,88 @@ def test_an_explicit_anchor_subject_wins():
         frames, source="s", raw_edc=True, subject_column="PATID"
     )
     assert contract.anchor.subject_column == "PATID"
+
+
+# ----------------------------------------------------------------------
+# format-preserving surrogates
+# ----------------------------------------------------------------------
+def test_a_shaped_surrogate_keeps_length_and_layout(vault):
+    """Digits stay digits, letters stay letters, separators are copied.
+
+    The shape is what a raw -> SDTM model reads as 'this is a subject id'. A
+    corpus whose subject column is SUBJ-3D7M2YVY while production sends
+    001-0042 teaches a format no study uses.
+    """
+    for original in ("001-0042", "TIG-US-001", "0042", "AB1234"):
+        s = vault.surrogate_for("subject", original, preserve_format=True)
+        assert len(s) == len(original), (original, s)
+        assert s != original
+        for a, b in zip(original, s):
+            assert a.isdigit() == b.isdigit()
+            assert a.isalpha() == b.isalpha()
+            if a.isalpha():
+                assert a.isupper() == b.isupper()
+            if not a.isalnum():
+                assert a == b
+
+
+def test_a_shaped_surrogate_is_still_idempotent_and_reversible(vault):
+    first = vault.surrogate_for("subject", "001-0042", preserve_format=True)
+    again = vault.surrogate_for("subject", "001-0042", preserve_format=True)
+    assert first == again
+    assert vault.reverse("subject", first, justification="test") == "001-0042"
+
+
+def test_a_shaped_surrogate_never_lands_on_a_real_identifier(vault):
+    """The shape's space is the real identifiers' space, so they can collide.
+
+    One collision publishes a real identifier in the clear against the wrong
+    person's records -- the failure mode of permuting IDs, reached by accident
+    in a single row, where nothing in the output looks wrong.
+
+    surrogate_map sees the whole batch, so it can rule this out completely:
+    every original is recorded before any surrogate is drawn.
+    """
+    # A two-digit shape admits 100 values. Ask for 40 of them at once: without
+    # the pre-registration step the first subject can be handed the last
+    # subject's real id, because that subject has not been seen yet.
+    originals = [f"{i:02d}" for i in range(40)]
+    issued = vault.surrogate_map("narrow", originals, preserve_format=True)
+    assert len(issued) == len(originals)
+    real = set(originals)
+    for original, s in issued.items():
+        assert s not in real, f"{original} -> {s}, which is a real identifier"
+    assert len(set(issued.values())) == len(issued)
+
+
+def test_an_identifier_that_is_already_someone_s_surrogate_halts(vault):
+    """The one collision a batch cannot prevent: a later drop's new subject.
+
+    Drop 1 issues '08' as a surrogate. Drop 2 enrols a real subject '08'. Two
+    people would now sit behind one identifier, and every file still parses.
+    """
+    from deidkit.vault import VaultError
+
+    first = vault.surrogate_for("later", "01", preserve_format=True)
+    with pytest.raises(VaultError, match="already published"):
+        vault.surrogate_for("later", first, preserve_format=True)
+
+
+def test_a_shape_with_too_few_values_is_refused(vault):
+    from deidkit.vault import VaultError
+
+    with pytest.raises(VaultError, match="admits only"):
+        vault.surrogate_for("tiny", "7", preserve_format=True)
+    with pytest.raises(VaultError, match="no letters or digits"):
+        vault.surrogate_for("tiny", "---", preserve_format=True)
+
+
+def test_the_shaped_column_round_trips_through_the_transform(vault):
+    from deidkit.transforms import surrogate
+
+    values = pd.Series(["001-0042", "001-0043", None, "001-0042"])
+    out = surrogate(values, vault, entity="subject", preserve_format=True)
+    assert out.isna().sum() == 1
+    assert out.iloc[0] == out.iloc[3]
+    assert out.iloc[0] != out.iloc[1]
+    assert all(len(v) == 8 for v in out.dropna())
