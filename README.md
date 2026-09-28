@@ -38,8 +38,13 @@ setup.bat               # Windows -- double-click; it launches setup.ps1
 
 Both create a virtualenv, install dependencies, fabricate a synthetic study,
 run the pipeline, and assert the design guarantees against the published
-output. `--core` skips the optional extras, `--skip-model` skips the 560 MB
-spaCy download.
+output.
+
+Flags: `--core` skips the optional extras, `--skip-model` skips the 560 MB
+spaCy download, `--skip-check` installs without running the pipeline. On
+Windows, `setup.bat` accepts both these and the native PowerShell spellings
+(`-Core`, `-SkipModel`, `-SkipSelfCheck`); `setup.ps1`, called directly, takes
+only the PowerShell ones.
 
 Or by hand:
 
