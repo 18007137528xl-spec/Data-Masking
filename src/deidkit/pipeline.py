@@ -619,6 +619,21 @@ class DeidPipeline:
                 for name, d in results.items()
             },
             "freetext_screening": screen_summary,
+            # A screened tier is not a finished tier. screen_freetext
+            # deliberately does not modify data -- MH/AE verbatim is retained
+            # in full and adjudicated row by row -- so the text of every
+            # flagged row is published here exactly as received. Saying so in
+            # the manifest matters because "33 rows flagged" reads like 33 rows
+            # handled, and the difference is whether unredacted PHI is sitting
+            # in the tier someone is about to share.
+            "adjudication": {
+                "required": bool(screen_summary.get("flagged_rows", 0)),
+                "complete": False,
+                "pending_rows": int(screen_summary.get("flagged_rows", 0) or 0),
+                "note": "flagged rows are published as received; run "
+                "'deidkit adjudicate' and release the tier it writes, not "
+                "this one",
+            },
             # Counts and the distribution, not the quasi-identifier values of
             # the most exposed subjects: the manifest travels, and away from
             # the data those values are a list of who is easiest to

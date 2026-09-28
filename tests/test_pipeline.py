@@ -864,3 +864,109 @@ def test_the_steward_copy_keeps_the_values(result):
     detail = result.risk_report.to_dict(include_class_values=True)
     assert detail["smallest_classes"]
     assert "values" in detail["smallest_classes"][0]
+
+
+# ----------------------------------------------------------------------
+# the second review loop, and the tier that is actually released
+# ----------------------------------------------------------------------
+def test_a_screened_tier_declares_itself_unfinished(result):
+    """screen_freetext does not modify data, so a flagged row is published
+    exactly as received. The manifest has to say so: "33 rows flagged" reads
+    like 33 rows handled, and the difference is whether unredacted text is
+    sitting in the tier someone is about to share."""
+    adj = result.manifest["adjudication"]
+    assert adj["required"] is True
+    assert adj["complete"] is False
+    assert adj["pending_rows"] == len(result.review_queue)
+
+
+def test_an_untouched_queue_counts_as_unreviewed_not_unrecognised():
+    """pandas reads a blank verdict column as NaN, and float('nan') is truthy.
+
+    That made a queue nobody had opened report as N rows with an
+    *unrecognised* verdict beside "rows unreviewed: 0" -- which reads like it
+    was reviewed and merely mistyped.
+    """
+    frames = {"AE": pd.DataFrame({"AETERM": ["headache", "rash"]})}
+    queue = pd.DataFrame(
+        {
+            "domain": ["AE", "AE"],
+            "row_id": [0, 1],
+            "column": ["AETERM", "AETERM"],
+            "verdict": [float("nan"), None],
+            "replacement": [float("nan"), float("nan")],
+        }
+    )
+    _, stats = apply_adjudication(frames, queue)
+    assert stats["rows_unreviewed"] == 2
+    assert stats["rows_unknown_verdict"] == 0
+
+
+def test_adjudication_records_who_and_what_in_the_final_manifest(
+    tmp_path, result, study
+):
+    """The released tier was the only one without a manifest: data written,
+    counts printed to a console, nothing durable saying who ruled on what."""
+    from deidkit import cli, io as dio
+
+    tier = tmp_path / "tier"
+    dio.write_study(result.frames, str(tier), fmt="csv")
+    (tier / "manifest.json").write_text(
+        json.dumps(result.manifest, default=str), encoding="utf-8"
+    )
+    queue_path = tmp_path / "queue.csv"
+    queue = result.review_queue.copy()
+    queue["verdict"] = "PASS"
+    queue.to_csv(queue_path, index=False)
+
+    final = tmp_path / "final"
+    args = cli.build_parser().parse_args(
+        [
+            "adjudicate",
+            str(tier),
+            "--queue",
+            str(queue_path),
+            "-o",
+            str(final),
+            "--format",
+            "csv",
+            "--operator",
+            "steward@example.com",
+        ]
+    )
+    assert cli.cmd_adjudicate(args) == 0
+
+    manifest = json.loads((final / "manifest.json").read_text(encoding="utf-8"))
+    adj = manifest["adjudication"]
+    assert adj["complete"] is True
+    assert adj["pending_rows"] == 0
+    assert adj["adjudicated_by"] == "steward@example.com"
+    assert adj["rows_passed"] == len(queue)
+    # and the upstream record survives rather than being replaced
+    assert manifest["contract"]["contract_version"]
+    assert manifest["inputs"]["checksums_sha256"]
+
+
+def test_publishing_with_unruled_rows_needs_saying_so(tmp_path, result):
+    from deidkit import cli, io as dio
+
+    tier = tmp_path / "tier"
+    dio.write_study(result.frames, str(tier), fmt="csv")
+    queue_path = tmp_path / "queue.csv"
+    result.review_queue.to_csv(queue_path, index=False)  # no verdicts at all
+
+    def run(extra: list[str]) -> int:
+        return cli.cmd_adjudicate(
+            cli.build_parser().parse_args(
+                ["adjudicate", str(tier), "--queue", str(queue_path),
+                 "-o", str(tmp_path / "final"), "--format", "csv", *extra]
+            )
+        )
+
+    assert run([]) == 1, "an unruled queue must not silently publish"
+    assert run(["--allow-pending"]) == 0
+    manifest = json.loads(
+        (tmp_path / "final" / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["adjudication"]["published_with_pending_rows"] is True
+    assert manifest["adjudication"]["complete"] is False

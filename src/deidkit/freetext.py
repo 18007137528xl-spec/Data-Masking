@@ -402,8 +402,17 @@ def apply_adjudication(
     applied, unreviewed, unknown = 0, 0, 0
 
     for _, row in adjudicated.iterrows():
-        verdict = str(row.get("verdict", "") or "").strip().upper()
-        if not verdict or verdict == "PENDING":
+        raw_verdict = row.get("verdict", "")
+        # An untouched queue comes back from pandas as NaN, and float("nan") is
+        # truthy -- so `raw or ""` kept it, str() made it "NAN", and a queue
+        # nobody had opened was reported as 33 rows with an *unrecognised*
+        # verdict beside "rows unreviewed: 0". Which reads like it was
+        # reviewed. Blank is blank however the reader spells it.
+        verdict = (
+            "" if raw_verdict is None or pd.isna(raw_verdict)
+            else str(raw_verdict).strip().upper()
+        )
+        if not verdict or verdict in {"PENDING", "NAN", "NONE"}:
             unreviewed += 1
             continue
         if verdict == "PASS":
