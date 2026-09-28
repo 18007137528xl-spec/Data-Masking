@@ -981,7 +981,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_vault_args(sp)
     sp.add_argument("--manifest")
     sp.add_argument("--review")
-    sp.add_argument("--format", choices=["parquet", "csv"], default="parquet")
+    sp.add_argument("--format", choices=["parquet", "csv", "xlsx"], default="parquet")
     sp.add_argument("--allow-missing", action="store_true")
     sp.add_argument("--no-screen", action="store_true")
     sp.add_argument(
@@ -1009,7 +1009,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sp.add_argument("--queue", required=True)
     sp.add_argument("-o", "--out", required=True)
-    sp.add_argument("--format", choices=["parquet", "csv"], default="parquet")
+    sp.add_argument("--format", choices=["parquet", "csv", "xlsx"], default="parquet")
     sp.set_defaults(func=cmd_adjudicate)
 
     # risk

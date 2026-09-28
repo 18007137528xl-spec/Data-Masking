@@ -299,12 +299,55 @@ def write_study(
     text = str(directory).rstrip("/")
     if not is_remote(text):
         Path(text).mkdir(parents=True, exist_ok=True)
+
+    if fmt in {"xlsx", "excel"}:
+        return _write_workbook(frames, text)
+
     written: dict[str, str] = {}
     for name, frame in frames.items():
         target = f"{text}/{name.lower()}.{fmt}"
         write_table(frame, target)
         written[name] = target
     return written
+
+
+def _write_workbook(
+    frames: dict[str, pd.DataFrame], directory: str
+) -> dict[str, str]:
+    """One workbook, one sheet per domain, every cell stored as text.
+
+    Excel output exists for a reason stronger than convenience. A published
+    tier written as CSV and then opened in Excel -- which is what happens to
+    it -- is a tier Excel gets to reinterpret on the way in: 2015-03 becomes a
+    date, site 002 loses its zero, a long subject number turns into
+    scientific notation. The de-identification survives that; the data does
+    not.
+
+    Cells written as text are read back as text, so the values a steward
+    approved are the values the analyst sees.
+    """
+    try:
+        import openpyxl  # noqa: F401
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError(
+            "writing .xlsx requires openpyxl: pip install 'deidkit[excel]'"
+        ) from exc
+    if is_remote(directory):
+        raise ValueError(
+            "xlsx output to object storage is not supported; write locally "
+            "and upload, or use --format parquet"
+        )
+    target = f"{directory}/{Path(directory).name}.xlsx"
+    with pd.ExcelWriter(target, engine="openpyxl") as writer:
+        for name, frame in frames.items():
+            # Sheet names: 31 characters, and none of : \ / ? * [ ]
+            sheet = re.sub(r"[:\\/?*\[\]]", "_", str(name))[:31] or "SHEET"
+            frame.astype("string").to_excel(writer, sheet_name=sheet, index=False)
+        for sheet in writer.book.worksheets:
+            for row in sheet.iter_rows():
+                for cell in row:
+                    cell.number_format = "@"  # text, so Excel stops guessing
+    return {name: f"{target}::{name}" for name in frames}
 
 
 def write_text(content: str, path: str | Path) -> None:
