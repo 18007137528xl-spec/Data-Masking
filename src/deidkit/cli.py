@@ -513,6 +513,23 @@ def cmd_run(args: argparse.Namespace) -> int:
     if not result.review_queue.empty:
         dio.write_text(result.review_queue.to_csv(index=False), queue_path)
 
+    # The steward's copy of the risk report, with the quasi-identifier values
+    # of the smallest classes. It goes to the review sibling, not the published
+    # tier, for the same reason the free-text queue does: it is the material a
+    # human needs to decide what to generalise, and it is also the most
+    # targeting-useful thing the pipeline produces.
+    risk_detail_path = None
+    if result.risk_report is not None:
+        risk_detail_path = str(Path(queue_path).parent / "risk_detail.json")
+        dio.write_text(
+            json.dumps(
+                result.risk_report.to_dict(include_class_values=True),
+                indent=2,
+                default=str,
+            ),
+            risk_detail_path,
+        )
+
     print(result.summary())
     print()
     for name, p in written.items():
@@ -525,6 +542,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
     if not result.review_queue.empty:
         print(f"  wrote review queue -> {queue_path}")
+    if risk_detail_path:
+        print(f"  wrote risk detail  -> {risk_detail_path}")
         print(
             f"\n{len(result.review_queue)} free-text row(s) need adjudication. "
             "Set 'verdict' to PASS or REDACT,\nthen: deidkit adjudicate "
@@ -605,7 +624,8 @@ def cmd_risk(args: argparse.Namespace) -> int:
     print(report.summary())
     if args.out:
         Path(args.out).write_text(
-            json.dumps(report.to_dict(), indent=2), encoding="utf-8"
+            json.dumps(report.to_dict(include_class_values=True), indent=2),
+            encoding="utf-8",
         )
         print(f"\nwrote {args.out}")
     return 0
