@@ -165,6 +165,12 @@ _RETAIN_SUFFIXES = (
 #: about. A wrong-but-plausible rationale is worse than "unrecognised".
 _SEQUENCE_SUFFIXES = ("SEQ", "SPID", "REFID", "GRPID")
 
+#: Columns naming the treatment. Relabelling ARM while EXTRT still spells out
+#: the compound achieves nothing, so these move together.
+_TREATMENT_EXACT = {
+    "ARM", "ARMCD", "ACTARM", "ACTARMCD", "ACTARMUD", "EXTRT", "TRTA", "TRTP",
+}
+
 #: Study design and visit structure. Retained: these are what the analysis is
 #: organised around, and they identify a protocol, not a person.
 _DESIGN_EXACT = {
@@ -207,6 +213,7 @@ def suggest(
     anchor_column: str | None = None,
     sibling_columns: frozenset[str] = frozenset(),
     sdtm_conformant: bool = False,
+    blind_treatment: bool = False,
 ) -> Suggestion:
     """Suggest a treatment for one profiled column.
 
@@ -280,6 +287,23 @@ def suggest(
     if up in _DROP_EXACT or _DROP_PATTERN.search(up):
         return Suggestion(
             rule(Treatment.DROP), "high", "direct identifier, no analytic value"
+        )
+
+    # --- treatment naming ----------------------------------------------
+    if up in _TREATMENT_EXACT and blind_treatment:
+        return Suggestion(
+            rule(
+                Treatment.LABEL_MAP,
+                entity="treatment",
+                prefix="TRT",
+                keep_values=["Placebo", "PLACEBO", "placebo"],
+                note="blinding and commercial confidentiality, NOT privacy -- a "
+                "treatment arm identifies nobody. One namespace across every "
+                "column that names the treatment, or the labels disagree. "
+                "Placebo passes through: most analyses need to know the control.",
+            ),
+            "high",
+            "treatment name (blinded)",
         )
 
     # --- study design and visit structure -----------------------------
@@ -502,6 +526,7 @@ def draft_contract(
     subject_column: str = "USUBJID",
     k_target: int = 5,
     sdtm_conformant: bool = False,
+    blind_treatment: bool = False,
 ) -> tuple[Contract, dict[str, dict[str, Suggestion]]]:
     """Draft a contract from profiled data.
 
@@ -533,6 +558,7 @@ def draft_contract(
                 anchor_column=anchor_date_column if name == anchor_domain else None,
                 sibling_columns=siblings - {col.upper()},
                 sdtm_conformant=sdtm_conformant,
+                blind_treatment=blind_treatment,
             )
             for col, p in profs.items()
         }

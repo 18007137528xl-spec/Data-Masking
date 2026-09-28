@@ -275,6 +275,15 @@ class DeidPipeline:
         elif t is Treatment.ZIP3:
             out[name] = tf.zip3(col)
 
+        elif t is Treatment.LABEL_MAP:
+            out[name] = tf.label_map(
+                col,
+                self.vault,
+                entity=rule.entity or "treatment",
+                prefix=rule.prefix or "TRT",
+                keep_values=rule.keep_values,
+            )
+
         elif t is Treatment.CAP_NUMERIC:
             out[name] = tf.cap_numeric(col, cap=float(rule.cap or 90))
 

@@ -571,3 +571,77 @@ def test_drug_names_are_not_masked():
     frames = _realish_sdtm()
     contract, _ = draft_contract(frames, source="S")
     assert contract.domain("DM").rule("ARM").treatment is Treatment.RETAIN
+
+
+# ----------------------------------------------------------------------
+# dates are identifiers, and the tier has to agree
+# ----------------------------------------------------------------------
+def _minimal_contract(tier, dtc_treatment):
+    from deidkit.contract import AnchorSpec, DomainContract, FieldRule
+
+    extra = {"entity": "subject"} if dtc_treatment is Treatment.DATE_SHIFT else {}
+    return Contract(
+        contract_version="1.0", source="S", tier=tier,
+        anchor=AnchorSpec(domain="DM", date_column="RFSTDTC"),
+        domains=[
+            DomainContract(
+                name="DM",
+                fields=[FieldRule(column="RFSTDTC", treatment=dtc_treatment, **extra)],
+            )
+        ],
+    )
+
+
+def test_deidentified_tier_cannot_keep_calendar_dates():
+    """HIPAA enumerates dates as identifiers (164.514(b)(2)(i)(C)), and they are
+    the strongest linkage vector a clinical dataset has. An LDS may keep them;
+    a de-identified tier may not, and the contract should not let the two be
+    confused -- nothing in the data itself would reveal the mistake."""
+    with pytest.raises(ValidationError, match="deidentified"):
+        _minimal_contract("deidentified", Treatment.RETAIN)
+
+    # The same rules are fine once the tier tells the truth.
+    assert _minimal_contract("lds", Treatment.RETAIN).tier == "lds"
+    # And shifting satisfies the de-identified tier.
+    assert _minimal_contract("deidentified", Treatment.DATE_SHIFT).tier == "deidentified"
+
+
+# ----------------------------------------------------------------------
+# treatment blinding -- confidentiality, not privacy
+# ----------------------------------------------------------------------
+def test_treatment_labels_are_consistent_reversible_and_keep_placebo(tmp_path):
+    frames = _realish_sdtm()
+    frames["DM"]["ACTARM"] = frames["DM"]["ARM"]
+    frames["DM"]["ARM"] = ["Pembrolizumab 200 mg Q3W", "Placebo", "Pembrolizumab 200 mg Q3W"]
+    frames["DM"]["ACTARM"] = frames["DM"]["ARM"]
+
+    contract, _ = draft_contract(frames, source="S", blind_treatment=True)
+    assert contract.domain("DM").rule("ARM").treatment is Treatment.LABEL_MAP
+
+    with Vault(tmp_path / "v.db", key=Vault.generate_key(), operator="t") as vault:
+        out = DeidPipeline(contract, vault).run(frames)
+        dm = out.frames["DM"]
+
+        # placebo passes through: an analysis still needs to know the control
+        assert list(dm["ARM"]) == [dm["ARM"][0], "Placebo", dm["ARM"][0]]
+        assert dm["ARM"][0].startswith("TRT ")
+
+        # one namespace, so every column naming the treatment agrees
+        assert list(dm["ARM"]) == list(dm["ACTARM"])
+
+        # group sizes unchanged -- the analysis is untouched
+        assert sorted(frames["DM"]["ARM"].value_counts()) == sorted(dm["ARM"].value_counts())
+
+        # reversible for unblinding, through the same logged path
+        original = vault.reverse(
+            "treatment", dm["ARM"][0], justification="DSMB unblinding"
+        )
+        assert original == "Pembrolizumab 200 mg Q3W"
+        assert vault.access_log()[-1]["justification"] == "DSMB unblinding"
+
+
+def test_treatment_names_are_kept_unless_blinding_is_asked_for():
+    """Blinding is opt-in: it is a confidentiality control, and a drug name is
+    not PHI."""
+    contract, _ = draft_contract(_realish_sdtm(), source="S")
+    assert contract.domain("DM").rule("ARM").treatment is Treatment.RETAIN

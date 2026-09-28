@@ -81,6 +81,19 @@ class Treatment(str, Enum):
     POOL_RARE = "pool_rare"
     """Categories below a frequency threshold -> a pooled value."""
 
+    LABEL_MAP = "label_map"
+    """Distinct values -> stable neutral labels (``TRT A``, ``TRT B``).
+
+    Not a privacy control. Treatment arms identify nobody -- everyone in an
+    arm shares the value -- so this exists for blinding and commercial
+    confidentiality, which are a different axis from PHI entirely.
+
+    Assignment is random, held in the vault, and therefore reversible for
+    unblinding, and stable across runs. It is only worth anything if applied
+    across every column that names the treatment: relabelling ARM while EXTRT
+    still says the compound achieves nothing.
+    """
+
     # --- free text ----------------------------------------------------
     SCREEN_FREETEXT = "screen_freetext"
     """Detect candidate PHI and emit a review queue. Data is NOT modified.
@@ -109,7 +122,12 @@ NEEDS_ANCHOR: frozenset[Treatment] = frozenset(
 
 #: Treatments that write to (or read from) the crosswalk vault.
 NEEDS_VAULT: frozenset[Treatment] = frozenset(
-    {Treatment.SURROGATE_ID, Treatment.DATE_SHIFT}
+    {Treatment.SURROGATE_ID, Treatment.DATE_SHIFT, Treatment.LABEL_MAP}
+)
+
+#: Treatments that leave a date as a real calendar date.
+KEEPS_CALENDAR_DATE: frozenset[Treatment] = frozenset(
+    {Treatment.RETAIN, Treatment.SCREEN_FREETEXT}
 )
 
 
@@ -151,6 +169,12 @@ class FieldRule(BaseModel):
     pooled_value: str = Field(
         default="OTHER", description="Replacement for POOL_RARE categories below threshold."
     )
+    keep_values: list[str] = Field(
+        default_factory=list,
+        description="LABEL_MAP: values passed through unchanged. Normally "
+        "'Placebo' -- most analyses need to know which arm is the control, and "
+        "hiding it blinds the analyst rather than the reader.",
+    )
     is_quasi_identifier: bool = Field(
         default=False,
         description="Include the OUTPUT column in the k-anonymity QI set.",
@@ -181,6 +205,14 @@ class FieldRule(BaseModel):
             raise ValueError(f"{self.column}: pool_rare requires 'min_count'")
         if t is Treatment.GENERALIZE_NUMERIC and not self.bins:
             raise ValueError(f"{self.column}: generalize_numeric requires 'bins'")
+        if t is Treatment.LABEL_MAP and not self.entity:
+            raise ValueError(
+                f"{self.column}: label_map requires 'entity' -- every column "
+                "naming the same treatment must share one namespace, or the "
+                "labels disagree across domains"
+            )
+        if self.keep_values and t is not Treatment.LABEL_MAP:
+            raise ValueError(f"{self.column}: 'keep_values' only applies to label_map")
         if t is Treatment.CAP_NUMERIC and self.cap is None:
             raise ValueError(f"{self.column}: cap_numeric requires 'cap'")
         if t is Treatment.DATE_SHIFT and not self.entity:
@@ -374,6 +406,35 @@ class Contract(BaseModel):
             )
         if self.risk.domain not in names:
             raise ValueError(f"risk domain {self.risk.domain!r} is not in the contract")
+
+        # A calendar date is not merely "possibly sensitive": HIPAA enumerates
+        # dates as identifiers (164.514(b)(2)(i)(C)), and they are the strongest
+        # linkage vector a clinical dataset carries -- an exact service date
+        # collides with hospital records, obituaries and claims data.
+        #
+        # A Limited Data Set may keep them (164.514(e)); a de-identified tier
+        # may not. Tying the two together means a tier cannot claim to be
+        # de-identified while shipping real dates, which is a mistake nothing
+        # in the data itself would reveal.
+        if self.tier == "deidentified":
+            kept = [
+                f"{d.name}.{f.column}"
+                for d in self.domains
+                for f in d.fields
+                if f.column.upper().endswith("DTC")
+                and f.treatment in KEEPS_CALENDAR_DATE
+            ]
+            if kept:
+                raise ValueError(
+                    "tier is 'deidentified' but these date columns keep their "
+                    f"real calendar values: {sorted(kept)}.\n"
+                    "Either shift them (date_shift -- keeps --DTC valid for "
+                    "SDTM), convert them (date_to_study_day), or set "
+                    "tier: lds.\n"
+                    "An LDS may retain full dates, but it remains PHI: it needs "
+                    "a data use agreement, and a model trained on it inherits "
+                    "that scope."
+                )
         return self
 
     def domain(self, name: str) -> DomainContract:

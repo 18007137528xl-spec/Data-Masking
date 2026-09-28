@@ -46,6 +46,11 @@ _ENV_KEY = "DEIDKIT_VAULT_KEY"
 #: Crockford-style -- no I, L, O, U.
 _ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
+#: Label suffixes for LABEL_MAP: A..Z then AA, AB, ...
+_LABEL_LETTERS = [chr(c) for c in range(65, 91)] + [
+    chr(a) + chr(b) for a in range(65, 91) for b in range(65, 91)
+]
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS surrogate (
     entity      TEXT NOT NULL,
@@ -275,6 +280,69 @@ class Vault:
                 continue
             out[o] = self.surrogate_for(entity, o, prefix=prefix, length=length)
         self._db.commit()
+        return out
+
+    # ------------------------------------------------------------------
+    # neutral labels (blinding, not privacy)
+    # ------------------------------------------------------------------
+    def label_map(
+        self, entity: str, originals: Iterable[str], *, prefix: str = "TRT"
+    ) -> dict[str, str]:
+        """Map values to ``TRT A``, ``TRT B``, ... -- stable and reversible.
+
+        Assignment order is random rather than alphabetical or first-seen:
+        ordered labels would leak the arms' order in the protocol, which for a
+        dose-escalation study is most of what blinding was protecting.
+
+        Labels live in the same table as the surrogates, so reversal goes
+        through the same logged break-glass path.
+        """
+        values = list(dict.fromkeys(str(o) for o in originals))
+        out: dict[str, str] = {}
+
+        pending: list[str] = []
+        for v in values:
+            row = self._db.execute(
+                "SELECT surrogate FROM surrogate WHERE entity = ? AND lookup = ?",
+                (entity, self._lookup(entity, v)),
+            ).fetchone()
+            if row is not None:
+                out[v] = row[0]
+            else:
+                pending.append(v)
+
+        if pending:
+            used = {
+                r[0]
+                for r in self._db.execute(
+                    "SELECT surrogate FROM surrogate WHERE entity = ?", (entity,)
+                )
+            }
+            free = [
+                f"{prefix} {a}"
+                for a in _LABEL_LETTERS
+                if f"{prefix} {a}" not in used
+            ]
+            if len(free) < len(pending):
+                raise VaultError(
+                    f"only {len(free)} free labels for {len(pending)} new values "
+                    f"in entity {entity!r}"
+                )
+            secrets.SystemRandom().shuffle(pending)
+            for v, label in zip(pending, free):
+                self._db.execute(
+                    "INSERT INTO surrogate (entity, lookup, surrogate, original_ct,"
+                    " created_at) VALUES (?, ?, ?, ?, ?)",
+                    (
+                        entity,
+                        self._lookup(entity, v),
+                        label,
+                        self._fernet.encrypt(v.encode("utf-8")),
+                        _now(),
+                    ),
+                )
+                out[v] = label
+            self._db.commit()
         return out
 
     # ------------------------------------------------------------------
