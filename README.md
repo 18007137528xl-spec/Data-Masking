@@ -198,6 +198,50 @@ person and is bound to exact rules, and that the sheet puts the rows worth
 thinking about at the top. Whether they were thought about is a process
 question, and no tool answers it.
 
+### The queue is for judgment calls only
+
+Screening escalating everything a detector finds does not make a release
+safer, it makes the queue unread. Measured on the synthetic study: 33 flagged
+rows were 13 study-drug mentions, 4 bare contact details, and 16 name /
+facility / in-text-date hits — so two thirds had exactly one defensible
+answer, and the ones that needed a person were buried among them.
+
+So each entity type has a policy, and only the ambiguous ones reach a human:
+
+| | Entity types | Why |
+|---|---|---|
+| `pass` | `STUDY_DRUG` | Not PHI. A compound name is a **blinding** matter on a different axis, and the blinding audit reports it separately — putting it in a PHI queue asks the wrong question about the right finding. |
+| `redact` | `EMAIL_ADDRESS`, `PHONE_NUMBER`, `US_SSN`, `CREDIT_CARD`, `IP_ADDRESS`, `URL`, … | No reading of an AE verbatim makes an email address clinical content. Asking a human to confirm that 33 times teaches them to stop reading. |
+| `queue` | `PERSON`, `FACILITY`, `LOCATION`, `DATE_IN_TEXT`, `ORGANIZATION`, and anything unrecognised | Is that name the investigator or the subject's daughter? Is the facility the site or the local hospital that narrows them to a town? Only a person knows. |
+
+```
+free-text queue: 33 flagged row(s), 16 need a person.
+  17 were settled by policy (auto-pass 13, auto-redact 4) and are pre-filled
+  with a verdict you can overrule. The rows needing judgment are at the TOP.
+```
+
+Four properties hold, and each is a test:
+
+- **A mixed row is escalated, never half-handled.** A sentence with a phone
+  number *and* a name goes to a person — auto-redacting the number first would
+  hide the part that needed them.
+- **An unrecognised entity type is escalated.** A detector upgrade must not
+  silently acquire an auto-decision.
+- **Redaction is span-level.** `REDACT` on
+  `Amoxicillin prescribed 04/12/2026 by GP, see fax 617-555-0198` yields
+  `Amoxicillin prescribed <DATE_IN_TEXT> by GP, see fax <PHONE_NUMBER>` — the
+  drug and the clinical fact survive. `replacement` arrives pre-filled with
+  exactly that, and you can edit it.
+- **A pre-filled verdict always says where it came from.** `verdict_source`
+  carries the policy that set it, so no automatic decision can be mistaken for
+  a human's. The manifest carries the counts.
+
+Override per column from the decision sheet:
+
+```
+decision_params:  screen_policy=PERSON:redact|DATE_IN_TEXT:pass
+```
+
 Two sheets, easily confused — different scope, different time:
 
 | | scope | when |

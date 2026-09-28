@@ -518,9 +518,22 @@ class DeidPipeline:
                 for f in d.fields
                 if f.treatment is Treatment.SCREEN_FREETEXT
             ]
+            policies = {
+                (d.name, f.column): f.screen_policy
+                for d in self.contract.domains
+                for f in d.fields
+                if f.treatment is Treatment.SCREEN_FREETEXT and f.screen_policy
+            }
             if targets:
-                queue = freetext.screen(frames, targets, detector=detector)
+                queue = freetext.screen(
+                    frames, targets, detector=detector, policies=policies
+                )
                 screen_summary = freetext.screening_summary(queue, frames)
+                # What the policy settled and what it escalated. An
+                # auto-decision nobody can see is worse than a queue that is
+                # too long: a reader has to be able to tell how much of the
+                # screening a human actually ruled on.
+                screen_summary["policy"] = freetext.policy_summary(queue)
 
         # --- 4. transform ---------------------------------------------
         results: dict[str, DomainResult] = {}
@@ -627,9 +640,16 @@ class DeidPipeline:
             # handled, and the difference is whether unredacted PHI is sitting
             # in the tier someone is about to share.
             "adjudication": {
-                "required": bool(screen_summary.get("flagged_rows", 0)),
+                "required": bool(
+                    (screen_summary.get("policy") or {}).get("needs_human", 0)
+                    or screen_summary.get("flagged_rows", 0)
+                ),
                 "complete": False,
-                "pending_rows": int(screen_summary.get("flagged_rows", 0) or 0),
+                "pending_rows": int(
+                    (screen_summary.get("policy") or {}).get(
+                        "needs_human", screen_summary.get("flagged_rows", 0) or 0
+                    )
+                ),
                 "note": "flagged rows are published as received; run "
                 "'deidkit adjudicate' and release the tier it writes, not "
                 "this one",

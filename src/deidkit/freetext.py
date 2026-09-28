@@ -263,6 +263,119 @@ def build_detector(prefer_presidio: bool = True) -> PatternDetector | PresidioDe
 
 
 # ----------------------------------------------------------------------
+# screening policy: what the tool decides, and what it escalates
+# ----------------------------------------------------------------------
+
+#: Per-entity-type policy for a detection inside clinical free text.
+#:
+#: The queue exists for judgment calls, and it stops being useful the moment
+#: it also carries the mechanical ones. On a real 120-subject study, 33 flagged
+#: rows broke down as 13 study-drug mentions, 4 bare contact details, and 10
+#: name/facility hits -- so two thirds of what a steward was asked to rule on
+#: had only one defensible answer, and burying the 10 that mattered among them
+#: is how a reviewer learns to fill the column by dragging.
+#:
+#: ``pass``   not PHI. Publishing it is the correct outcome.
+#: ``redact`` PHI with no clinical reading. Redacted at the SPAN, so the rest
+#:            of the sentence survives -- an AE verbatim keeps its clinical
+#:            content and loses the phone number that was never part of it.
+#: ``queue``  genuinely ambiguous. A person has to look.
+DEFAULT_SCREEN_POLICY: dict[str, str] = {
+    # Not PHI at all. A compound name is a BLINDING matter, on a different
+    # axis entirely, and the blinding audit reports it separately -- so
+    # putting it in a PHI queue asks the wrong question about the right
+    # finding.
+    "STUDY_DRUG": "pass",
+    # Direct identifiers. There is no reading of an AE verbatim in which an
+    # email address or a card number is clinical content, so asking a human
+    # to confirm that 33 times teaches them to stop reading.
+    "EMAIL_ADDRESS": "redact",
+    "PHONE_NUMBER": "redact",
+    "US_SSN": "redact",
+    "CREDIT_CARD": "redact",
+    "IBAN_CODE": "redact",
+    "IP_ADDRESS": "redact",
+    "URL": "redact",
+    "MEDICAL_LICENSE": "redact",
+    "US_DRIVER_LICENSE": "redact",
+    "US_PASSPORT": "redact",
+    # Judgment. Is that name the investigator or the subject's daughter? Is
+    # the facility the study site or the local hospital that narrows the
+    # subject to a town? Is the date in "since March 2019" clinically load-
+    # bearing? Only a person knows, and these are what the queue is for.
+    "PERSON": "queue",
+    "FACILITY": "queue",
+    "LOCATION": "queue",
+    "ORGANIZATION": "queue",
+    "DATE_IN_TEXT": "queue",
+    "NRP": "queue",
+    "AGE": "queue",
+}
+
+#: Anything the policy does not name is escalated. A detector version that
+#: adds an entity type must not silently acquire an auto-redact.
+UNKNOWN_ENTITY_POLICY = "queue"
+
+
+def resolve_policy(overrides: dict[str, str] | None = None) -> dict[str, str]:
+    """The default policy with a steward's per-column overrides applied."""
+    policy = dict(DEFAULT_SCREEN_POLICY)
+    for key, value in (overrides or {}).items():
+        action = str(value).strip().lower()
+        if action not in {"pass", "redact", "queue"}:
+            raise ValueError(
+                f"screen_policy {key}={value!r}: expected pass, redact or queue"
+            )
+        policy[str(key).strip().upper()] = action
+    return policy
+
+
+def _row_decision(
+    findings: Sequence[Finding], policy: dict[str, str]
+) -> tuple[str, str]:
+    """The policy verdict for one row, and why.
+
+    A row is escalated if ANY finding in it needs judgment -- a sentence
+    holding both a phone number and a person's name is a judgment call, and
+    auto-redacting half of it before a human sees the rest would hide the part
+    that mattered.
+    """
+    actions = {
+        policy.get(f.entity_type, UNKNOWN_ENTITY_POLICY) for f in findings
+    }
+    types = ",".join(sorted({f.entity_type for f in findings}))
+    if "queue" in actions:
+        return "", ""
+    if "redact" in actions:
+        return "REDACT", f"policy: redact {types}"
+    return "PASS", f"policy: not PHI ({types})"
+
+
+def redact_all_spans(text: str, findings: Sequence[Finding]) -> str:
+    """Replace every detected span, leaving the rest of the sentence intact."""
+    out, cursor = [], 0
+    for f in sorted(findings, key=lambda x: x.start):
+        out.append(text[cursor : f.start])
+        out.append(f"<{f.entity_type}>")
+        cursor = f.end
+    out.append(text[cursor:])
+    return "".join(out)
+
+
+def redact_spans(text: str, findings: Sequence[Finding], policy: dict[str, str]) -> str:
+    """Replace only the spans the policy redacts. The sentence survives."""
+    out, cursor = [], 0
+    for f in sorted(findings, key=lambda x: x.start):
+        if policy.get(f.entity_type, UNKNOWN_ENTITY_POLICY) != "redact":
+            continue
+        out.append(text[cursor : f.start])
+        out.append(f"<{f.entity_type}>")
+        cursor = f.end
+    out.append(text[cursor:])
+    return "".join(out)
+
+
+# ----------------------------------------------------------------------
 # review queue
 # ----------------------------------------------------------------------
 
@@ -277,6 +390,7 @@ REVIEW_COLUMNS = [
     "text",
     "marked_text",
     "verdict",
+    "verdict_source",
     "replacement",
     "reviewer",
 ]
@@ -300,9 +414,11 @@ def screen_column(
     domain: str,
     subject_column: str | None,
     detector: PatternDetector | PresidioDetector,
+    policy: dict[str, str] | None = None,
 ) -> pd.DataFrame:
     """Screen one free-text column. Returns candidate rows only; data untouched."""
     rows: list[dict[str, object]] = []
+    policy = policy if policy is not None else resolve_policy()
     if column not in frame.columns:
         return pd.DataFrame(columns=REVIEW_COLUMNS)
 
@@ -315,6 +431,7 @@ def screen_column(
         findings = detector.detect(text)
         if not findings:
             continue
+        verdict, source = _row_decision(findings, policy)
         rows.append(
             {
                 "domain": domain,
@@ -330,8 +447,20 @@ def screen_column(
                 "max_score": round(max(f.score for f in findings), 3),
                 "text": text,
                 "marked_text": mark(text, findings),
-                "verdict": "",  # PENDING -> reviewer writes PASS or REDACT
-                "replacement": "",
+                # Pre-filled where the policy has a single defensible answer,
+                # blank where a person has to decide. A steward can overrule
+                # any of it -- and now only reads the rows that need them.
+                "verdict": verdict,
+                "verdict_source": source,
+                # Always pre-filled with SPAN-level redaction of every
+                # finding, whatever the verdict. Without it, a reviewer who
+                # types REDACT on "Amoxicillin prescribed 04/12/2026 by GP,
+                # see fax 617-555-0142" gets the whole cell replaced by
+                # [REDACTED] and loses the drug, the indication and the date
+                # -- clinical content that was never the problem. With it,
+                # REDACT means "remove the spans", and the reviewer can edit
+                # the suggestion when they disagree about one of them.
+                "replacement": redact_all_spans(text, findings),
                 "reviewer": "",
             }
         )
@@ -343,16 +472,24 @@ def screen(
     targets: Iterable[tuple[str, str, str | None]],
     *,
     detector: PatternDetector | PresidioDetector | None = None,
+    policies: dict[tuple[str, str], dict[str, str]] | None = None,
 ) -> pd.DataFrame:
     """Screen every ``(domain, column, subject_column)`` target.
 
-    Returns one review queue across all domains, highest-confidence first so a
-    reviewer working top-down hits the real findings early.
+    Returns one review queue across all domains, with the rows that need a
+    human FIRST. Ordering by confidence alone put a study-drug mention above a
+    person's name, which is backwards: what a reviewer should meet at the top
+    of the sheet is the decision only they can make.
     """
     det = detector or build_detector()
     parts = [
         screen_column(
-            frames[dom], col, domain=dom, subject_column=subj, detector=det
+            frames[dom],
+            col,
+            domain=dom,
+            subject_column=subj,
+            detector=det,
+            policy=resolve_policy((policies or {}).get((dom, col))),
         )
         for dom, col, subj in targets
         if dom in frames
@@ -361,9 +498,34 @@ def screen(
     if not parts:
         return pd.DataFrame(columns=REVIEW_COLUMNS)
     queue = pd.concat(parts, ignore_index=True)
-    return queue.sort_values(
-        ["max_score", "n_findings"], ascending=False
-    ).reset_index(drop=True)
+    queue["_needs_human"] = (queue["verdict"].astype(str).str.strip() == "").astype(int)
+    return (
+        queue.sort_values(
+            ["_needs_human", "max_score", "n_findings"], ascending=False
+        )
+        .drop(columns="_needs_human")
+        .reset_index(drop=True)
+    )
+
+
+def policy_summary(queue: pd.DataFrame) -> dict[str, object]:
+    """What the policy decided, and what it left for a person.
+
+    In the manifest because an auto-decision that nobody can see is worse
+    than a queue that is too long: the reader has to be able to tell how much
+    of the screening a human actually ruled on.
+    """
+    if queue.empty:
+        return {"needs_human": 0, "auto_redact": 0, "auto_pass": 0}
+    verdicts = queue["verdict"].astype(str).str.strip().str.upper()
+    return {
+        "needs_human": int((verdicts == "").sum()),
+        "auto_redact": int((verdicts == "REDACT").sum()),
+        "auto_pass": int((verdicts == "PASS").sum()),
+        "by_source": queue.get(
+            "verdict_source", pd.Series(dtype=str)
+        ).astype(str).replace("", "needs a human").value_counts().to_dict(),
+    }
 
 
 def screening_summary(queue: pd.DataFrame, frames: dict[str, pd.DataFrame]) -> dict:

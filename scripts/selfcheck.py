@@ -204,8 +204,34 @@ def check(raw_dir: str, pub_dir: str) -> tuple[list[str], list[str]]:
     if queue_path.exists() and ae_raw is not None:
         q = pd.read_csv(queue_path)
         rate = len(q) / len(ae_raw) if len(ae_raw) else 0
-        if not q.empty and not (q["verdict"].fillna("") == "").all():
-            problems.append("review queue arrived with verdicts pre-filled")
+        # Verdicts ARE pre-filled now, by policy, for the findings that have
+        # one defensible answer -- and that is the point: the queue is for
+        # judgment calls, and it stops being read if it also carries the
+        # mechanical ones. What must hold is that every pre-filled verdict says
+        # where it came from, and that nothing claims a human ruled on it.
+        if not q.empty:
+            filled = q[q["verdict"].fillna("").astype(str).str.strip() != ""]
+            unexplained = filled[
+                filled.get("verdict_source", pd.Series("", index=filled.index))
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                == ""
+            ]
+            if len(unexplained):
+                problems.append(
+                    f"{len(unexplained)} queue row(s) arrived with a verdict and "
+                    "no verdict_source -- a pre-filled decision must say it came "
+                    "from policy, or it reads as a human's"
+                )
+            if (q["reviewer"].fillna("").astype(str).str.strip() != "").any():
+                problems.append(
+                    "review queue arrived with a reviewer name filled in"
+                )
+            passed.append(
+                f"free-text queue: {len(q) - len(filled)} of {len(q)} row(s) "
+                "left for a person, the rest labelled with their policy"
+            )
         else:
             passed.append(
                 f"free-text queue: {len(q)} of {len(ae_raw)} AE rows flagged "

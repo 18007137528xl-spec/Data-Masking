@@ -246,21 +246,32 @@ def test_screening_finds_the_planted_identifiers(result):
         if t
     }
     assert {"FACILITY", "PERSON"} & types, f"weak detection: {types}"
-    assert queue["verdict"].eq("").all(), "verdicts must start empty"
+    # Rows needing judgment start blank; rows the policy settled carry a
+    # verdict AND a verdict_source, so nothing reads as a human's ruling.
+    blank = queue["verdict"].astype(str).str.strip() == ""
+    assert blank.any(), "every row was auto-decided; nothing left for a human"
+    assert (
+        queue.loc[~blank, "verdict_source"].astype(str).str.strip() != ""
+    ).all(), "a pre-filled verdict must say where it came from"
+    assert (queue["reviewer"].astype(str).str.strip() == "").all()
 
 
 def test_adjudication_only_touches_redact_rows(raw, result):
     frames, _ = raw
     queue = result.review_queue.copy()
     queue["verdict"] = "PASS"
-    queue.loc[queue.index[0], "verdict"] = "REDACT"
-    queue.loc[queue.index[0], "replacement"] = "Fall at hospital"
+    queue["replacement"] = ""
+    # Pick an AE row by name rather than by position: the queue is now ordered
+    # judgment-first, so index 0 is whichever domain needed a human.
+    target = queue.index[(queue["domain"] == "AE").to_numpy().argmax()]
+    queue.loc[target, "verdict"] = "REDACT"
+    queue.loc[target, "replacement"] = "Fall at hospital"
 
     out, stats = apply_adjudication(result.frames, queue)
     assert stats["redactions_applied"] == 1
     assert stats["rows_unreviewed"] == 0
 
-    row = queue.iloc[0]
+    row = queue.loc[target]
     assert out[row["domain"]].at[row["row_id"], row["column"]] == "Fall at hospital"
     # everything else untouched
     changed = (
@@ -877,7 +888,9 @@ def test_a_screened_tier_declares_itself_unfinished(result):
     adj = result.manifest["adjudication"]
     assert adj["required"] is True
     assert adj["complete"] is False
-    assert adj["pending_rows"] == len(result.review_queue)
+    blank = (result.review_queue["verdict"].astype(str).str.strip() == "").sum()
+    assert adj["pending_rows"] == blank
+    assert adj["pending_rows"] <= len(result.review_queue)
 
 
 def test_an_untouched_queue_counts_as_unreviewed_not_unrecognised():
@@ -970,3 +983,156 @@ def test_publishing_with_unruled_rows_needs_saying_so(tmp_path, result):
     )
     assert manifest["adjudication"]["published_with_pending_rows"] is True
     assert manifest["adjudication"]["complete"] is False
+
+
+# ----------------------------------------------------------------------
+# what the tool decides, and what it escalates
+# ----------------------------------------------------------------------
+def test_the_policy_escalates_only_the_judgment_calls():
+    """A queue that also carries the mechanical rows stops being read.
+
+    Measured on the synthetic study: 33 flagged rows were 13 study-drug
+    mentions, 4 bare contact details and 16 name / facility / in-text-date
+    hits. Two thirds had one defensible answer, and the ones that mattered
+    were buried among them.
+    """
+    from deidkit.freetext import DEFAULT_SCREEN_POLICY as P
+
+    # not PHI at all -- a compound name is a blinding matter on its own axis
+    assert P["STUDY_DRUG"] == "pass"
+    # no clinical reading exists for these
+    assert P["EMAIL_ADDRESS"] == "redact"
+    assert P["PHONE_NUMBER"] == "redact"
+    # only a person knows whether the name is the investigator or a relative
+    assert P["PERSON"] == "queue"
+    assert P["FACILITY"] == "queue"
+    assert P["DATE_IN_TEXT"] == "queue"
+
+
+def test_an_unknown_entity_type_is_escalated_not_auto_redacted():
+    """A detector upgrade must not silently acquire an auto-decision."""
+    from deidkit.freetext import Finding, _row_decision, resolve_policy
+
+    verdict, _ = _row_decision(
+        [
+            Finding(
+                entity_type="SOMETHING_NEW",
+                start=0,
+                end=3,
+                text="abc",
+                score=0.9,
+                detector="test",
+            )
+        ],
+        resolve_policy(),
+    )
+    assert verdict == "", "an unrecognised entity type must go to a human"
+
+
+def test_a_mixed_row_goes_to_a_human_rather_than_being_half_handled():
+    """'... by Dr Almeida, see fax 617-555-0198' holds one mechanical finding
+    and one judgment call. Auto-redacting the phone number before a person
+    sees the name would hide the part that needed them."""
+    from deidkit.freetext import Finding, _row_decision, resolve_policy
+
+    verdict, _ = _row_decision(
+        [
+            Finding(
+                entity_type="PHONE_NUMBER", start=0, end=3, text="617",
+                score=0.9, detector="test",
+            ),
+            Finding(
+                entity_type="PERSON", start=5, end=9, text="Alma",
+                score=0.9, detector="test",
+            ),
+        ],
+        resolve_policy(),
+    )
+    assert verdict == ""
+
+
+def test_redaction_is_span_level_so_the_sentence_survives():
+    """A reviewer typing REDACT must not lose the clinical content.
+
+    Replacing the whole cell would take the drug, the indication and the
+    route along with the fax number that was the actual problem.
+    """
+    from deidkit.freetext import Finding, redact_all_spans
+
+    text = "Amoxicillin prescribed by GP, see fax 617-555-0198"
+    out = redact_all_spans(
+        text,
+        [
+            Finding(
+                entity_type="PHONE_NUMBER",
+                start=38,
+                end=50,
+                text="617-555-0198",
+                score=0.9,
+                detector="test",
+            )
+        ],
+    )
+    assert out.startswith("Amoxicillin prescribed by GP")
+    assert "617-555-0198" not in out
+    assert "<PHONE_NUMBER>" in out
+
+
+def test_the_queue_puts_the_human_rows_first(result):
+    """Ordering by confidence alone put a study-drug mention above a person's
+    name, which is backwards: the top of the sheet should be the decisions
+    only a person can make."""
+    verdicts = result.review_queue["verdict"].astype(str).str.strip()
+    if not (verdicts == "").any() or (verdicts != "").sum() == 0:
+        pytest.skip("this study produced no mixed queue")
+    first_decided = (verdicts != "").idxmax()
+    last_blank = (verdicts == "")[::-1].idxmax()
+    assert first_decided > last_blank, "pre-decided rows appear above human rows"
+
+
+def test_a_prefilled_verdict_always_says_where_it_came_from(result):
+    """A pre-filled decision with no provenance reads as a human's."""
+    q = result.review_queue
+    filled = q[q["verdict"].astype(str).str.strip() != ""]
+    assert not filled.empty
+    assert (filled["verdict_source"].astype(str).str.strip() != "").all()
+    assert (q["reviewer"].astype(str).str.strip() == "").all()
+
+
+# ----------------------------------------------------------------------
+# the approval digest
+# ----------------------------------------------------------------------
+def test_adding_an_optional_parameter_does_not_invalidate_approvals(contract):
+    """Discovered the hard way: adding one optional field to FieldRule changed
+    the digest of every contract in existence and invalidated every steward's
+    sign-off across every study -- on an upgrade that altered the behaviour of
+    none of them. A digest covers what the rules DO."""
+    explicit = contract.model_dump(mode="json")
+    for dom in explicit["domains"]:
+        for f in dom["fields"]:
+            f["screen_policy"] = None  # the default, spelled out
+    assert Contract.model_validate(explicit).rules_digest() == contract.rules_digest()
+
+
+def test_an_old_scheme_approval_is_told_apart_from_a_tampered_one(contract):
+    from deidkit.contract import Approval
+
+    signed = contract.model_copy(
+        update={
+            "approval": Approval(
+                approved_by="steward@example.com",
+                approved_at="2026-01-01T00:00:00+00:00",
+                rules_fingerprint=contract.rules_digest(),
+                digest_scheme=contract.DIGEST_SCHEME,
+            )
+        }
+    )
+    payload = signed.model_dump(mode="json")
+    payload["approval"]["digest_scheme"] = 1
+    with pytest.raises(ValidationError, match="older version"):
+        Contract.model_validate(payload)
+
+    payload["approval"]["digest_scheme"] = contract.DIGEST_SCHEME
+    payload["approval"]["rules_fingerprint"] = "sha256:" + "0" * 64
+    with pytest.raises(ValidationError, match="edited after it was approved"):
+        Contract.model_validate(payload)

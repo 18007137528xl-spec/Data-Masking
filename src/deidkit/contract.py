@@ -233,6 +233,19 @@ class FieldRule(BaseModel):
         "itself (no value with a component above 12). Declared wrong, every "
         "date lands in the wrong month and still looks like a date.",
     )
+    screen_policy: dict[str, str] | None = Field(
+        default=None,
+        description="SCREEN_FREETEXT: per-entity-type overrides, e.g. "
+        "{PERSON: redact, DATE_IN_TEXT: pass}. Values are pass, redact or "
+        "queue.\n\n"
+        "The queue is for judgment calls. Left to escalate everything a "
+        "detector finds, it fills with mechanical rows -- study-drug mentions, "
+        "bare email addresses -- and the handful that genuinely need a person "
+        "are buried among them, which is how a reviewer learns to fill the "
+        "column by dragging. The default policy passes what is not PHI, "
+        "redacts identifiers with no clinical reading, and escalates names, "
+        "facilities, locations and in-text dates.",
+    )
     on_unparsed: Literal["fail", "redact", "pass"] = Field(
         default="fail",
         description="DATE_SHIFT_RAW: what to do with a non-blank value the "
@@ -481,6 +494,12 @@ class Approval(BaseModel):
         description="SHA-256 over the rule set as approved. Any later edit to "
         "any rule breaks this and the contract will not load."
     )
+    digest_scheme: int = Field(
+        default=1,
+        description="Which digest payload shape this signature was computed "
+        "under. An approval from an older scheme is not a tampered contract; "
+        "it just has to be re-signed.",
+    )
     decisions_accepted: int = 0
     decisions_changed: int = 0
     plan_file: str | None = Field(
@@ -520,6 +539,12 @@ class Contract(BaseModel):
     )
 
     # ------------------------------------------------------------------
+    #: Bumped when the digest PAYLOAD changes shape, which invalidates every
+    #: existing approval. Recorded in the approval so a mismatch can say which
+    #: it is: someone edited the rules, or the tool's scheme moved under a
+    #: sign-off that is still perfectly valid.
+    DIGEST_SCHEME: int = 2
+
     def rules_digest(self) -> str:
         """SHA-256 over every rule, and nothing else.
 
@@ -528,8 +553,17 @@ class Contract(BaseModel):
         to launder a rule change). Everything that decides what happens to
         data is in here: the tier, the anchor, the risk target, and every
         field rule with all of its parameters.
+
+        Fields at their default are excluded, and that is not a detail. Under
+        the first scheme the payload held every field including the unset ones,
+        so adding one optional parameter to FieldRule changed the digest of
+        every contract in existence and invalidated every steward's sign-off
+        across every study -- on an upgrade that altered the behaviour of none
+        of them. A digest has to cover what the rules DO, not which version of
+        the tool wrote them down.
         """
         payload = {
+            "digest_scheme": self.DIGEST_SCHEME,
             "source": self.source,
             "tier": self.tier,
             "anchor": self.anchor.model_dump(mode="json"),
@@ -541,7 +575,10 @@ class Contract(BaseModel):
                     "join_key_template": d.join_key_template,
                     "retained_in_full": d.retained_in_full,
                     "fields": [
-                        f.model_dump(mode="json", exclude={"note"})
+                        f.model_dump(
+                            mode="json", exclude={"note"}, exclude_defaults=True
+                        )
+                        | {"column": f.column, "treatment": f.treatment.value}
                         for f in sorted(d.fields, key=lambda r: r.column)
                     ],
                 }
@@ -568,6 +605,18 @@ class Contract(BaseModel):
         # at whichever point someone remembered to look.
         if self.approval is not None:
             actual = self.rules_digest()
+            if self.approval.digest_scheme != self.DIGEST_SCHEME:
+                raise ValueError(
+                    "this contract's approval was signed by an older version "
+                    "of deidkit.\n"
+                    f"  approval scheme : {self.approval.digest_scheme}\n"
+                    f"  this tool        : {self.DIGEST_SCHEME}\n"
+                    f"  approver         : {self.approval.approved_by} "
+                    f"at {self.approval.approved_at}\n"
+                    "The rules were NOT edited -- the way they are digested "
+                    "changed. Re-run\n'deidkit approve' on the decision sheet "
+                    "to re-sign the same decisions."
+                )
             if actual != self.approval.rules_fingerprint:
                 raise ValueError(
                     "this contract was edited after it was approved.\n"
