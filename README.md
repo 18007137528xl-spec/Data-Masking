@@ -50,6 +50,12 @@ It is a different way to fill the decision sheet, not a way around it. Approval
 goes through the same code, still refuses a sheet with a blank row, and still
 produces a contract signed over the rules.
 
+An illustrated, screen-by-screen guide for stewards is served by the console
+itself at `/guide` (linked at the foot of its step rail). It is built from a
+live console on synthetic data by `python scripts/console_guide.py`; rerun that
+whenever `console.html` changes, because a guide whose pictures no longer
+match the screen is worse than none.
+
 Bound to loopback. Reach it from another machine with an SSH tunnel
 (`ssh -L 8765:127.0.0.1:8765 you@phi-server`) rather than `--host 0.0.0.0`: this
 console reads the quarantine drop and displays unredacted free text from the

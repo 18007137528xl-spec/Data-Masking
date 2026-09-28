@@ -73,6 +73,12 @@ class Session:
     approved: Contract | None = None
     result: Any = None
     out_dir: str | None = None
+    # What the page needs to rebuild itself after a refresh. The browser holds
+    # no state of its own: close the tab, reopen the address, and the review
+    # carries on from where it was. Only restarting the SERVER loses it.
+    notes: list[dict[str, str]] = field(default_factory=list)
+    last_approval: dict[str, Any] | None = None
+    last_run: dict[str, Any] | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def state(self) -> dict[str, Any]:
@@ -101,7 +107,16 @@ class Session:
 
 
 class ApiError(Exception):
-    """A message meant for the person, not a stack trace."""
+    """A message meant for the person, not a stack trace.
+
+    ``extra`` travels to the page alongside the message, for the one case
+    where the page has to offer a choice rather than just report: discarding
+    decisions already recorded.
+    """
+
+    def __init__(self, message: str, **extra: Any) -> None:
+        super().__init__(message)
+        self.extra = extra
 
 
 # ----------------------------------------------------------------------
@@ -111,6 +126,19 @@ def do_profile(s: Session, body: dict[str, Any]) -> dict[str, Any]:
     directory = (body.get("directory") or "").strip()
     if not directory:
         raise ApiError("No folder given.")
+
+    # Reading a drop starts the review over. With decisions already recorded
+    # that silently threw away a steward's afternoon -- the CLI refuses the
+    # same thing without --force-decisions, and so does this.
+    decided = s.state()["decided"]
+    if decided and not body.get("force"):
+        raise ApiError(
+            f"{decided} decision(s) are already recorded for {s.directory}. "
+            "Reading a folder starts the review over and discards them.",
+            needs_force=True,
+            decided=decided,
+        )
+
     if not Path(directory).is_dir():
         raise ApiError(f"{directory} is not a folder on this server.")
 
@@ -136,10 +164,12 @@ def do_profile(s: Session, body: dict[str, Any]) -> dict[str, Any]:
     s.frames, s.checksums = frames, checksums
     s.draft, s.sheet = draft, sheet
     s.approved = s.result = None
+    s.last_approval = s.last_run = None
+    s.notes = _profile_notes(draft, frames, raw)
 
     return {
         "state": s.state(),
-        "notes": _profile_notes(draft, frames, raw),
+        "notes": s.notes,
         "rows": _sheet_rows(sheet),
     }
 
@@ -205,12 +235,27 @@ def do_decide(s: Session, body: dict[str, Any]) -> dict[str, Any]:
     """Record decisions. Accepts a partial set; approval is what demands all."""
     if s.sheet is None:
         raise ApiError("Nothing profiled yet.")
+    changed = False
     for item in body.get("rows") or []:
         i = int(item["index"])
         for col in ("decision", "decision_treatment", "decision_params", "steward_note"):
             if col in item:
-                s.sheet.at[i, col] = str(item[col] or "")
-    return {"state": s.state()}
+                new = str(item[col] or "")
+                if s.sheet.at[i, col] != new:
+                    s.sheet.at[i, col] = new
+                    changed = True
+
+    # A signature covers the rules as they were when it was given. Change one
+    # afterwards and the approval in hand no longer describes the sheet, but
+    # Run would still have used it -- signed rules A, reviewed rules B,
+    # published under A. The approval is withdrawn instead, and the page has
+    # to be signed again before anything runs.
+    withdrawn = changed and s.approved is not None
+    if withdrawn:
+        s.approved = None
+        s.last_approval = s.last_run = None
+        s.result = None
+    return {"state": s.state(), "approval_withdrawn": withdrawn}
 
 
 def do_approve(s: Session, body: dict[str, Any]) -> dict[str, Any]:
@@ -240,12 +285,13 @@ def do_approve(s: Session, body: dict[str, Any]) -> dict[str, Any]:
     if out:
         approved.to_yaml(out)
         written = out
-    return {
-        "state": s.state(),
+    s.last_approval = {
         "stats": stats,
         "contract_written_to": written,
         "fingerprint": approved.approval.rules_fingerprint,
     }
+    s.last_run = None
+    return {"state": s.state(), **s.last_approval}
 
 
 def do_run(s: Session, body: dict[str, Any]) -> dict[str, Any]:
@@ -302,8 +348,7 @@ def do_run(s: Session, body: dict[str, Any]) -> dict[str, Any]:
         )
 
     s.result, s.out_dir = result, out_dir
-    return {
-        "state": s.state(),
+    s.last_run = {
         "summary": result.summary(),
         "written": written,
         "manifest": manifest_path,
@@ -314,6 +359,7 @@ def do_run(s: Session, body: dict[str, Any]) -> dict[str, Any]:
         ),
         "queue_rows": len(result.review_queue),
     }
+    return {"state": s.state(), **s.last_run}
 
 
 def do_queue(s: Session) -> dict[str, Any]:
@@ -335,6 +381,17 @@ def do_queue(s: Session) -> dict[str, Any]:
     }
 
 
+def do_resume(s: Session) -> dict[str, Any]:
+    """Everything the page needs to put itself back where it was."""
+    return {
+        "state": s.state(),
+        "rows": _sheet_rows(s.sheet) if s.sheet is not None else [],
+        "notes": s.notes,
+        "approval": s.last_approval,
+        "run": s.last_run,
+    }
+
+
 ROUTES = {
     "/api/state": lambda s, b: {"state": s.state()},
     "/api/profile": do_profile,
@@ -350,6 +407,17 @@ ROUTES = {
 # ----------------------------------------------------------------------
 def _page() -> str:
     return (Path(__file__).parent / "console.html").read_text(encoding="utf-8")
+
+
+def _guide() -> str | None:
+    """The illustrated guide, served from the same process.
+
+    Shipped inside the package rather than linked from a wiki, because the
+    machine this runs on often has no route to a wiki -- and a steward stuck on
+    step 2 should not need a second machine to find out what step 2 means.
+    """
+    path = Path(__file__).parent / "guide.html"
+    return path.read_text(encoding="utf-8") if path.exists() else None
 
 
 def make_handler(session: Session):
@@ -383,8 +451,18 @@ def make_handler(session: Session):
             if path in ("/", "/index.html"):
                 self._send(200, _page().encode("utf-8"), "text/html; charset=utf-8")
                 return
+            if path == "/guide":
+                text = _guide()
+                if text is None:
+                    self._json(404, {"error": "the guide is not installed"})
+                else:
+                    self._send(200, text.encode("utf-8"), "text/html; charset=utf-8")
+                return
             if path == "/api/queue":
                 self._guarded(lambda: do_queue(session))
+                return
+            if path == "/api/resume":
+                self._guarded(lambda: do_resume(session))
                 return
             if path == "/api/state":
                 self._guarded(lambda: {"state": session.state()})
@@ -416,7 +494,7 @@ def make_handler(session: Session):
                 with session.lock:
                     self._json(200, fn())
             except ApiError as exc:
-                self._json(400, {"error": str(exc)})
+                self._json(400, {"error": str(exc), **exc.extra})
             except Exception as exc:  # noqa: BLE001
                 traceback.print_exc()
                 self._json(

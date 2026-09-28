@@ -54,7 +54,11 @@ code,.mono{font-family:var(--mono);font-size:.92em}
 .steps button:disabled{color:var(--ink-3);cursor:not-allowed}
 .num{font-family:var(--mono);font-size:11px;color:var(--ink-3);min-width:16px}
 .steps button[aria-current="true"] .num{color:var(--accent)}
-.tick{margin-left:auto;color:var(--good);font-size:12px}
+.tick{margin-left:auto;color:var(--good);font-size:13px;flex-shrink:0}
+.guide{display:block;margin:18px 20px 0;padding-top:14px;border-top:1px solid var(--rule);
+  font-size:13px;color:var(--accent);text-decoration:none}
+.guide:hover{text-decoration:underline}
+@media (max-width:820px){.guide{display:none}}
 
 main{padding:30px 34px 70px;max-width:1180px}
 @media (max-width:820px){main{padding:22px 16px 60px}}
@@ -158,12 +162,13 @@ dl.kv dd{margin:0;font-family:var(--mono);word-break:break-all}
   <nav class="rail">
     <div class="brand"><b>deidkit</b><span>de-identification console</span></div>
     <ul class="steps" id="steps">
-      <li><button data-step="0" aria-current="true"><span class="num">01</span>Read the drop<span class="tick" hidden>done</span></button></li>
-      <li><button data-step="1" disabled><span class="num">02</span>Review every column<span class="tick" hidden>done</span></button></li>
-      <li><button data-step="2" disabled><span class="num">03</span>Sign it off<span class="tick" hidden>done</span></button></li>
-      <li><button data-step="3" disabled><span class="num">04</span>Run<span class="tick" hidden>done</span></button></li>
-      <li><button data-step="4" disabled><span class="num">05</span>Results<span class="tick" hidden>done</span></button></li>
+      <li><button data-step="0" aria-current="true"><span class="num">01</span>Read the drop<span class="tick" hidden title="done">✓</span></button></li>
+      <li><button data-step="1" disabled><span class="num">02</span>Review every column<span class="tick" hidden title="done">✓</span></button></li>
+      <li><button data-step="2" disabled><span class="num">03</span>Sign it off<span class="tick" hidden title="done">✓</span></button></li>
+      <li><button data-step="3" disabled><span class="num">04</span>Run<span class="tick" hidden title="done">✓</span></button></li>
+      <li><button data-step="4" disabled><span class="num">05</span>Results<span class="tick" hidden title="done">✓</span></button></li>
     </ul>
+    <a class="guide" href="/guide" target="_blank" rel="noopener">使用指南 · Guide</a>
   </nav>
 
   <main>
@@ -334,7 +339,7 @@ async function api(path, body){
     ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)};
   const r = await fetch(path, opt);
   const j = await r.json().catch(() => ({error:'the server sent something unreadable'}));
-  if (!r.ok) throw new Error(j.error || 'request failed');
+  if (!r.ok){ const e = new Error(j.error || 'request failed'); e.body = j; throw e; }
   showError('');
   return j;
 }
@@ -361,7 +366,9 @@ function unlock(n, done){
 
 /* ---- 01 profile ------------------------------------------------------ */
 $('#btn-profile').dataset.label = 'Read and propose';
-$('#btn-profile').addEventListener('click', async () => {
+$('#btn-profile').addEventListener('click', () => readDrop(false));
+
+async function readDrop(force){
   const btn = $('#btn-profile');
   busy(btn, true, 'reading…');
   try{
@@ -371,16 +378,37 @@ $('#btn-profile').addEventListener('click', async () => {
       source: $('#source').value,
       k_target: $('#k').value,
       offset_key: $('#offsetkey').value,
+      force,
     });
     STATE = j.state; ROWS = j.rows;
     await treatments();
     renderNotes(j.notes);
     renderRows();
+    lockFrom(2);
+    $('#approved').innerHTML = ''; $('#results').innerHTML = '';
     unlock(0, true); unlock(1);
     go(1);
-  }catch(e){ showError(e.message); }
+  }catch(e){
+    if (e.body && e.body.needs_force){
+      $('#err').innerHTML = `<div class="note warn"><b>This would throw away your review</b>
+        ${esc(e.message)}
+        <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+          <button class="ghost" id="btn-keep">Keep my decisions</button>
+          <button class="ghost" id="btn-discard">Discard ${esc(e.body.decided)} decision(s) and read again</button>
+        </div></div>`;
+      $('#btn-keep').onclick = () => { showError(''); go(1); };
+      $('#btn-discard').onclick = () => { showError(''); readDrop(true); };
+    } else showError(e.message);
+  }
   finally{ busy(btn, false); }
-});
+}
+
+/* Steps after a re-read belong to the old drop; lock them again. */
+function lockFrom(n){
+  document.querySelectorAll('.steps button').forEach(b => {
+    if (+b.dataset.step >= n){ b.disabled = true; b.querySelector('.tick').hidden = true; }
+  });
+}
 
 function renderNotes(notes){
   const order = {halt:0, warn:1, info:2};
@@ -423,7 +451,7 @@ function renderRows(){
             ${TREATMENTS.map(t => `<option value="${esc(t)}"${
               r.decision_treatment === t ? ' selected' : ''}>${esc(t)}</option>`).join('')}
           </select>
-          <input type="text" data-f="decision_params" placeholder="entity=subject;prefix=SUBJ"
+          <input type="text" data-f="decision_params" placeholder="parameters, separated by ;"
                  value="${esc(r.decision_params)}">
           <input type="text" data-f="steward_note" placeholder="why you overruled it"
                  value="${esc(r.steward_note)}">
@@ -442,6 +470,13 @@ $('#rows').addEventListener('click', e => {
   if (ROWS[i].decision === 'CHANGE' && !ROWS[i].decision_treatment){
     ROWS[i].decision_treatment = ROWS[i].proposed_treatment;
     ROWS[i].decision_params = ROWS[i].proposed_params || '';
+  } else if (ROWS[i].decision !== 'CHANGE'){
+    /* OK means the proposal as it stands. An override left behind from a
+       Change the steward backed out of is hidden once the boxes collapse,
+       and approval rightly refuses an OK that carries one -- about boxes
+       nobody can see any more. */
+    ROWS[i].decision_treatment = '';
+    ROWS[i].decision_params = '';
   }
   renderRows();
   save([i]);
@@ -461,6 +496,15 @@ function save(idx){
     try{
       const j = await api('/api/decide', {rows: idx.map(i => ({index:i, ...ROWS[i]}))});
       STATE = j.state;
+      if (j.approval_withdrawn){
+        lockFrom(3);
+        $('#approved').innerHTML = `<div class="note warn"><b>Signature withdrawn</b>
+          A decision changed after these rules were signed, so the signature no longer
+          describes them. Sign again before running.</div>`;
+        $('#results').innerHTML = '';
+        const b2 = document.querySelector('.steps button[data-step="2"] .tick');
+        if (b2) b2.hidden = true;
+      }
     }catch(e){ showError(e.message); }
   }, 120);
 }
@@ -500,18 +544,22 @@ $('#btn-approve').addEventListener('click', async () => {
       contract_out: $('#cout').value,
     });
     STATE = j.state;
-    $('#approved').innerHTML = `<div class="note good">
-        <b>Approved</b>${j.stats.accepted} accepted as proposed, ${j.stats.changed} overruled,
-        of ${j.stats.total}.</div>
-      <div class="card"><dl class="kv">
-        <dt>signature</dt><dd>${esc(j.fingerprint)}</dd>
-        ${j.contract_written_to ? `<dt>written to</dt><dd>${esc(j.contract_written_to)}</dd>` : ''}
-      </dl></div>`;
+    renderApproved(j);
     unlock(2, true); unlock(3);
     go(3);
   }catch(e){ showError(e.message); }
   finally{ busy(btn, false); }
 });
+
+function renderApproved(j){
+  $('#approved').innerHTML = `<div class="note good">
+      <b>Approved</b>${j.stats.accepted} accepted as proposed, ${j.stats.changed} overruled,
+      of ${j.stats.total}.</div>
+    <div class="card"><dl class="kv">
+      <dt>signature</dt><dd>${esc(j.fingerprint)}</dd>
+      ${j.contract_written_to ? `<dt>written to</dt><dd>${esc(j.contract_written_to)}</dd>` : ''}
+    </dl></div>`;
+}
 
 /* ---- 04 run ---------------------------------------------------------- */
 $('#btn-run').dataset.label = 'Run';
@@ -534,15 +582,15 @@ $('#btn-run').addEventListener('click', async () => {
 /* ---- 05 results ------------------------------------------------------ */
 function renderResults(j){
   const risk = j.risk || {};
-  const pass = risk.k === undefined ? null : risk.k >= (risk.k_target ?? 0);
+  const pass = risk.k_min === undefined ? null : !!risk.k_met;
   let html = `<pre class="out">${esc(j.summary)}</pre>`;
 
   if (pass !== null){
     html += `<div class="note ${pass ? 'good' : 'halt'}">
-      <b>k = ${esc(risk.k)} against a target of ${esc(risk.k_target)}</b>
+      <b>k = ${esc(risk.k_min)} against a target of ${esc(risk.k_target)}</b>
       ${pass
         ? 'No record sits in an equivalence class smaller than the target.'
-        : `${esc(risk.below_target ?? 0)} record(s) are in classes below it.`}
+        : `${esc(risk.records_below_k ?? 0)} record(s) are in classes below it.`}
       Quasi-identifiers counted: ${esc((risk.quasi_identifiers || []).join(', ') || 'none')}.
       A k computed over site-level columns alone says how many rows share a site, not how
       hard it is to find a person.</div>`;
@@ -593,13 +641,26 @@ async function showQueue(){
 }
 
 /* ---- boot ------------------------------------------------------------ */
+/* The page holds nothing the server does not. Closing the tab or pressing
+   F5 mid-review used to show an empty form, and reading the folder again then
+   discarded every decision on the server too. Now the page asks the server
+   where the review is and goes back there. */
 (async () => {
-  treatments();
+  await treatments();
   try{
-    const j = await api('/api/state');
+    const j = await api('/api/resume');
     STATE = j.state;
     if (STATE.directory) $('#dir').value = STATE.directory;
-  }catch(e){}
+    $('#raw').checked = !!STATE.raw;
+    let at = 0;
+    if (j.rows && j.rows.length){
+      ROWS = j.rows; renderNotes(j.notes); renderRows();
+      unlock(0, true); unlock(1); at = 1;
+    }
+    if (j.approval){ renderApproved(j.approval); unlock(2, true); unlock(3); at = 3; }
+    if (j.run){ renderResults(j.run); unlock(3, true); unlock(4, true); at = 4; }
+    go(at);
+  }catch(e){ /* a fresh server: start at step 1 */ }
 })();
 </script>
 </body>

@@ -181,3 +181,104 @@ def test_a_raw_looking_drop_profiled_without_raw_is_flagged(session, drop):
     levels = {n["level"] for n in out["notes"]}
     assert "warn" in levels
     assert any("raw EDC extract" in n["text"] for n in out["notes"])
+
+
+def test_reading_again_does_not_silently_discard_a_review(session, drop):
+    """A steward who re-clicks Read after an hour of review loses nothing.
+
+    The CLI refuses to overwrite a filled sheet without --force-decisions. The
+    console used to do it without asking, and a browser makes the click easy.
+    """
+    out = web.do_profile(session, {"directory": str(drop), "raw": True})
+    web.do_decide(session, {"rows": [{"index": 0, "decision": "OK"}]})
+
+    with pytest.raises(web.ApiError) as err:
+        web.do_profile(session, {"directory": str(drop), "raw": True})
+    assert err.value.extra["needs_force"] is True
+    assert err.value.extra["decided"] == 1
+    assert session.state()["decided"] == 1  # nothing was touched
+
+    again = web.do_profile(session, {"directory": str(drop), "raw": True, "force": True})
+    assert again["state"]["decided"] == 0
+    assert len(again["rows"]) == len(out["rows"])
+
+
+def test_the_page_can_rebuild_itself_after_a_refresh(session, drop, tmp_path):
+    """Everything the page shows comes back from the server, at every stage."""
+    assert web.do_resume(session)["rows"] == []
+
+    out = web.do_profile(session, {"directory": str(drop), "raw": True})
+    web.do_decide(session, {"rows": [{"index": 0, "decision": "CHANGE",
+                                      "decision_treatment": "drop"}]})
+    back = web.do_resume(session)
+    assert back["rows"][0]["decision"] == "CHANGE"
+    assert back["rows"][0]["decision_treatment"] == "drop"
+    assert back["notes"] == out["notes"]
+    assert back["approval"] is None and back["run"] is None
+
+    web.do_decide(session, {"rows": [
+        {"index": r["index"], "decision": "OK"} for r in out["rows"][1:]
+    ]})
+    web.do_approve(session, {"approved_by": "steward"})
+    assert web.do_resume(session)["approval"]["fingerprint"].startswith("sha256:")
+
+    web.do_run(session, {"out": str(tmp_path / "t"), "vault": str(tmp_path / "v.db")})
+    back = web.do_resume(session)
+    assert back["run"]["queue_rows"] == 0
+    assert "summary" in back["run"]
+
+
+def test_every_risk_field_the_page_reads_is_one_the_server_sends():
+    """The k verdict box never rendered: the page read risk.k, the server sent k_min.
+
+    Nothing failed -- the box was simply absent, and a steward who has never
+    seen it cannot miss it. This ties the page to the payload so a rename on
+    either side breaks a test instead of quietly removing the verdict.
+    """
+    import re
+
+    from deidkit.risk import RiskReport
+
+    page = (Path(web.__file__).parent / "console.html").read_text(encoding="utf-8")
+    read = set(re.findall(r"\brisk\.(\w+)", page))
+    assert read, "the page reads no risk fields at all"
+
+    import inspect
+
+    # the authoritative list: the keys to_dict actually emits
+    sent = set(re.findall(r'"(\w+)":', inspect.getsource(RiskReport.to_dict)))
+    missing = sorted(read - sent)
+    assert not missing, f"the page reads risk fields the server never sends: {missing}"
+
+
+def test_changing_a_decision_after_signing_withdraws_the_signature(session, drop, tmp_path):
+    """Signed rules A, reviewed rules B, published under A -- not possible."""
+    out = web.do_profile(session, {"directory": str(drop), "raw": True})
+    web.do_decide(session, {"rows": [
+        {"index": r["index"], "decision": "OK"} for r in out["rows"]
+    ]})
+    web.do_approve(session, {"approved_by": "steward"})
+    assert session.state()["approved"]
+
+    # re-sending the same decision is not a change
+    same = web.do_decide(session, {"rows": [{"index": 0, "decision": "OK"}]})
+    assert same["approval_withdrawn"] is False
+    assert session.state()["approved"]
+
+    moved = web.do_decide(session, {"rows": [
+        {"index": 0, "decision": "CHANGE", "decision_treatment": "drop"}
+    ]})
+    assert moved["approval_withdrawn"] is True
+    assert not session.state()["approved"]
+    with pytest.raises(web.ApiError, match="not been approved"):
+        web.do_run(session, {"out": str(tmp_path / "t"), "vault": str(tmp_path / "v.db")})
+
+
+def test_the_guide_is_self_contained():
+    page = Path(web.__file__).parent / "guide.html"
+    if not page.exists():
+        pytest.skip("guide not built")
+    text = page.read_text(encoding="utf-8")
+    for host in ("http://", "https://", "//cdn", "googleapis"):
+        # the one http:// allowed is the loopback address the guide tells you to open
+        assert text.replace("http://127.0.0.1", "").count(host) == 0, host
