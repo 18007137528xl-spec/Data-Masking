@@ -167,10 +167,17 @@ step "Profiling the drop and drafting a contract"
 # force tier: lds, which the run output states.
 "$VENV_PY" -m deidkit.cli profile out/quarantine/study_demo \
     -o contracts/demo.yaml --review out/steward_review.csv \
+    --decisions out/plan.csv \
     --keep-dates --blind-treatment 2>&1 | sed 's/^/         /'
 ok "contract draft at contracts/demo.yaml"
+ok "decision sheet at out/plan.csv -- one row per column, open it"
 
-step "Running the pipeline"
+step "Running the pipeline -- WITHOUT a steward's approval"
+warn "nobody has signed off contracts/demo.yaml, so this runs with --unreviewed"
+info "An installer cannot stop and wait for a person, so it takes the escape"
+info "hatch. On real data 'deidkit run' REFUSES an unapproved contract, and the"
+info "manifest below records \"reviewed\": false. The last section shows the two"
+info "commands that do the real round trip -- try them on this synthetic study."
 # --unreviewed: nobody has signed off this contract, and on real data the run
 # would refuse. The manifest records "reviewed": false so this output cannot be
 # mistaken for a published tier. The real path is:
@@ -207,7 +214,21 @@ printf "  Free-text detector : %s\n" "$DETECTOR"
 printf "  Published tier     : out/tier_deidentified\n"
 printf "  Manifest           : out/tier_deidentified/manifest.json\n"
 printf "  Review queue       : out/tier_deidentified/review_queue.csv\n"
-printf "  Steward sheet      : out/steward_review.csv\n\n"
-printf "  ${D}Next: open out/steward_review.csv. Every rule needs a steward's${N}\n"
-printf "  ${D}confirmation before the contract is committed.${N}\n\n"
+printf "  Decision sheet     : out/plan.csv\n"
+printf "  ${Y}Reviewed           : NO -- this ran with --unreviewed${N}\n\n"
+printf "  ${D}The tier above is a demonstration, not a publishable output: no${N}\n"
+printf "  ${D}steward approved the rules it used. To do it properly:${N}\n\n"
+printf "  1. open ${C}out/plan.csv${N} -- one row per column, lowest confidence first\n"
+printf "     put ${C}OK${N} in the decision column to accept a proposal, or\n"
+printf "     ${C}CHANGE${N} plus a decision_treatment to overrule it.\n"
+printf "     A blank row blocks the run. That is the whole point.\n\n"
+printf "  2. sign it off, and run again against the approved contract:\n\n"
+printf "     ${D}.venv/bin/python -m deidkit.cli approve out/plan.csv \\${N}\n"
+printf "     ${D}    -c contracts/demo.yaml --data out/quarantine/study_demo \\${N}\n"
+printf "     ${D}    -o contracts/demo.approved.yaml --approved-by you@example.com${N}\n\n"
+printf "     ${D}.venv/bin/python -m deidkit.cli run out/quarantine/study_demo \\${N}\n"
+printf "     ${D}    -c contracts/demo.approved.yaml -o out/tier_reviewed \\${N}\n"
+printf "     ${D}    --vault out/vault/demo.db --format csv${N}\n\n"
+printf "  ${D}The second command has no --unreviewed, and it will only work${N}\n"
+printf "  ${D}because of the first.${N}\n\n"
 printf "  ${D}In a new shell: source .venv/bin/activate  (then: deidkit --help)${N}\n\n"

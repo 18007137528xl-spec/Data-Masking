@@ -43,12 +43,13 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "out" / "pair_demo"
 
 C = "\033[36m"
+Y = "\033[33m"
 G = "\033[32m"
 R = "\033[31m"
 D = "\033[90m"
 N = "\033[0m"
 if not sys.stdout.isatty():
-    C = G = R = D = N = ""
+    C = G = R = D = Y = N = ""
 
 STUDY = "TIG-2026-001"
 FAILED = False
@@ -276,8 +277,12 @@ def main() -> int:
         return 1
     print(f"  {G}Pair verified.{N} Both sides de-identified; the mapping between")
     print("  them survived intact, which is what makes them training examples.\n")
-    print(f"  {D}Next: read out/pair_demo/raw_steward_review.csv. Every rule needs a{N}")
-    print(f"  {D}steward's confirmation before the contract is committed.{N}\n")
+    print(f"  {Y}Reviewed: NO{N} -- both sides ran with --unreviewed, and both")
+    print("  manifests record it. This is a demonstration of the pair, not a")
+    print("  publishable corpus: no steward approved the rules that produced it.\n")
+    print(f"  {D}For the review round trip, add --decisions to either profile call{N}")
+    print(f"  {D}above, fill in the sheet, then 'deidkit approve' it. Without an{N}")
+    print(f"  {D}approval, 'deidkit run' refuses the contract.{N}\n")
     return 0
 
 
