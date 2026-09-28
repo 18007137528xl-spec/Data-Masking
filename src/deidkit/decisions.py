@@ -307,7 +307,13 @@ def encode_params(rule: FieldRule) -> str:
         if key == "on_unparsed" and value == "fail":
             continue
         if isinstance(value, list):
-            bits.append(f"{key}={','.join(str(v) for v in value)}")
+            # 0,18,40 rather than 0.0,18.0,40.0 -- band edges are read by a
+            # person in a spreadsheet cell, and both parse back the same.
+            rendered = [
+                str(int(v)) if isinstance(v, float) and v.is_integer() else str(v)
+                for v in value
+            ]
+            bits.append(f"{key}={','.join(rendered)}")
         else:
             bits.append(f"{key}={value}")
     return "; ".join(bits)
@@ -401,9 +407,15 @@ def carry_forward(sheet: pd.DataFrame, previous: Contract) -> pd.DataFrame:
 
     On the second drop of a study, most columns are the ones a steward
     already ruled on. Asking again for all of them turns review into a
-    formality, so a column whose proposed rule is byte-identical to the
-    approved one comes back pre-filled -- and every column that is new, or
-    whose rule changed, comes back blank and therefore blocking.
+    formality, so an existing decision comes back pre-filled:
+
+    * proposal identical to what was approved -> ``OK``
+    * proposal differs from what was approved -> ``CHANGE`` carrying the
+      approved treatment and parameters, because a standing override should
+      not have to be re-argued on every drop
+    * column nobody has ever ruled on -> blank, and therefore blocking
+
+    So the rows that come back needing attention are exactly the new ones.
 
     Only ever called with a contract that carries an approval, because
     carrying a decision forward from a draft would be inventing one.

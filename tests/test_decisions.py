@@ -422,3 +422,54 @@ def test_documented_requirements_match_the_validators():
             kw = {k: samples[k] for k in required - {drop}}
             with pytest.raises(Exception):
                 FieldRule(column="X", treatment=Treatment(name), **kw)
+
+
+# ----------------------------------------------------------------------
+# carrying decisions forward
+# ----------------------------------------------------------------------
+def test_carry_forward_reproduces_the_previous_approval(study):
+    """The second drop must not re-litigate settled decisions.
+
+    An accepted proposal comes back OK; an override comes back as that
+    override, not as the profiler's proposal and not as a blank. Approving the
+    carried sheet unchanged must therefore yield the same rules as last time --
+    otherwise 'carry forward' quietly changes what was agreed.
+    """
+    frames, _ = load_study(study)
+    contract, suggestions = draft_contract(frames, source="T", sdtm_conformant=True)
+    sheet = dec.build_sheet(contract, suggestions)
+    sheet["decision"] = "OK"
+    # one override, so there is something non-trivial to carry
+    mask = (sheet["domain"] == "DM") & (sheet["column"] == "AGE")
+    sheet.loc[mask, ["decision", "decision_treatment", "decision_params"]] = [
+        "CHANGE",
+        "generalize_numeric",
+        "bins=0,18,40,65,90",
+    ]
+    first, _ = dec.apply_sheet(sheet, contract, approved_by="steward@example.com")
+
+    # A fresh profile of the same data, carrying the approval forward.
+    contract2, suggestions2 = draft_contract(
+        frames, source="T", sdtm_conformant=True
+    )
+    sheet2 = dec.carry_forward(dec.build_sheet(contract2, suggestions2), first)
+    assert (sheet2["decision"] != "").all(), "nothing should still need a decision"
+    carried = sheet2[sheet2["decision"] == "CHANGE"]
+    assert list(carried["column"]) == ["AGE"]
+    assert carried.iloc[0]["decision_treatment"] == "generalize_numeric"
+
+    second, stats = dec.apply_sheet(
+        sheet2, contract2, approved_by="steward@example.com"
+    )
+    assert stats["changed"] == 1
+    rule = second.domain("DM").rule("AGE")
+    assert rule.treatment is Treatment.GENERALIZE_NUMERIC
+    assert rule.bins == [0.0, 18.0, 40.0, 65.0, 90.0]
+    # Same rules in, same digest out.
+    assert second.rules_digest() == first.rules_digest()
+
+
+def test_carry_forward_refuses_an_unapproved_source(drafted):
+    _, contract, sheet = drafted
+    with pytest.raises(dec.DecisionError, match="unapproved"):
+        dec.carry_forward(sheet, contract)
