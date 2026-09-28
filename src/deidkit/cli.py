@@ -247,6 +247,17 @@ def cmd_profile(args: argparse.Namespace) -> int:
     print(f"profiled {len(frames)} domain(s): {', '.join(sorted(frames))}")
     print(f"drafted {len(table)} column rules")
     print(f"anchor: {contract.anchor.domain}.{contract.anchor.date_column}")
+    anchor_cols = set(map(str, frames.get(contract.anchor.domain, pd.DataFrame()).columns))
+    if contract.anchor.date_column not in anchor_cols:
+        print(
+            f"        WARNING: {contract.anchor.date_column} is not in "
+            f"{contract.anchor.domain}. No reference start date was found, and "
+            "audit\n        timestamps (ENTRYDTC, LASTUPDDTC) are deliberately "
+            "not used as one -- they date\n        the paperwork, not the "
+            "patient. Any study-day conversion will refuse to run.\n"
+            "        Point --anchor-domain/--anchor-date at the real "
+            "randomisation or first-dose date."
+        )
     if args.raw:
         print(
             "dates : shifted per subject, written format preserved "

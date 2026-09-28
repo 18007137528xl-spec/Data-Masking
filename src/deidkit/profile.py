@@ -182,6 +182,10 @@ _RETAIN_SUFFIXES = (
     "TEST", "SPEC", "POS", "LOC", "LAT", "DIR", "METHOD", "BLFL", "DRVFL",
     "STAT", "REASND", "TPT", "TPTNUM", "ELTM", "TOXGR", "GRPID", "REFID",
     "DOSE", "DOSU", "DOSFRM", "DOSFRQ", "ROUTE", "ONGO",
+    # EX and general measurement variables. Deliberately NOT --INTRSN or
+    # --ADJ: "reason for interruption" is often prose, and listing it here
+    # would run ahead of the free-text check and publish it unscreened.
+    "DUR", "VOL", "VOLU", "RATE", "PDOSE", "PDOSEL", "LOT", "YN",
     # relative-timing flags: ONGOING / BEFORE / DURING / AFTER
     "ENRF", "STRF", "ENRTPT", "STRTPT", "ENTPT",
     # reference-range and baseline indicators
@@ -233,7 +237,7 @@ _DROP_PATTERN = re.compile(
 #: carry an identifier. CMDECOD is the coded counterpart and stays untouched.
 _VERBATIM_SUFFIXES = ("TERM", "TRT", "MODIFY", "LLT", "PTCD", "SPID")
 _FREETEXT_NAMES = re.compile(
-    r"(TERM|COMMENT|CMNT|NARR|NARRATIVE|DESC|DESCRIP|REASON|SPECIFY|"
+    r"(TERM|COMMENT|COMM|CMNT|NARR|NARRATIVE|DESC|DESCRIP|REASON|SPECIFY|"
     r"OTH|OTHER|NOTE|TEXT)$"
 )
 
@@ -400,9 +404,63 @@ def suggest(
             "high",
             "site identifier",
         )
+    # --- EDC operational metadata -------------------------------------
+    # A raw export carries the system's own bookkeeping beside the clinical
+    # data, and none of these names appear in SDTM, so every one of them fell
+    # through to "unrecognised -> retain". Two of them are identifiers.
+    if _SITE_NAME.search(up):
+        return Suggestion(
+            rule(
+                Treatment.SURROGATE_ID,
+                entity="site",
+                prefix="SITE",
+                note="the site's NAME, not its code. SITEID already gets a "
+                "surrogate; leaving 'Massachusetts General Hospital' beside it "
+                "makes that surrogate decorative, and a named institution is a "
+                "strong geographic identifier on its own. Surrogated into the "
+                "same namespace as SITEID so the two stay consistent.",
+            ),
+            "high",
+            "site name (institution)",
+        )
+
+    if _EDC_USER.search(up):
+        return Suggestion(
+            rule(
+                Treatment.DROP,
+                note="an EDC user field: the coordinator, CRA or coder who "
+                "touched the record. That is a person's name or login, and "
+                "this contract already drops INVNAM for the same reason -- "
+                "same thing, different system's name for it. Drop unless the "
+                "audit trail is genuinely needed, in which case surrogate it "
+                "into a 'staff' namespace rather than retaining it.",
+            ),
+            "high",
+            "EDC user / audit name",
+        )
+
     if named(_DROP_EXACT) or _DROP_PATTERN.search(up):
         return Suggestion(
             rule(Treatment.DROP), "high", "direct identifier, no analytic value"
+        )
+
+    if _AUDIT_DATE.search(up) and (
+        up.endswith("DTC") or up.endswith("DT") or profile.looks_date
+        or profile.looks_raw_date
+    ):
+        return Suggestion(
+            rule(
+                Treatment.DROP,
+                note="an audit timestamp: when the record was entered, "
+                "updated, monitored or exported. It dates the paperwork, not "
+                "the patient, so converting it to a study day would give a "
+                "number that reads like a clinical interval and is not one. "
+                "It also tracks real calendar time closely enough to help "
+                "re-identify. Keep it only if the audit trail is in scope, "
+                "and then shift it like any other date.",
+            ),
+            "medium",
+            "EDC audit timestamp",
         )
 
     # --- dates, found by their values (raw EDC) -----------------------
@@ -687,6 +745,34 @@ def suggest(
             "postal geography",
         )
 
+    # --- times of day --------------------------------------------------
+    if up.endswith(("TIM", "TIME")) and not up.endswith("LIFETIME"):
+        return Suggestion(
+            rule(
+                Treatment.RETAIN,
+                note="a time of day. Harmless once its date has become a "
+                "study day -- there is no calendar left for it to sharpen. On "
+                "an LDS, where the date is retained, the pair is a finer date "
+                "element than the date alone: check that is intended.",
+            ),
+            "medium",
+            "time of day",
+        )
+
+    # --- EDC structural keys ---------------------------------------------
+    if _EDC_STRUCTURAL.search(up):
+        return Suggestion(
+            rule(
+                Treatment.RETAIN,
+                note="an EDC structural key (form, folder, page). Not "
+                "clinical content and not an identifier of a person, but it "
+                "is system bookkeeping -- keep it only if something "
+                "downstream joins on it.",
+            ),
+            "medium",
+            "EDC structural key",
+        )
+
     # --- record keys ---------------------------------------------------
     if any(up.endswith(s) for s in _SEQUENCE_SUFFIXES):
         return Suggestion(
@@ -745,6 +831,38 @@ def suggest(
 # ----------------------------------------------------------------------
 
 
+#: Audit and workflow timestamps an EDC writes for itself. They are dates,
+#: but they date the paperwork rather than the patient, so they must never be
+#: chosen as the study-day anchor and should not be read as clinical events.
+_AUDIT_DATE = re.compile(
+    r"(ENTRY|ENTERED|CREATED|MODIF|UPDAT|LASTUPD|LOCKED|SIGNED|VERIF|REVIEW|"
+    r"SDV|QUERY|EXPORT|EXTRACT|TRANSFER|RECEIV|LOAD)"
+)
+
+#: EDC user fields. "Last updated by" is a person -- the coordinator or CRA
+#: who touched the record -- and the project already drops INVNAM for exactly
+#: this reason. Same thing, different system's name for it.
+_EDC_USER = re.compile(
+    r"(ENTEREDBY|CREATEDBY|MODIFIEDBY|UPDATEDBY|LASTUPDBY|LOCKEDBY|SIGNEDBY|"
+    r"VERIFIEDBY|REVIEWEDBY|APPROVEDBY|OWNER|USERNAME|USERID|USERNM|"
+    r"CODERNAME|MONITORNAME|CRANAME)"
+)
+
+#: The name of a site, not its code. SITEID gets a surrogate; leaving
+#: SITENAME beside it as "Massachusetts General Hospital" makes that
+#: surrogate decorative, and a named institution is a strong geographic
+#: identifier in its own right.
+_SITE_NAME = re.compile(
+    r"(SITENAME|SITENM|SITETITLE|SITEDESC|INSTITUTION|CENTRENAME|CENTERNAME|"
+    r"HOSPITAL|CLINICNAME|FACILITYNAME)"
+)
+
+#: EDC form/page/folder keys. System bookkeeping, not clinical content.
+_EDC_STRUCTURAL = re.compile(
+    r"(FOLDEROID|FOLDERNAME|FORMOID|FORMNAME|DATAPAGEID|PAGEOID|ITEMOID|"
+    r"ITEMGROUPOID|INSTANCEID|RECORDPOSITION|PAGEREPEATKEY|LOGLINE)"
+)
+
 #: Subject-key names seen in raw EDC exports, in the order they are trusted.
 #: A raw extract has no USUBJID; without a subject key the domain has no
 #: offset to shift by, and every date in it would pass through unshifted.
@@ -791,7 +909,18 @@ def draft_contract(
         anchor_date_column = next(
             (c for c in candidates if c in cols),
             next(
-                (c for c in frames[anchor_domain].columns if str(c).endswith("DTC")),
+                (
+                    c
+                    for c in frames[anchor_domain].columns
+                    # A raw EDC extract has no RFSTDTC, and the fallback used
+                    # to take the first column ending in DTC -- which in a
+                    # Rave export is ENTRYDTC, the moment a coordinator typed
+                    # the record in. Anchoring study day to data entry makes
+                    # every derived day wrong, quietly, and the numbers still
+                    # look like study days.
+                    if str(c).endswith("DTC")
+                    and not _AUDIT_DATE.search(str(c).upper())
+                ),
                 "RFSTDTC",
             ),
         )
@@ -852,9 +981,11 @@ def draft_contract(
                 subject_key=(
                     subject_column
                     if subject_column in frame.columns
+                    # Not only in raw mode. A Rave export has SUBJID and no
+                    # USUBJID, and a domain with no subject key silently has
+                    # no anchor and no date offset -- every date treatment in
+                    # it then does nothing, or nothing correct.
                     else _raw_subject_key(frame)
-                    if raw_edc
-                    else None
                 ),
                 join_key_template=join_key_template,
                 retained_in_full=name.upper() in RETAINED_IN_FULL,
