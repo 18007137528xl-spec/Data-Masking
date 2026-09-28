@@ -173,12 +173,32 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 _AMBIGUOUS_NUMERIC = re.compile(r"^\d{1,2}[/.\-]\d{1,2}[/.\-]\d{4}$")
 
 
+#: Text that means "no value". "<NA>" and "NaT" are in here because pandas
+#: renders its own missing markers that way, and a missing value that reaches
+#: a parser as the four characters <NA> is indistinguishable from a value.
+_BLANK_TOKENS = frozenset(
+    {"NA", "NAN", "NONE", "UNK", "UNKNOWN", ".", "", "NULL", "<NA>", "NAT",
+     "N/A", "-", "MISSING"}
+)
+
+
 def _blank(v: object) -> bool:
-    if v is None or (isinstance(v, float) and pd.isna(v)):
+    """Is this missing, however this particular container spells missing?
+
+    ``isinstance(v, float) and isna(v)`` covered numpy's NaN and nothing else,
+    so pandas' own pd.NA and pd.NaT fell through to str() -- which renders
+    them "<NA>" and "NaT" -- and 63 empty cells were reported as dates in an
+    unrecognised format. One dtype change upstream was enough to turn missing
+    values into a halt.
+    """
+    if v is None:
         return True
-    return not str(v).strip() or str(v).strip().upper() in {
-        "NA", "NAN", "NONE", "UNK", "UNKNOWN", ".", "", "NULL"
-    }
+    try:
+        if pd.isna(v):
+            return True
+    except (TypeError, ValueError):  # pragma: no cover - array-like input
+        pass
+    return not str(v).strip() or str(v).strip().upper() in _BLANK_TOKENS
 
 
 def infer_order(values: pd.Series) -> Order:
