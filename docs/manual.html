@@ -241,7 +241,7 @@ $env:DEIDKIT_VAULT_KEY = (Get-Content out\dev-vault.key -Raw).Trim()
   <pre><code>deidkit console on http://127.0.0.1:8765
   the vault key is read from this process's environment, not the browser
   Ctrl-C to stop</code></pre>
-  <p>在同一台机器上开浏览器，访问 <code>http://127.0.0.1:8765</code>。左边栏最下方的 <span class="ui">使用指南 · Guide</span> 是逐屏带截图的操作指南，交给审阅的同事看那一份就够了。</p>
+  <p>在同一台机器上开浏览器，访问 <code>http://127.0.0.1:8765</code>。左边栏最下方的 <span class="ui">User guide</span> 是逐屏带截图的操作指南（英文），交给审阅的同事看那一份就够了。</p>
   <div class="note you">
     <span class="tag">这个窗口一直开着</span>
     <p>这个 PowerShell 窗口<strong>就是控制台本身</strong>。关掉它网页就打不开了；要停就在里面按 <kbd>Ctrl</kbd>+<kbd>C</kbd>。报 <code>Address already in use</code> 说明端口被占，换一个：<code>serve --port 9000</code>，网页地址跟着改成 <code>:9000</code>。</p>
