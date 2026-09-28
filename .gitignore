@@ -1,0 +1,11 @@
+out/
+*.db
+*.destroyed.json
+__pycache__/
+*.egg-info/
+.pytest_cache/
+
+# Never commit a key or a crosswalk. The .gitignore is a backstop, not the
+# control -- the real control is that these live outside the repo entirely.
+*.blob
+dev-vault.key

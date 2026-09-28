@@ -1,0 +1,29 @@
+# Line endings matter here, not as tidiness but as correctness.
+#
+# setup.bat and setup.ps1 are run on Windows and must arrive with CRLF: a
+# batch file checked out with bare LF endings can misbehave. setup.sh runs on
+# Linux and must arrive with LF, or bash fails with an obscure "\r: command
+# not found". Without these rules, a clone on the other platform breaks the
+# installer, and the failure looks like a bug in the tool.
+
+* text=auto eol=lf
+
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+
+*.sh  text eol=lf
+
+# Data and binary formats: never touch.
+*.xpt      binary
+*.sas7bdat binary
+*.parquet  binary
+*.db       binary
+*.key      binary
+*.blob     binary
+*.png      binary
+*.zip      binary
+*.tar.gz   binary
+
+# Keep CSV diffs readable in review -- steward review sheets are read in PRs.
+*.csv text eol=lf
