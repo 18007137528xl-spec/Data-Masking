@@ -90,9 +90,12 @@ class RawDate:
     year: int | None
     month: int | None
     day: int | None
-    #: A strftime-like template with {y} {m} {d} {mon} {MON} placeholders.
+    #: A strftime-like template with {y} {m} {d} {mon} {MON} placeholders,
+    #: plus {tail} for a time of day that came with the value.
     template: str
     granularity: Literal["day", "month", "year", "none"]
+    #: Time of day as written, or None. Preserved, never interpreted.
+    tail: str | None = None
 
     def to_date(self) -> date | None:
         if self.granularity != "day" or not (self.year and self.month and self.day):
@@ -105,6 +108,7 @@ class RawDate:
     def render(self, y: int, m: int | None, d: int | None) -> str:
         return (
             self.template
+            .replace("{tail}", self.tail or "")
             .replace("{y}", f"{y:04d}")
             .replace("{yy}", f"{y % 100:02d}")
             .replace("{m}", f"{m:02d}" if m else "")
@@ -117,6 +121,30 @@ class RawDate:
 # Ordered: the first pattern that matches wins, so put the unambiguous
 # month-name and ISO forms ahead of the all-numeric ones.
 _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # 2025-03-19 00:00:00 / 2025-03-19T14:30 -- what an Excel cell typed as a
+    # datetime looks like once it is read back as text, and what most EDC
+    # exports of a date-time field look like. The time is carried through
+    # unchanged: shifting by whole days does not disturb a time of day, and
+    # dropping it here would delete recorded data.
+    (
+        re.compile(
+            r"^(?P<y>\d{4})-(?P<m>\d{2})-(?P<d>\d{2})"
+            r"[T ](?P<tail>\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)$"
+        ),
+        "{y}-{m}-{d} {tail}",
+    ),
+    # An all-numeric date with a clock on the end is STILL ambiguous about
+    # day and month -- a time tells you nothing about the order -- so it goes
+    # through the same a/b branch as the bare form. Naming these d and m here
+    # would hardcode d/m/y and put 03/04/2025 08:15 in the wrong month, which
+    # is the exact mistake this module exists to refuse.
+    (
+        re.compile(
+            r"^(?P<a>\d{1,2})(?P<sep>[/.\-])(?P<b>\d{1,2})(?P=sep)(?P<y>\d{4})"
+            r"[T ](?P<tail>\d{2}:\d{2}(?::\d{2})?)$"
+        ),
+        "{a}/{b}/{y} {tail}",
+    ),
     # 2025-03-19  2025-03  2025
     (re.compile(r"^(?P<y>\d{4})-(?P<m>\d{2})-(?P<d>\d{2})$"), "{y}-{m}-{d}"),
     (re.compile(r"^(?P<y>\d{4})-(?P<m>\d{2})$"), "{y}-{m}"),
@@ -208,9 +236,13 @@ def parse(value: object, order: Order = "unknown") -> RawDate | None:
                 mo, d = a, b
             else:
                 return None  # ambiguous and undeclared: refuse to guess
-            # Keep the written order in the template.
+            # Keep the written order AND the written separator.
             tmpl = tmpl.replace("{a}", "{d}" if order == "dmy" else "{m}")
             tmpl = tmpl.replace("{b}", "{m}" if order == "dmy" else "{d}")
+            if gd.get("sep"):
+                tmpl = tmpl.replace("/", gd["sep"]).replace(
+                    f"{gd['sep']}{{tail}}", " {tail}"
+                )
         else:
             mo = (
                 _MONTHS.get(gd["mon"].lower()) if gd.get("mon")
@@ -219,7 +251,10 @@ def parse(value: object, order: Order = "unknown") -> RawDate | None:
             d = int(gd["d"]) if gd.get("d") else None
 
         gran = "day" if d else ("month" if mo else ("year" if y else "none"))
-        return RawDate(y, mo, d, tmpl, gran)
+        # An all-numeric form with a time has its month in m2, because "m"
+        # would have made the ambiguous branch fire on a value that is not
+        # ambiguous: a d/m/y with a clock on the end still needs the order.
+        return RawDate(y, mo, d, tmpl, gran, gd.get("tail"))
     return None
 
 
