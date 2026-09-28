@@ -492,3 +492,44 @@ def test_a_string_column_with_pd_na_shifts_without_halting(vault):
     assert shift.report["passed_through"] == 0, shift.report
     assert shift.report["shifted"] == 2
     assert shift.values.isna().sum() == 2
+
+
+def test_the_anchor_subject_column_comes_from_the_data_not_from_sdtm():
+    """USUBJID is an SDTM name, and a raw extract does not use it.
+
+    The contract used to hardcode it into the anchor. On a Rave export whose
+    subject column is SUBJECT, that produced a contract naming a column that
+    does not exist -- and nothing said so until 'run' raised MissingAnchor,
+    after the steward had already reviewed and signed the sheet.
+    """
+    raw = {
+        "LB": pd.DataFrame(
+            {
+                "SUBJECT": ["001-001", "001-002"],
+                "LBTEST": ["Sodium", "Sodium"],
+                "LBDAT": ["19/03/2025", "20/03/2025"],
+            }
+        )
+    }
+    contract, _ = draft_contract(raw, source="s", raw_edc=True)
+    assert contract.anchor.subject_column == "SUBJECT"
+
+    sdtm = {
+        "DM": pd.DataFrame(
+            {"USUBJID": ["S-001"], "RFSTDTC": ["2025-03-19"], "SUBJID": ["001"]}
+        )
+    }
+    contract, _ = draft_contract(sdtm, source="s")
+    assert contract.anchor.subject_column == "USUBJID"
+
+
+def test_an_explicit_anchor_subject_wins():
+    frames = {
+        "LB": pd.DataFrame(
+            {"SUBJECT": ["001"], "PATID": ["X1"], "LBDAT": ["19/03/2025"]}
+        )
+    }
+    contract, _ = draft_contract(
+        frames, source="s", raw_edc=True, subject_column="PATID"
+    )
+    assert contract.anchor.subject_column == "PATID"
