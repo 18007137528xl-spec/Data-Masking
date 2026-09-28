@@ -82,6 +82,50 @@ def _load_contract(path: str) -> Contract:
         ) from None
 
 
+def _check_writable(*paths: str | None) -> str | None:
+    """Confirm every output path can be written, before doing any work.
+
+    Returns an error message, or None.
+
+    This exists because of a specific and very ordinary Windows failure. A
+    steward is told to open the decision sheet; they open it in Excel; Excel
+    takes an exclusive lock; the next run gets through profiling all seven
+    domains, prints a full summary ending in "contract draft written", and only
+    then dies in a pandas traceback about errno 13. Everything about that is
+    misleading: the work is wasted, the summary implies success, and the
+    message names a library rather than the spreadsheet holding the file.
+
+    A file this tool is about to overwrite is a file it can check first.
+    """
+    for path in paths:
+        if not path:
+            continue
+        target = Path(path)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return f"cannot create the folder for {path}: {exc}"
+        try:
+            if target.exists():
+                with open(target, "r+b"):
+                    pass
+            else:
+                # Touch and remove, so a pre-flight check leaves nothing behind.
+                with open(target, "wb"):
+                    pass
+                target.unlink()
+        except PermissionError:
+            return (
+                f"cannot write {path} -- it is locked by another program.\n"
+                "On Windows that is almost always Excel holding the file open. "
+                "Close it and\nrun this again, or write somewhere else with a "
+                "different output path.\nNothing has been changed."
+            )
+        except OSError as exc:
+            return f"cannot write {path}: {exc}\nNothing has been changed."
+    return None
+
+
 def _operator(args: argparse.Namespace) -> str:
     return args.operator or os.environ.get("USER") or "unknown"
 
@@ -133,6 +177,10 @@ def cmd_keygen(args: argparse.Namespace) -> int:
 
 
 def cmd_profile(args: argparse.Namespace) -> int:
+    # Before profiling seven domains, check the three files this will write.
+    if problem := _check_writable(args.out, args.review, args.decisions):
+        return _err(problem)
+
     frames, _ = dio.load_study(args.directory)
     if not frames:
         return _err(f"no readable tables in {args.directory}")
@@ -284,6 +332,8 @@ def cmd_treatments(args: argparse.Namespace) -> int:
 
 
 def cmd_approve(args: argparse.Namespace) -> int:
+    if problem := _check_writable(args.out):
+        return _err(problem)
     try:
         contract = _load_contract(args.contract)
     except ContractLoadError as exc:
@@ -376,6 +426,16 @@ def cmd_run(args: argparse.Namespace) -> int:
     if not frames:
         return _err(f"no readable tables in {args.directory}")
 
+    # The manifest and the review queue are written last, after every domain
+    # has been transformed and the risk measured. A lock on either -- the queue
+    # is a CSV, so someone is adjudicating it in Excel -- would throw that away
+    # at the final step, so both are checked up front.
+    out_dir = str(args.out).rstrip("/").rstrip("\\")
+    manifest_path = args.manifest or f"{out_dir}/manifest.json"
+    queue_path = args.review or f"{out_dir}_review/review_queue.csv"
+    if problem := _check_writable(manifest_path, queue_path):
+        return _err(problem)
+
     try:
         vault = _open_vault(args)
     except VaultError as exc:
@@ -395,7 +455,6 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     written = dio.write_study(result.frames, args.out, fmt=args.format)
 
-    manifest_path = args.manifest or f"{str(args.out).rstrip('/')}/manifest.json"
     result.manifest["vault"] = {"key_source": vault.key_source}
     # Recorded either way. A manifest that is silent about review lets an
     # unreviewed run be mistaken for a reviewed one later, which is exactly
@@ -415,8 +474,6 @@ def cmd_run(args: argparse.Namespace) -> int:
     # The queue holds the ORIGINAL text of every flagged row -- unredacted PHI,
     # and in a blinded study the compound name. It must not sit in the
     # directory analysts read, so it goes to a sibling by default.
-    out_dir = str(args.out).rstrip("/")
-    queue_path = args.review or f"{out_dir}_review/review_queue.csv"
     if not result.review_queue.empty:
         dio.write_text(result.review_queue.to_csv(index=False), queue_path)
 
