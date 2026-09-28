@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Install deidkit and run a self-check against synthetic data.
+# Install deidkit and test the install on invented data.
 #
-# The Linux/macOS counterpart of setup.ps1. No real subject data is involved:
-# the synthetic study is entirely fabricated.
+# The Linux/macOS counterpart of setup.ps1. The install test runs on a
+# fabricated study: no real data is read, nothing is signed. Real drops are
+# reviewed and signed off in the console (./serve.sh).
 #
-#   ./setup.sh                 full install, all extras, self-check
+#   ./setup.sh                 full install, all extras, install test
 #   ./setup.sh --core          core dependencies only
 #   ./setup.sh --skip-model    skip the 560 MB spaCy model
-#   ./setup.sh --skip-check    install only
+#   ./setup.sh --skip-check    install only, no install test
 
 set -euo pipefail
 
@@ -105,8 +106,10 @@ else
 fi
 
 if [ "$SKIP_CHECK" = "1" ]; then
-    step "Skipping the self-check (requested)"
-    printf "\n${G}Installation complete.${N}\n\n"; exit 0
+    step "Skipping the install test (requested)"
+    printf "\n${G}Installation complete, but untested.${N}\n"
+    printf "No development key was made, so set DEIDKIT_KEY_URI (or\n"
+    printf "DEIDKIT_VAULT_KEY) before you run ./serve.sh.\n\n"; exit 0
 fi
 
 # ----------------------------------------------------------------------
@@ -161,63 +164,37 @@ rm -rf out/tier_deidentified out/tier_deidentified_review contracts/demo.yaml
 ok "removed the previous tier, review directory and draft contract"
 info "keeping .venv and out/dev-vault.key: both are reused on purpose"
 
-step "Profiling the drop and drafting a contract"
+step "Install test: profiling the invented study"
+info "this exercises the pipeline on fabricated data only. Nothing here is"
+info "a review: there is no decision sheet to fill in and nothing to sign."
 # --keep-dates and --blind-treatment are the configuration this project
 # asked for: dates retained as recorded, treatment names relabelled. Dates
 # force tier: lds, which the run output states.
-# If a decision sheet already carries decisions, someone has reviewed it, and
-# re-profiling would overwrite an afternoon's work that exists in exactly one
-# place. So the sheet is left alone and only the draft is refreshed.
-FILLED=0
-if [ -f out/plan.csv ]; then
-    FILLED=$("$VENV_PY" - <<'PY' 2>/dev/null || echo 0
-import pandas as pd
-try:
-    f = pd.read_csv("out/plan.csv", dtype=str, keep_default_na=False,
-                    encoding="utf-8-sig")
-    print(int((f.get("decision", pd.Series(dtype=str)).astype(str).str.strip() != "").sum()))
-except Exception:
-    print(0)
-PY
-)
-fi
+# The profiler's own output is written for a steward reviewing real data
+# ("the steward MUST review...", "this is a DRAFT"). None of that applies to an
+# invented study, so it is shown only if the step fails.
+PROFILE_OUT=$("$VENV_PY" -m deidkit.cli profile out/quarantine/study_demo \
+    -o contracts/demo.yaml --keep-dates --blind-treatment 2>&1) || {
+    printf '%s\n' "$PROFILE_OUT" | sed 's/^/         /'
+    fail "profile failed"; exit 1
+}
+ok "test contract drafted"
 
-DECISION_ARGS=(--decisions out/plan.csv)
-if [ "${FILLED:-0}" -gt 0 ]; then
-    DECISION_ARGS=()
-    warn "out/plan.csv already has $FILLED decision(s): leaving it untouched"
-    info "Re-profiling would overwrite a review that exists in one place only."
-    info "To use it:  .venv/bin/python -m deidkit.cli approve out/plan.csv \\"
-    info "              -c contracts/demo.yaml --data out/quarantine/study_demo \\"
-    info "              -o contracts/demo.approved.yaml --approved-by you@example.com"
-fi
-
-"$VENV_PY" -m deidkit.cli profile out/quarantine/study_demo \
-    -o contracts/demo.yaml --review out/steward_review.csv \
-    "${DECISION_ARGS[@]}" \
-    --keep-dates --blind-treatment 2>&1 | sed 's/^/         /'
-ok "contract draft at contracts/demo.yaml"
-[ "${FILLED:-0}" -gt 0 ] || ok "decision sheet at out/plan.csv -- one row per column, open it"
-
-step "Running the pipeline -- WITHOUT a steward's approval"
-warn "nobody has signed off contracts/demo.yaml, so this runs with --unreviewed"
-info "An installer cannot stop and wait for a person, so it takes the escape"
-info "hatch. On real data 'deidkit run' REFUSES an unapproved contract, and the"
-info "manifest below records \"reviewed\": false. The last section shows the two"
-info "commands that do the real round trip -- try them on this synthetic study."
-# --unreviewed: nobody has signed off this contract, and on real data the run
-# would refuse. The manifest records "reviewed": false so this output cannot be
-# mistaken for a published tier. The real path is:
-#   deidkit profile <dir> --decisions plan.csv   (fill in the decision column)
-#   deidkit approve plan.csv -c <draft> --data <dir> -o approved.yaml
-"$VENV_PY" -m deidkit.cli run out/quarantine/study_demo \
+step "Install test: running the pipeline on the invented study"
+# --unreviewed is the escape hatch for synthetic data and CI: an installer has
+# no one to approve anything. On real data 'deidkit run' refuses an unapproved
+# contract, and the manifest here records "reviewed": false, so this output can
+# never pass for a published tier. Real sign-off happens in the console.
+RUN_OUT=$("$VENV_PY" -m deidkit.cli run out/quarantine/study_demo \
     -c contracts/demo.yaml -o out/tier_deidentified --unreviewed \
-    --vault out/vault/demo.db --operator "${USER:-unknown}" --format csv 2>&1 |
-    sed 's/^/         /'
-ok "published tier at out/tier_deidentified"
+    --vault out/vault/demo.db --operator "${USER:-unknown}" --format csv 2>&1) || {
+    printf '%s\n' "$RUN_OUT" | sed 's/^/         /'
+    fail "pipeline run failed"; exit 1
+}
+ok "test output at out/tier_deidentified"
 
 # ----------------------------------------------------------------------
-step "Checking the published tier against the design guarantees"
+step "Install test: checking the output against the design guarantees"
 CHECK_OUT=$("$VENV_PY" scripts/selfcheck.py \
     out/quarantine/study_demo out/tier_deidentified 2>&1) && CHECK_RC=0 || CHECK_RC=$?
 while IFS= read -r line; do
@@ -238,26 +215,9 @@ if [ "$FAILED" = "1" ]; then
 fi
 printf "  ${G}Setup complete and verified.${N}\n\n"
 printf "  Free-text detector : %s\n" "$DETECTOR"
-printf "  Published tier     : out/tier_deidentified\n"
-printf "  Manifest           : out/tier_deidentified/manifest.json\n"
-printf "  Review queue       : out/tier_deidentified/review_queue.csv\n"
-printf "  Decision sheet     : out/plan.csv\n"
-printf "  ${Y}Reviewed           : NO -- this ran with --unreviewed${N}\n\n"
-printf "  ${D}The tier above is a demonstration, not a publishable output: no${N}\n"
-printf "  ${D}steward approved the rules it used. To do it properly:${N}\n\n"
-printf "  1. open ${C}out/plan.csv${N} -- one row per column, lowest confidence first\n"
-printf "     put ${C}OK${N} in the decision column to accept a proposal, or\n"
-printf "     ${C}CHANGE${N} plus a decision_treatment to overrule it.\n"
-printf "     A blank row blocks the run. That is the whole point.\n\n"
-printf "  2. sign it off, and run again against the approved contract:\n\n"
-printf "     ${D}%s${N}\n" '.venv/bin/python -m deidkit.cli approve out/plan.csv \'
-printf "     ${D}%s${N}\n" '    -c contracts/demo.yaml --data out/quarantine/study_demo \'
-printf "     ${D}    -o contracts/demo.approved.yaml --approved-by you@example.com${N}\n\n"
-printf "     ${D}%s${N}\n" '.venv/bin/python -m deidkit.cli run out/quarantine/study_demo \'
-printf "     ${D}%s${N}\n" '    -c contracts/demo.approved.yaml -o out/tier_reviewed \'
-printf "     ${D}    --vault out/vault/demo.db --format csv${N}\n\n"
-printf "  ${D}The second command has no --unreviewed, and it will only work${N}\n"
-printf "  ${D}because of the first.${N}\n\n"
-printf "  To review a real drop in the browser instead: ./serve.sh\n"
-printf "  It starts the console and opens it for you.\n\n"
+printf "  ${D}Install test       : passed, on invented data (out/tier_deidentified)${N}\n"
+printf "  ${D}                     nothing to open or sign there -- it can be deleted${N}\n\n"
+printf "  ${C}Ready. To de-identify a real drop, run ./serve.sh in this folder.${N}\n"
+printf "  ${C}It starts the console and opens it in your browser; the review${N}\n"
+printf "  ${C}and the sign-off both happen there.${N}\n\n"
 printf "  ${D}In a new shell: source .venv/bin/activate  (then: deidkit --help)${N}\n\n"

@@ -102,12 +102,14 @@ detail:
 setup.bat               # Windows -- double-click; it launches setup.ps1
 ```
 
-Both create a virtualenv, install dependencies, fabricate a synthetic study,
-run the pipeline, and assert the design guarantees against the published
-output.
+Both create a virtualenv, install dependencies, and run an install test: a
+fabricated study goes through the pipeline and the design guarantees are
+asserted against the output. The test reads no real data and asks for no
+sign-off; setup ends by pointing you at `serve.bat` / `./serve.sh`, where real
+drops are reviewed and signed.
 
 Flags: `--core` skips the optional extras, `--skip-model` skips the 560 MB
-spaCy download, `--skip-check` installs without running the pipeline. On
+spaCy download, `--skip-check` installs without the install test. On
 Windows, `setup.bat` accepts both these and the native PowerShell spellings
 (`-Core`, `-SkipModel`, `-SkipSelfCheck`); `setup.ps1`, called directly, takes
 only the PowerShell ones.

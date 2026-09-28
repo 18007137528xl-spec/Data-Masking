@@ -1,14 +1,15 @@
 <#
 .SYNOPSIS
-    Install deidkit on Windows and run a self-check against synthetic data.
+    Install deidkit on Windows and test the install on invented data.
 
 .DESCRIPTION
     Double-click setup.bat to run this. It creates a virtual environment,
     installs dependencies, generates a fabricated study, runs the pipeline
-    end to end, and verifies the guarantees the design promises.
+    over it end to end, and verifies the guarantees the design promises.
 
-    No real subject data is involved at any point. The synthetic study is
-    entirely fabricated.
+    This is an install test, not a review. No real subject data is read at
+    any point, nothing is signed, and nothing it writes is meant to be used.
+    Real drops are reviewed and signed off in the console (serve.bat).
 
 .PARAMETER Core
     Install only core dependencies, skipping Presidio, the SAS readers,
@@ -21,7 +22,7 @@
     detector -- the self-check reports which one is actually active.
 
 .PARAMETER SkipSelfCheck
-    Install only; do not generate synthetic data or run the pipeline.
+    Install only; skip the install test on invented data.
 #>
 
 [CmdletBinding()]
@@ -211,8 +212,10 @@ if ($detector -eq 'presidio') {
 }
 
 if ($SkipSelfCheck) {
-    Write-Step "Skipping the self-check (requested)"
-    Write-Host "`nInstallation complete.`n" -ForegroundColor Green
+    Write-Step "Skipping the install test (requested)"
+    Write-Host "`nInstallation complete, but untested." -ForegroundColor Green
+    Write-Host "No development key was made, so set DEIDKIT_KEY_URI (or"
+    Write-Host "DEIDKIT_VAULT_KEY) before you double-click serve.bat.`n"
     exit 0
 }
 
@@ -298,69 +301,37 @@ foreach ($stale in @(
 Write-Ok "removed the previous tier, review directory and draft contract"
 Write-Info "keeping .venv and out\dev-vault.key: both are reused on purpose"
 
-Write-Step "Profiling the drop and drafting a contract"
+Write-Step "Install test: profiling the invented study"
+Write-Info "this exercises the pipeline on fabricated data only. Nothing here is"
+Write-Info "a review: there is no decision sheet to fill in and nothing to sign."
 
 # --keep-dates and --blind-treatment are the configuration this project asked
 # for: dates retained as recorded, treatment names relabelled. Retaining dates
 # forces tier: lds, which the run output states.
-# If a decision sheet already carries decisions, someone has reviewed it, and
-# re-profiling would overwrite an afternoon's work that exists in exactly one
-# place. So the sheet is left alone and only the draft is refreshed.
-$filled = 0
-if (Test-Path 'out\plan.csv') {
-    $probe = Invoke-Native $venvPython @('-c', @'
-import pandas as pd
-try:
-    f = pd.read_csv("out/plan.csv", dtype=str, keep_default_na=False, encoding="utf-8-sig")
-    print(int((f.get("decision", pd.Series(dtype=str)).astype(str).str.strip() != "").sum()))
-except Exception:
-    print(0)
-'@)
-    if ($probe.Ok) { [int]::TryParse($probe.Text.Trim(), [ref]$filled) | Out-Null }
-}
+$r = Invoke-Native $venvPython @('-m','deidkit.cli','profile','out\quarantine\study_demo',
+    '-o','contracts\demo.yaml','--keep-dates','--blind-treatment')
+# The profiler's own output is written for a steward reviewing real data
+# ("the steward MUST review...", "this is a DRAFT"). None of that applies to an
+# invented study, so it is shown only if the step fails.
+if (-not $r.Ok) { $r.Output | ForEach-Object { Write-Info $_ }; Write-Fail "profile failed"; exit 1 }
+Write-Ok "test contract drafted"
 
-$decisionArgs = @('--decisions','out\plan.csv')
-if ($filled -gt 0) {
-    $decisionArgs = @()
-    Write-Warn "out\plan.csv already has $filled decision(s): leaving it untouched"
-    Write-Info "Re-profiling would overwrite a review that exists in one place only."
-    Write-Info "To use it:  .venv\Scripts\python.exe -m deidkit.cli approve out\plan.csv ``"
-    Write-Info "              -c contracts\demo.yaml --data out\quarantine\study_demo ``"
-    Write-Info "              -o contracts\demo.approved.yaml --approved-by you@example.com"
-}
-
-$r = Invoke-Native $venvPython (@('-m','deidkit.cli','profile','out\quarantine\study_demo',
-    '-o','contracts\demo.yaml','--review','out\steward_review.csv') +
-    $decisionArgs + @('--keep-dates','--blind-treatment'))
-$r.Output | ForEach-Object { Write-Info $_ }
-if (-not $r.Ok) { Write-Fail "profile failed"; exit 1 }
-Write-Ok "contract draft at contracts\demo.yaml"
-if ($filled -eq 0) { Write-Ok "decision sheet at out\plan.csv -- one row per column, open it" }
-
-Write-Step "Running the pipeline -- WITHOUT a steward's approval"
-Write-Warn "nobody has signed off contracts\demo.yaml, so this runs with --unreviewed"
-Write-Info "An installer cannot stop and wait for a person, so it takes the escape"
-Write-Info "hatch. On real data 'deidkit run' REFUSES an unapproved contract, and the"
-Write-Info "manifest below records reviewed: false. The last section shows the two"
-Write-Info "commands that do the real round trip -- try them on this synthetic study."
-
+Write-Step "Install test: running the pipeline on the invented study"
+# --unreviewed is the escape hatch for synthetic data and CI: an installer has
+# no one to approve anything. On real data 'deidkit run' refuses an unapproved
+# contract, and the manifest here records "reviewed": false, so this output can
+# never pass for a published tier. Real sign-off happens in the console.
 $operator = if ($env:USERNAME) { $env:USERNAME } else { 'unknown' }
-# --unreviewed: nobody has signed off this contract, and on real data the run
-# would refuse. The manifest records "reviewed": false so this output cannot be
-# mistaken for a published tier. The real path is:
-#   deidkit profile <dir> --decisions plan.csv   (fill in the decision column)
-#   deidkit approve plan.csv -c <draft> --data <dir> -o approved.yaml
 $r = Invoke-Native $venvPython @('-m','deidkit.cli','run','out\quarantine\study_demo',
     '-c','contracts\demo.yaml','-o','out\tier_deidentified',
     '--vault','out\vault\demo.db','--operator',$operator,'--unreviewed','--format','csv')
-$r.Output | ForEach-Object { Write-Info $_ }
-if (-not $r.Ok) { Write-Fail "pipeline run failed"; exit 1 }
-Write-Ok "published tier at out\tier_deidentified"
+if (-not $r.Ok) { $r.Output | ForEach-Object { Write-Info $_ }; Write-Fail "pipeline run failed"; exit 1 }
+Write-Ok "test output at out\tier_deidentified"
 
 # ----------------------------------------------------------------------
 # 10. assert the guarantees on the real output
 # ----------------------------------------------------------------------
-Write-Step "Checking the published tier against the design guarantees"
+Write-Step "Install test: checking the output against the design guarantees"
 
 $r = Invoke-Native $venvPython @('scripts\selfcheck.py',
     'out\quarantine\study_demo','out\tier_deidentified')
@@ -385,35 +356,12 @@ if ($script:failed) {
 Write-Host "  Setup complete and verified." -ForegroundColor Green
 Write-Host ""
 Write-Host "  Free-text detector : $detector"
-Write-Host "  Published tier     : out\tier_deidentified"
-Write-Host "  Manifest           : out\tier_deidentified\manifest.json"
-Write-Host "  Review queue       : out\tier_deidentified\review_queue.csv"
-Write-Host "  Decision sheet     : out\plan.csv"
-Write-Host "  Reviewed           : NO -- this ran with --unreviewed" -ForegroundColor Yellow
+Write-Host "  Install test       : passed, on invented data (out\tier_deidentified)" -ForegroundColor DarkGray
+Write-Host "                       nothing to open or sign there -- it can be deleted" -ForegroundColor DarkGray
 Write-Host ""
-Write-Host "  The tier above is a demonstration, not a publishable output: no" -ForegroundColor DarkGray
-Write-Host "  steward approved the rules it used. To do it properly:" -ForegroundColor DarkGray
-Write-Host ""
-Write-Host "  1. open out\plan.csv -- one row per column, lowest confidence first"
-Write-Host "     put OK in the decision column to accept a proposal, or CHANGE"
-Write-Host "     plus a decision_treatment to overrule it."
-Write-Host "     A blank row blocks the run. That is the whole point."
-Write-Host ""
-Write-Host "  2. sign it off, and run again against the approved contract:"
-Write-Host ""
-Write-Host "     .venv\Scripts\python.exe -m deidkit.cli approve out\plan.csv ``" -ForegroundColor DarkGray
-Write-Host "         -c contracts\demo.yaml --data out\quarantine\study_demo ``" -ForegroundColor DarkGray
-Write-Host "         -o contracts\demo.approved.yaml --approved-by you@example.com" -ForegroundColor DarkGray
-Write-Host ""
-Write-Host "     .venv\Scripts\python.exe -m deidkit.cli run out\quarantine\study_demo ``" -ForegroundColor DarkGray
-Write-Host "         -c contracts\demo.approved.yaml -o out\tier_reviewed ``" -ForegroundColor DarkGray
-Write-Host "         --vault out\vault\demo.db --format csv" -ForegroundColor DarkGray
-Write-Host ""
-Write-Host "  The second command has no --unreviewed, and it will only work" -ForegroundColor DarkGray
-Write-Host "  because of the first." -ForegroundColor DarkGray
-Write-Host ""
-Write-Host "  To review a real drop in the browser instead: double-click serve.bat" -ForegroundColor Cyan
-Write-Host "  in this folder. It starts the console and opens it for you." -ForegroundColor Cyan
+Write-Host "  Ready. To de-identify a real drop, double-click serve.bat in this" -ForegroundColor Cyan
+Write-Host "  folder. It starts the console and opens it in your browser; the" -ForegroundColor Cyan
+Write-Host "  review and the sign-off both happen there." -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  To use the tools directly in a new shell:" -ForegroundColor DarkGray
 Write-Host "    .venv\Scripts\Activate.ps1        (then: deidkit --help)" -ForegroundColor DarkGray
