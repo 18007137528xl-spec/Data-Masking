@@ -709,3 +709,65 @@ def test_review_queue_is_not_a_domain_and_not_published(tmp_path):
     (tier / "manifest.json").write_text("{}")
 
     assert set(discover(tier)) == {"DM"}, "the queue must not be read back as data"
+
+
+# ----------------------------------------------------------------------
+# verbatim or controlled vocabulary?
+# ----------------------------------------------------------------------
+def test_textcheck_distinguishes_a_picklist_from_typed_text():
+    """--TERM is the investigator's wording and --DECOD is the MedDRA term,
+    but some EDC builds make the site pick from a coded list. Which one you
+    have decides whether the column needs adjudication, so measure it."""
+    from deidkit.textcheck import characterise
+
+    # A pick-list: the term IS the coded term, every time.
+    picklist = pd.DataFrame(
+        {
+            "AETERM": ["Headache", "Nausea", "Headache", "Rash"],
+            "AEDECOD": ["Headache", "Nausea", "Headache", "Rash"],
+        }
+    )
+    assert characterise(picklist, "AETERM").verdict == "controlled"
+
+    # Typed text: abbreviations, added detail, and an identifier.
+    typed = pd.DataFrame(
+        {
+            "AETERM": [
+                "Elevated ALT",
+                "mild nausea after dosing",
+                "Fell at St Mary's Hospital, seen by Dr. Okafor",
+                "Headache",
+            ],
+            "AEDECOD": [
+                "Alanine aminotransferase increased",
+                "Nausea",
+                "Fall",
+                "Headache",
+            ],
+        }
+    )
+    assert characterise(typed, "AETERM").verdict == "verbatim"
+
+
+def test_textcheck_fails_toward_review():
+    """Calling verbatim text 'controlled' skips review and publishes whatever
+    was typed; the reverse wastes a reviewer's minutes. One weak signal must
+    not buy 'controlled'."""
+    from deidkit.textcheck import characterise
+
+    # Short, one term per code, no detector hits -- but the wording still
+    # diverges from the coding, which is a human writing shorthand.
+    shorthand = pd.DataFrame(
+        {
+            "MHTERM": ["GERD", "Crohn disease", "Asthma", "Hypertension"],
+            "MHDECOD": [
+                "Gastrooesophageal reflux disease",
+                "Crohn's disease",
+                "Asthma",
+                "Hypertension",
+            ],
+        }
+    )
+    p = characterise(shorthand, "MHTERM")
+    assert p.verdict == "mixed", p.verdict
+    assert p.match_coded_rate is not None and p.match_coded_rate < 0.95
