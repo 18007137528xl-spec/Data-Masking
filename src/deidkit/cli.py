@@ -125,6 +125,7 @@ def cmd_profile(args: argparse.Namespace) -> int:
     contract.to_yaml(args.out)
     print(f"contract draft written to {args.out}")
     if args.review:
+        Path(args.review).parent.mkdir(parents=True, exist_ok=True)
         table.to_csv(args.review, index=False)
         print(f"steward review sheet written to {args.review}")
     print(
