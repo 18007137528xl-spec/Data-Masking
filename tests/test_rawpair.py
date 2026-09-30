@@ -834,3 +834,121 @@ def test_profile_finds_the_embedded_site_on_its_own():
     contract, _ = draft_contract(frames, source="s", raw_edc=True)
     rules = {f.column: f for f in contract.domains[0].fields}
     assert rules["SUBJECT"].shape_prefix_from is None
+
+
+# ----------------------------------------------------------------------
+# raw exports named the EDC way, with CDASH column names
+# ----------------------------------------------------------------------
+from deidkit.profile import domain_code  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "name,code",
+    [
+        ("AE", "AE"),
+        ("EDC_MH_RAWDATA_US_BDM-AI-2025-001", "MH"),
+        ("EDC_DM_RAWDATA_US_BDM-AI-2025-001", "DM"),
+        ("demog", None),
+        ("EDC_AE_MH_MERGED", None),  # two codes: not guessed at
+        ("IS_EXPORT", None),  # English words are not domain codes
+    ],
+)
+def test_the_domain_is_read_out_of_a_raw_file_name(name, code):
+    assert domain_code(name) == code
+
+
+def _cdash_study(mh_start: list[str]) -> dict[str, pd.DataFrame]:
+    subjects = [f"1001-{i:03d}" for i in range(1, 7)]
+    dm = pd.DataFrame({
+        "SUBJECT": subjects,
+        "SITE": ["1001"] * 6,
+        "BRTHDAT": ["12MAR1961", "03JAN1975", "28FEB1980",
+                    "19JUL1955", "01DEC1990", "15AUG1968"],
+        "SEX": ["M", "F", "F", "M", "F", "M"],
+    })
+    mh = pd.DataFrame({
+        "SUBJECT": subjects,
+        "MHTERM": ["Hypertension", "Asthma", "Migraine",
+                   "Gout", "Eczema", "Type 2 diabetes"],
+        "MHSOCCD": ["10047065", "10038738", "10029205",
+                    "10027433", "10040785", "10027433"],
+        "MHSTDAT": mh_start,
+        "MHENDAT": ["19MAR2021", "02FEB2020", "11NOV2019",
+                    "30APR2022", "07JUN2018", "23SEP2021"],
+        "MHENDD": ["19", "02", "11", "30", "07", "23"],
+        "MHENMO": ["MAR", "FEB", "NOV", "APR", "JUN", "SEP"],
+        "MHENYY": ["2021", "2020", "2019", "2022", "2018", "2021"],
+    })
+    # Deliberately MH first: the anchor must be found by name, not position.
+    return {
+        "EDC_MH_RAWDATA_US_BDM-AI-2025-001": mh,
+        "EDC_DM_RAWDATA_US_BDM-AI-2025-001": dm,
+    }
+
+
+def _rules(contract, domain):
+    d = next(x for x in contract.domains if x.name == domain)
+    return d, {f.column: f for f in d.fields}
+
+
+MH_FILE = "EDC_MH_RAWDATA_US_BDM-AI-2025-001"
+DM_FILE = "EDC_DM_RAWDATA_US_BDM-AI-2025-001"
+
+
+def test_cdash_columns_in_a_raw_export_are_recognised():
+    frames = _cdash_study(["19MAR2015", "UN-JAN-2012", "2008", "05MAY2010",
+                           "UN-UNK-1999", "14OCT2016"])
+    contract, sugg = draft_contract(frames, source="s", raw_edc=True)
+    mh, rules = _rules(contract, MH_FILE)
+
+    # MH is MH even when the file is called EDC_MH_RAWDATA_...
+    assert mh.retained_in_full
+    # and DM is the anchor even when it is not the first file
+    assert contract.risk.domain == DM_FILE
+
+    for col in ("MHSTDAT", "MHENDAT"):
+        assert rules[col].treatment is Treatment.DATE_SHIFT_RAW, col
+        assert sugg[MH_FILE][col].rationale != "unrecognised"
+    # the day, month and year of MHENDAT, collected in their own fields
+    for col in ("MHENDD", "MHENMO", "MHENYY"):
+        assert rules[col].treatment is Treatment.DROP, col
+        assert rules[col].redundant_with == "MHENDAT"
+    assert rules["MHSOCCD"].treatment is Treatment.RETAIN
+    assert sugg[MH_FILE]["MHSOCCD"].confidence == "high"
+
+
+def test_a_cdash_date_found_only_by_name_says_so():
+    frames = _cdash_study(["UN-UNK-2015"] * 6)
+    _, sugg = draft_contract(frames, source="s", raw_edc=True)
+    s = sugg[MH_FILE]["MHSTDAT"]
+    assert s.rule.treatment is Treatment.DATE_SHIFT_RAW
+    assert s.rule.on_unparsed == "fail"  # nothing unshifted slips through
+    assert s.confidence != "high"
+    assert "CDASH" in s.rationale
+
+
+def test_a_cdash_date_outside_raw_mode_is_not_retained():
+    frames = _cdash_study(["19MAR2015"] * 6)
+    _, sugg = draft_contract(frames, source="s")
+    assert sugg[MH_FILE]["MHSTDAT"].rule.treatment is Treatment.DROP
+    _, sugg = draft_contract(frames, source="s", keep_dates=True)
+    assert sugg[MH_FILE]["MHSTDAT"].rule.treatment is Treatment.RETAIN
+
+
+def test_a_raw_mh_file_with_edc_bookkeeping_still_drafts():
+    frames = _cdash_study(["19MAR2015"] * 6)
+    frames[MH_FILE]["INVESTIGATOR"] = ["Dr A Smith"] * 6
+    contract, _ = draft_contract(frames, source="s", raw_edc=True)
+    mh, rules = _rules(contract, MH_FILE)
+    assert rules["INVESTIGATOR"].treatment is Treatment.DROP
+    assert not mh.retained_in_full
+
+
+def test_the_date_pieces_are_gone_and_the_date_is_shifted(vault):
+    frames = _cdash_study(["19MAR2015", "02JAN2012", "08AUG2008", "05MAY2010",
+                           "30NOV1999", "14OCT2016"])
+    contract, _ = draft_contract(frames, source="s", raw_edc=True)
+    out = DeidPipeline(contract, vault, operator="pytest").run(frames, checksums={})
+    mh = out.frames[MH_FILE]
+    assert not {"MHENDD", "MHENMO", "MHENYY"} & set(mh.columns)
+    assert (mh["MHENDAT"] != frames[MH_FILE]["MHENDAT"].values).all()

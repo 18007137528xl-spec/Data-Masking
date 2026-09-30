@@ -203,6 +203,33 @@ def profile_frame(frame: pd.DataFrame) -> dict[str, ColumnProfile]:
 #: Domains retained in full by decision. Rare coded terms are NOT pooled here.
 RETAINED_IN_FULL: frozenset[str] = frozenset({"MH", "AE", "FA", "CE"})
 
+#: SDTM domain codes that can be read out of a raw export's file name. Two-
+#: letter English words that turn up in file names for other reasons (IS, CO,
+#: SE, TA, TE, TI, TS, DA, DD, HO) are left out on purpose: a false match
+#: would put the wrong file in the anchor seat.
+_DOMAIN_CODES: frozenset[str] = frozenset({
+    "DM", "AE", "MH", "CM", "EX", "EC", "LB", "VS", "EG", "PE", "DS", "DV",
+    "CE", "FA", "SU", "PR", "IE", "QS", "SC", "TU", "TR", "RS", "MB", "MS",
+    "PC", "PP",
+})
+
+
+def domain_code(name: str) -> str | None:
+    """The SDTM domain a file is, when its name says so.
+
+    An SDTM drop names files ``ae.xpt``, so the domain is the stem. A raw EDC
+    export does not: ``EDC_MH_RAWDATA_US_STUDY-001.xlsx`` is medical history,
+    and reading it as a domain called ``EDC_MH_RAWDATA_US_STUDY-001`` meant MH
+    was not retained in full and DM was never found for the anchor. The code
+    is taken from the name's tokens, and only when exactly one code appears --
+    a name that could be two domains is not guessed at.
+    """
+    up = str(name).upper()
+    if up in _DOMAIN_CODES:
+        return up
+    found = {t for t in re.split(r"[^A-Z0-9]+", up) if t in _DOMAIN_CODES}
+    return found.pop() if len(found) == 1 else None
+
 _SUBJECT_KEYS = {"USUBJID", "SUBJID"}
 _SITE_KEYS = {"SITEID", "SITEGR1", "SITENUM"}
 
@@ -221,6 +248,9 @@ _RETAIN_SUFFIXES = (
     "TEST", "SPEC", "POS", "LOC", "LAT", "DIR", "METHOD", "BLFL", "DRVFL",
     "STAT", "REASND", "TPT", "TPTNUM", "ELTM", "TOXGR", "GRPID", "REFID",
     "DOSE", "DOSU", "DOSFRM", "DOSFRQ", "ROUTE", "ONGO",
+    # MedDRA coding as raw EDC exports it: MHSOCCD, AEPTCD, AELLT. Dictionary
+    # codes and terms, not anything the subject or site wrote.
+    "SOCCD", "PTCD", "LLTCD", "HLTCD", "HLGTCD", "SOC", "LLT", "HLT", "HLGT",
     # EX and general measurement variables. Deliberately NOT --INTRSN or
     # --ADJ: "reason for interruption" is often prose, and listing it here
     # would run ahead of the free-text check and publish it unscreened.
@@ -540,11 +570,41 @@ def suggest(
             "EDC audit timestamp",
         )
 
+    # --- a date collected in pieces ------------------------------------
+    # CDASH lets a form ask for day, month and year in separate fields, and a
+    # raw export ships them beside the assembled --DAT. Shifting MHENDAT while
+    # MHENDD and MHENMO keep the real day and month publishes the date anyway,
+    # one field over -- and day and month are exactly the date elements HIPAA
+    # names. The assembled date carries everything, so the pieces go.
+    whole = _date_part_of(up, sibling_columns)
+    if whole:
+        if keep_dates:
+            return Suggestion(
+                rule(
+                    Treatment.RETAIN,
+                    note=f"part of {whole}, retained with it (tier: lds)",
+                ),
+                "high",
+                f"date component of {whole}, retained (LDS)",
+            )
+        return Suggestion(
+            rule(
+                Treatment.DROP,
+                redundant_with=whole,
+                note=f"a piece of {whole} (day, month or year collected in "
+                f"its own field). {whole} is shifted; keeping this piece "
+                "unshifted would publish the real date beside it.",
+            ),
+            "high",
+            f"date component of {whole}",
+        )
+
     # --- dates, found by their values (raw EDC) -----------------------
     # Ahead of every name-based branch below, because in a raw extract the
     # values are the stronger evidence: VISIT_DT is a date column whose name
     # reduces to VISIT, and a name-first reading of it retains real dates.
-    if raw_edc and (profile.looks_raw_date or profile.looks_date):
+    by_values = profile.looks_raw_date or profile.looks_date
+    if raw_edc and (by_values or _is_cdash_date(up)):
         # The raw side of a training pair. Same per-subject offset as the SDTM
         # side (same vault, same subject key), but re-emitted in the form it
         # arrived in: the conversion from that form to ISO is the label the
@@ -557,7 +617,7 @@ def suggest(
         # where HIPAA treats the age itself as an identifier and the SDTM side
         # of this same pair caps it at 90+. Left alone, the raw tier publishes
         # what the SDTM tier deliberately withheld.
-        is_dob = named({"BRTHDTC", "BIRTHDTC", "DOB", "BIRTH", "BIRTHDATE"})
+        is_dob = named({"BRTHDTC", "BRTHDAT", "BIRTHDTC", "DOB", "BIRTH", "BIRTHDATE"})
         if is_dob:
             return Suggestion(
                 rule(
@@ -585,7 +645,16 @@ def suggest(
                 is_date=True,
                 date_order=None if order in {"unambiguous", "unknown"} else order,
                 note=(
-                    "shifted by the subject's vault offset, keeping the written "
+                    (
+                        ""
+                        if by_values
+                        else "REVIEW: named as a CDASH date, but only "
+                        f"{profile.raw_date_rate:.0%} of its values read as one. "
+                        "Any value the parser cannot read halts the run "
+                        "(on_unparsed: fail) and is reported by format, so "
+                        "nothing unshifted publishes. "
+                    )
+                    + "shifted by the subject's vault offset, keeping the written "
                     f"format ({', '.join(profile.raw_date_formats) or 'mixed'}). "
                     + (
                         f"day/month order established from the data: {order}"
@@ -602,12 +671,39 @@ def suggest(
                     )
                 ),
             ),
-            "high" if settled else "low",
+            "high" if settled and by_values else "medium" if settled else "low",
             "raw date, format-preserving shift"
+            + ("" if by_values else " (recognised by its CDASH name)")
             if settled
             else "raw date, day/month order UNRESOLVED",
         )
 
+
+    # A --DAT whose values are not ISO, outside raw mode. No date treatment
+    # here can read it, and retaining it publishes real dates.
+    if (
+        not raw_edc
+        and _is_cdash_date(up)
+        and not (up.endswith("DTC") or profile.looks_date)
+    ):
+        if keep_dates:
+            return Suggestion(
+                rule(Treatment.RETAIN, note="retained as recorded (tier: lds)"),
+                "medium",
+                "CDASH date, retained (LDS)",
+            )
+        return Suggestion(
+            rule(
+                Treatment.DROP,
+                note="REVIEW: named as a CDASH collected date, but its values "
+                "are not ISO dates, so no SDTM date treatment can read them. "
+                "If this is a raw EDC extract, read it again with Raw EDC "
+                "ticked: that route shifts it in its own written format. "
+                "Dropped until then, because retaining it publishes real dates.",
+            ),
+            "low",
+            "CDASH date, not ISO -- raw extract?",
+        )
 
     # --- dose and regimen give the arm away ------------------------------
     if blind_treatment and up in _DOSE_COLUMNS:
@@ -877,7 +973,7 @@ def suggest(
             "screened, not rewritten: candidates go to a review queue and "
             "unflagged rows publish as received"
         )
-        if domain.upper() in RETAINED_IN_FULL:
+        if (domain_code(domain) or domain.upper()) in RETAINED_IN_FULL:
             note += "; required for regulatory review in this domain"
         return Suggestion(
             rule(Treatment.SCREEN_FREETEXT, note=note),
@@ -911,6 +1007,32 @@ def suggest(
 #: Audit and workflow timestamps an EDC writes for itself. They are dates,
 #: but they date the paperwork rather than the patient, so they must never be
 #: chosen as the study-day anchor and should not be read as clinical events.
+#: The pieces a CDASH form collects a date in when it asks for day, month and
+#: year separately: MHSTDD / MHSTMO / MHSTYY beside MHSTDAT.
+_DATE_PART_SUFFIXES = ("YYYY", "MONTH", "YEAR", "MON", "DAY", "DD", "MO", "MM", "YY", "YR")
+
+
+def _is_cdash_date(up: str) -> bool:
+    """--DAT is CDASH's collected date: MHSTDAT, AEENDAT, VISDAT, BRTHDAT."""
+    return len(up) >= 5 and up.endswith("DAT") and not _AUDIT_DATE.search(up)
+
+
+def _date_part_of(up: str, siblings: frozenset[str]) -> str | None:
+    """The --DAT column this one is a piece of, if it is one.
+
+    Only by structure: MHENDD counts as a day only because MHENDAT sits beside
+    it. A bare suffix match would take any column ending in MO or DD.
+    """
+    squeezed = {re.sub(r"[ _\-.]", "", c): c for c in siblings}
+    for tag in _DATE_PART_SUFFIXES:
+        if up.endswith(tag) and len(up) > len(tag) + 1:
+            stem = up[: -len(tag)]
+            for whole in (stem + "DAT", stem + "DTC", stem + "DT"):
+                if whole in squeezed:
+                    return squeezed[whole]
+    return None
+
+
 _AUDIT_DATE = re.compile(
     r"(ENTRY|ENTERED|CREATED|MODIF|UPDAT|LASTUPD|LOCKED|SIGNED|VERIF|REVIEW|"
     r"SDV|QUERY|EXPORT|EXTRACT|TRANSFER|RECEIV|LOAD)"
@@ -1032,7 +1154,16 @@ def draft_contract(
     Returns the contract and the per-column suggestions, so the CLI can print
     confidence and rationale alongside for the steward to review.
     """
-    anchor_domain = anchor_domain or ("DM" if "DM" in frames else next(iter(frames)))
+    if anchor_domain is None:
+        # DM by name, or the one file whose name says it is DM
+        # (EDC_DM_RAWDATA_...). Without the second step a raw export anchored
+        # on whichever file came first, and k was counted on its rows.
+        dm_files = [n for n in frames if domain_code(n) == "DM"]
+        anchor_domain = (
+            "DM" if "DM" in frames
+            else dm_files[0] if len(dm_files) == 1
+            else next(iter(frames))
+        )
     if subject_column is None:
         # USUBJID is an SDTM construct. It is the right name when the drop is
         # SDTM and the wrong name almost everywhere else: a Rave or Medidata
@@ -1114,24 +1245,48 @@ def draft_contract(
 
         _link_embedded_site(frame, per_col)
 
+        # A piece of a date names its whole as the survivor. When the whole is
+        # itself dropped (a --DAT outside raw mode), the claim is false and the
+        # contract rightly refuses it, so the claim goes and the drop stays.
+        by_col = {c.upper(): sg for c, sg in per_col.items()}
+        for col, sug in per_col.items():
+            survivor = by_col.get((sug.rule.redundant_with or "").upper())
+            if survivor is not None and survivor.rule.treatment is Treatment.DROP:
+                per_col[col] = Suggestion(
+                    sug.rule.model_copy(update={"redundant_with": None}),
+                    sug.confidence,
+                    sug.rationale,
+                )
+
         suggestions[name] = per_col
-        domains.append(
-            DomainContract(
-                name=name,
-                subject_key=(
-                    subject_column
-                    if subject_column in frame.columns
-                    # Not only in raw mode. A Rave export has SUBJID and no
-                    # USUBJID, and a domain with no subject key silently has
-                    # no anchor and no date offset -- every date treatment in
-                    # it then does nothing, or nothing correct.
-                    else _raw_subject_key(frame)
-                ),
-                join_key_template=join_key_template,
-                retained_in_full=name.upper() in RETAINED_IN_FULL,
-                fields=[s.rule for s in per_col.values()],
-            )
+        spec = dict(
+            name=name,
+            subject_key=(
+                subject_column
+                if subject_column in frame.columns
+                # Not only in raw mode. A Rave export has SUBJID and no
+                # USUBJID, and a domain with no subject key silently has
+                # no anchor and no date offset -- every date treatment in
+                # it then does nothing, or nothing correct.
+                else _raw_subject_key(frame)
+            ),
+            join_key_template=join_key_template,
+            fields=[s.rule for s in per_col.values()],
         )
+        if name.upper() in RETAINED_IN_FULL:
+            domains.append(DomainContract(**spec, retained_in_full=True))
+        elif domain_code(name) in RETAINED_IN_FULL:
+            # Known only from the file name (EDC_MH_RAWDATA_...). A raw export
+            # carries EDC bookkeeping an SDTM domain does not -- audit stamps,
+            # the coordinator's name -- and dropping those contradicts
+            # "retained in full". The declaration is made when the rules bear
+            # it out, rather than failing a draft over a file name.
+            try:
+                domains.append(DomainContract(**spec, retained_in_full=True))
+            except ValueError:
+                domains.append(DomainContract(**spec, retained_in_full=False))
+        else:
+            domains.append(DomainContract(**spec, retained_in_full=False))
 
     if keep_dates and tier != "lds":
         # Not a silent override: retaining calendar dates is only lawful on an
