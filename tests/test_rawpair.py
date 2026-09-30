@@ -22,6 +22,7 @@ What is asserted, and what breaks if it is not:
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -952,3 +953,83 @@ def test_the_date_pieces_are_gone_and_the_date_is_shifted(vault):
     mh = out.frames[MH_FILE]
     assert not {"MHENDD", "MHENMO", "MHENYY"} & set(mh.columns)
     assert (mh["MHENDAT"] != frames[MH_FILE]["MHENDAT"].values).all()
+
+
+# ----------------------------------------------------------------------
+# partial dates with the unknown parts written out: UN-JAN-2020
+# ----------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "value,order,gran",
+    [
+        ("UN-JAN-2020", None, "month"),
+        ("UNK-JAN-2020", None, "month"),
+        ("UN JAN 2020", None, "month"),
+        ("UNJAN2020", None, "month"),
+        ("UN-UNK-2019", None, "year"),
+        ("UNK/UNK/2019", None, "year"),
+        ("UK/UK/2019", None, "year"),
+        ("2020-01-UN", None, "month"),
+        ("2020-UN-UN", None, "year"),
+        ("2020-03-00", None, "month"),
+        ("UN/03/2020", "dmy", "month"),
+        ("03/UN/2020", "mdy", "month"),
+    ],
+)
+def test_unknown_parts_are_read_as_a_partial_date(value, order, gran):
+    p = rawdates.parse(value, order or "unknown")
+    assert p is not None and p.granularity == gran
+
+
+@pytest.mark.parametrize(
+    "value,order",
+    [
+        ("UN/03/2020", "unknown"),  # is 03 the day or the month?
+        ("15/UN/2020", "dmy"),  # a day without its month cannot move
+    ],
+)
+def test_an_unknown_part_that_cannot_be_placed_is_refused(value, order):
+    assert rawdates.parse(value, order) is None
+
+
+def test_unknown_tokens_survive_the_shift_as_written(vault):
+    values = pd.Series(["UN-JAN-2020", "un-Jan-2020", "UNK/UNK/2019", "2020-03-UN"])
+    subjects = pd.Series(["S1"] * 4)
+    out, report = rawdates.shift_preserving_format(values, subjects, vault)
+    assert report["passed_through"] == 0
+    assert re.fullmatch(r"UN-[A-Z]{3}-\d{4}", out[0])
+    assert re.fullmatch(r"un-[A-Z][a-z]{2}-\d{4}", out[1])
+    assert re.fullmatch(r"UNK/UNK/\d{4}", out[2])
+    assert re.fullmatch(r"\d{4}-\d{2}-UN", out[3])
+
+
+def test_a_month_name_keeps_the_case_it_was_written_in(vault):
+    out, _ = rawdates.shift_preserving_format(
+        pd.Series(["19-MAR-2025", "19-Mar-2025"]), pd.Series(["S1", "S1"]), vault
+    )
+    assert out[0][3:6].isupper() and out[1][3:6].istitle()
+
+
+def test_one_date_in_many_formats_lands_on_one_date(vault):
+    """The same recorded date, written every way a raw export writes it, must
+    come out of the shift as the same date -- otherwise two variables of one
+    record disagree after de-identification when they agreed before."""
+    forms = {
+        "2019-03-28": None, "28MAR2019": None, "28-Mar-2019": None,
+        "28 Mar 2019": None, "2019/03/28": None, "28/03/2019": "dmy",
+        "03/28/2019": "mdy", "2019-03-28 08:15": None,
+    }
+    partial = {
+        "UN-MAR-2019": None, "2019-03-UN": None, "Mar-2019": None,
+        "2019-03": None, "UN/03/2019": "dmy", "03/UN/2019": "mdy",
+    }
+    years = {"UN-UNK-2019": None, "2019": None, "2019-UN-UN": None}
+    for group in (forms, partial, years):
+        landed = set()
+        for value, order in group.items():
+            out, rep = rawdates.shift_preserving_format(
+                pd.Series([value]), pd.Series(["S1"]), vault, order=order
+            )
+            assert rep["passed_through"] == 0, value
+            p = rawdates.parse(out[0], order or "dmy")
+            landed.add((p.year, p.month, p.day))
+        assert len(landed) == 1, (group, landed)

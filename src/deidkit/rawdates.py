@@ -115,6 +115,7 @@ class RawDate:
             .replace("{d}", f"{d:02d}" if d else "")
             .replace("{mon}", _MONTH_ABBR.get(m or 0, "").capitalize())
             .replace("{MON}", _MONTH_ABBR.get(m or 0, "").upper())
+            .replace("{monl}", _MONTH_ABBR.get(m or 0, ""))
         )
 
 
@@ -236,6 +237,120 @@ def infer_order(values: pd.Series) -> Order:
     return "unknown"
 
 
+#: How an EDC writes "not known" in the day or month slot of a partial date:
+#: Rave's UN / UNK, InForm's UK / NK, XX, dashes, and a zero day or month
+#: (no calendar has either, so it cannot be mistaken for a real one). Longest
+#: first, so UNK is not read as UN followed by a stray K.
+_UNK = r"(?:UNK|UN|UK|NK|XX|--|00)"
+
+_UNKNOWN_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # UN-JAN-2020  UNK/JAN/2020  UN JAN 2020  UNJAN2020
+    re.compile(
+        rf"^(?P<ud>{_UNK})(?P<s>[-/ ]?)(?P<mon>[A-Za-z]{{3}})(?P=s)(?P<y>\d{{4}})$",
+        re.I,
+    ),
+    # UN-UNK-2020  UNK/UNK/2020  UN UN 2020
+    re.compile(
+        rf"^(?P<ud>{_UNK})(?P<s>[-/ ]?)(?P<um>{_UNK})(?P=s)(?P<y>\d{{4}})$", re.I
+    ),
+    # 2020-01-UN  2020-UN-UN  2020/UNK/UNK
+    re.compile(
+        rf"^(?P<y>\d{{4}})(?P<s>[-/])(?:(?P<m>\d{{2}})|(?P<um>{_UNK}))"
+        rf"(?P=s)(?P<ud>{_UNK})$",
+        re.I,
+    ),
+    # UN/03/2020  03/UN/2020  UN.UN.2020 -- which slot is the day depends on
+    # the column's order, exactly as for a fully numeric date
+    re.compile(
+        rf"^(?P<a>\d{{1,2}}|{_UNK})(?P<s>[/.\-])(?P<b>\d{{1,2}}|{_UNK})"
+        rf"(?P=s)(?P<y>\d{{4}})$",
+        re.I,
+    ),
+)
+
+
+def _mon_placeholder(written: str) -> str:
+    """Render the month name in the case it was written in: MAR, Mar, mar."""
+    if written.isupper():
+        return "{MON}"
+    if written.islower():
+        return "{monl}"
+    return "{mon}"
+
+
+def _is_unk(token: str) -> bool:
+    return re.fullmatch(_UNK, token, re.I) is not None
+
+
+def _parse_unknown(text: str, order: Order) -> RawDate | None:
+    """A partial date with the missing parts spelled out: UN-JAN-2020.
+
+    These are the ordinary way an EDC records "the patient remembers the
+    year", and they are much of a medical-history onset column. They used to
+    fall through as unparsed, which halted the run -- correctly, since a value
+    the parser cannot read would otherwise publish unshifted -- but it meant a
+    routine MH extract could not run at all. The unknown tokens are kept
+    exactly as written; only the parts that were recorded move, by the same
+    rule every other partial date uses.
+
+    Refused (None, so the run halts and a person decides): a known day with
+    an unknown month (15/UN/2020), since a day cannot be shifted without its
+    month, and UN/03/2020 in a column whose day/month order is undeclared.
+    """
+    for pat in _UNKNOWN_PATTERNS:
+        m = pat.match(text)
+        if not m:
+            continue
+        gd = m.groupdict()
+        y = int(gd["y"])
+        if y < 1800:
+            return None
+        sep = gd.get("s") or ""
+
+        if "a" in gd:  # numeric slots, order decides which is the day
+            a, b = gd["a"], gd["b"]
+            if not (_is_unk(a) or _is_unk(b)):
+                return None  # fully numeric: the main patterns' job
+            if _is_unk(a) and _is_unk(b):
+                return RawDate(y, None, None, f"{a}{sep}{b}{sep}{{y}}", "year")
+            known = b if _is_unk(a) else a
+            if order in {"dmy", "mdy"}:
+                day_first = order == "dmy"
+            elif int(known) > 12:
+                day_first = not _is_unk(a)  # a number above 12 is the day
+            else:
+                return None
+            day_tok, mon_tok = (a, b) if day_first else (b, a)
+            if _is_unk(mon_tok) or not _is_unk(day_tok):
+                return None  # a day without its month cannot be shifted
+            mo = int(mon_tok)
+            if not 1 <= mo <= 12:
+                return None
+            tmpl = (
+                f"{day_tok}{sep}{{m}}{sep}{{y}}" if day_first
+                else f"{{m}}{sep}{day_tok}{sep}{{y}}"
+            )
+            return RawDate(y, mo, None, tmpl, "month")
+
+        ud = gd["ud"]
+        if gd.get("mon"):  # UN-JAN-2020
+            mo = _MONTHS.get(gd["mon"].lower())
+            if mo is None:
+                continue  # UN-UNK-2020: the next pattern's
+            tmpl = f"{ud}{sep}{_mon_placeholder(gd['mon'])}{sep}{{y}}"
+            return RawDate(y, mo, None, tmpl, "month")
+        if gd.get("m") and int(gd["m"]) != 0:  # 2020-01-UN
+            mo = int(gd["m"])
+            if mo > 12:
+                return None
+            return RawDate(y, mo, None, f"{{y}}{sep}{{m}}{sep}{ud}", "month")
+        um = gd.get("um") or gd.get("m")
+        if text[:4] == str(y):  # 2020-UN-UN
+            return RawDate(y, None, None, f"{{y}}{sep}{um}{sep}{ud}", "year")
+        return RawDate(y, None, None, f"{ud}{sep}{um}{sep}{{y}}", "year")
+    return None
+
+
 def parse(value: object, order: Order = "unknown") -> RawDate | None:
     """Parse one raw date, keeping its written form."""
     if _blank(value):
@@ -268,14 +383,28 @@ def parse(value: object, order: Order = "unknown") -> RawDate | None:
                 _MONTHS.get(gd["mon"].lower()) if gd.get("mon")
                 else (int(gd["m"]) if gd.get("m") else None)
             )
+            if gd.get("mon"):
+                if mo is None:
+                    continue  # three letters that are not a month
+                # 19-MAR-2025 stays upper case: the template used to fix the
+                # case per pattern, so a Rave export came back as 19-Mar-2025
+                # -- a format change the model would then learn as real.
+                tmpl = tmpl.replace("{mon}", _mon_placeholder(gd["mon"])).replace(
+                    "{MON}", _mon_placeholder(gd["mon"])
+                )
             d = int(gd["d"]) if gd.get("d") else None
 
+        if d == 0 or mo == 0:
+            # 2020-03-00, 00/03/2020: zero is how some EDCs write "unknown".
+            # Read as a day it rendered back as "2021-06-" -- a mangled value
+            # published as if shifted. The partial-date parser handles it.
+            break
         gran = "day" if d else ("month" if mo else ("year" if y else "none"))
         # An all-numeric form with a time has its month in m2, because "m"
         # would have made the ambiguous branch fire on a value that is not
         # ambiguous: a d/m/y with a clock on the end still needs the order.
         return RawDate(y, mo, d, tmpl, gran, gd.get("tail"))
-    return None
+    return _parse_unknown(text, order)
 
 
 def shift_preserving_format(
