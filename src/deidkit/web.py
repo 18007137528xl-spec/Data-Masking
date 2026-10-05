@@ -67,6 +67,7 @@ class Session:
 
     directory: str | None = None
     raw: bool = False
+    reassign: bool = False
     frames: dict[str, pd.DataFrame] = field(default_factory=dict)
     checksums: dict[str, str] = field(default_factory=dict)
     draft: Contract | None = None
@@ -88,6 +89,7 @@ class Session:
         return {
             "directory": self.directory,
             "raw": self.raw,
+            "reassign": self.reassign,
             "domains": {k: len(v) for k, v in self.frames.items()},
             "rules": 0 if sheet is None else len(sheet),
             "decided": filled,
@@ -151,6 +153,7 @@ def do_profile(s: Session, body: dict[str, Any]) -> dict[str, Any]:
         raise ApiError(dio.explain_empty(directory))
 
     raw = bool(body.get("raw"))
+    reassign = bool(body.get("reassign"))
     draft, suggestions = prof.draft_contract(
         frames,
         source=body.get("source") or Path(directory).name,
@@ -158,10 +161,11 @@ def do_profile(s: Session, body: dict[str, Any]) -> dict[str, Any]:
         k_target=int(body.get("k_target") or 5),
         join_key_template=body.get("offset_key") or None,
         subject_id_template=body.get("id_template") or None,
+        reassign=reassign,
     )
     sheet = dec.build_sheet(draft, suggestions)
 
-    s.directory, s.raw = directory, raw
+    s.directory, s.raw, s.reassign = directory, raw, reassign
     s.frames, s.checksums = frames, checksums
     s.draft, s.sheet = draft, sheet
     s.approved = s.result = None
@@ -187,6 +191,16 @@ def _profile_notes(
     from .contract import NEEDS_ANCHOR
 
     notes: list[dict[str, str]] = []
+    moving = [d.name for d in contract.domains if d.reassign]
+    if moving:
+        notes.append({
+            "level": "info",
+            "text": "Records reassigned between subjects in: "
+            + ", ".join(moving)
+            + ". The content no longer belongs to the subject it is filed "
+            "under. Without reference dates (a raw extract) dates stay as "
+            "written. Use the same vault for both sides of a pair.",
+        })
     anchor_used = any(
         f.treatment in NEEDS_ANCHOR for d in contract.domains for f in d.fields
     )

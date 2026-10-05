@@ -27,7 +27,7 @@ from typing import Any
 
 import pandas as pd
 
-from . import blinding, freetext, rawdates, risk as risk_mod, transforms as tf
+from . import blinding, freetext, rawdates, reassign, risk as risk_mod, transforms as tf
 from .contract import (
     NEEDS_ANCHOR,
     NEEDS_VAULT,
@@ -610,6 +610,10 @@ class DeidPipeline:
         screen: bool = True,
     ) -> RunResult:
         self.validate(frames, allow_missing=allow_missing)
+        # Before anything reads a value: from here on, a reassigned record is
+        # simply its new owner's record, and every treatment, the screening
+        # queue and the risk measurement see it that way.
+        frames, reassigned = reassign.apply(frames, self.contract, self.vault)
         anchors = self.anchor_map(frames)
 
         terms = self.blind_terms(frames)
@@ -697,6 +701,18 @@ class DeidPipeline:
             results, checksums or {}, screen_summary, report, anchors
         )
         manifest["blinding"] = blind_report.to_dict()
+        if reassigned:
+            # Counts only. Which subject holds whose records is in the vault.
+            manifest["reassignment"] = {
+                "groups": reassigned,
+                "note": "records in these domains belong to a different "
+                "subject than the one they are filed under; the content is "
+                "no longer true of the subject. Dates were moved by the "
+                "difference in reference dates where the drop had them, and "
+                "kept as written where it did not (see each group). A "
+                "safety follow-up must resolve the record's owner with "
+                "'deidkit reverse --group', not the subject it is filed under.",
+            }
         return RunResult(
             frames=out_frames,
             review_queue=queue,

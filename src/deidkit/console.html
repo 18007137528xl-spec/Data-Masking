@@ -191,6 +191,12 @@ dl.kv dd{margin:0;font-family:var(--mono);word-break:break-all}
           Dates are found by their values rather than a <code>--DTC</code> suffix and shifted
           with their written form intact, because converting <code>19/03/2025</code> to a study
           day deletes the thing the model is supposed to learn.</span></label>
+        <label class="check"><input type="checkbox" id="reassign">
+          <span><b>Reassign records between subjects</b>. Each subject's AE, MH, CM, LB, VS,
+          EG, PE and QS records go to another subject at random, with SUBJECT and SITE
+          rewritten to the new owner. On a raw extract the dates stay as written. The content
+          no longer belongs to anyone: for test and training data only. Use the same vault
+          for the raw and SDTM sides so they move the same way.</span></label>
         <div class="row">
           <div class="field">
             <label for="source">Study / source name</label>
@@ -375,6 +381,7 @@ async function readDrop(force){
     const j = await api('/api/profile', {
       directory: $('#dir').value,
       raw: $('#raw').checked,
+      reassign: $('#reassign').checked,
       source: $('#source').value,
       k_target: $('#k').value,
       offset_key: $('#offsetkey').value,
@@ -652,6 +659,7 @@ async function showQueue(){
     STATE = j.state;
     if (STATE.directory) $('#dir').value = STATE.directory;
     $('#raw').checked = !!STATE.raw;
+    $('#reassign').checked = !!STATE.reassign;
     let at = 0;
     if (j.rows && j.rows.length){
       ROWS = j.rows; renderNotes(j.notes); renderRows();

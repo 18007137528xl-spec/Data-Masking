@@ -130,9 +130,9 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(
             r"^(?P<y>\d{4})-(?P<m>\d{2})-(?P<d>\d{2})"
-            r"[T ](?P<tail>\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)$"
+            r"(?P<tsep>[T ])(?P<tail>\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)$"
         ),
-        "{y}-{m}-{d} {tail}",
+        "{y}-{m}-{d}{tsep}{tail}",
     ),
     # An all-numeric date with a clock on the end is STILL ambiguous about
     # day and month -- a time tells you nothing about the order -- so it goes
@@ -403,6 +403,9 @@ def parse(value: object, order: Order = "unknown") -> RawDate | None:
         # An all-numeric form with a time has its month in m2, because "m"
         # would have made the ambiguous branch fire on a value that is not
         # ambiguous: a d/m/y with a clock on the end still needs the order.
+        # ISO 8601 writes 2025-03-19T14:30; an Excel cell read back as text
+        # writes a space. Re-emit whichever arrived.
+        tmpl = tmpl.replace("{tsep}", gd.get("tsep") or " ")
         return RawDate(y, mo, d, tmpl, gran, gd.get("tail"))
     return _parse_unknown(text, order)
 

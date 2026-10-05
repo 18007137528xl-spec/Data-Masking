@@ -378,6 +378,17 @@ class DomainContract(BaseModel):
         "Purely declarative -- rules still govern behaviour -- but it is "
         "asserted against the rules at load time.",
     )
+    reassign: str | None = Field(
+        default=None,
+        description="Give each subject's records in this domain to another "
+        "subject, chosen at random and held in the vault. The value names the "
+        "group: domains in one group move together, and the raw and SDTM "
+        "files of the same domain must name the same group (normally the "
+        "domain code, 'AE') so both sides of a training pair move the same "
+        "way. Dates are re-anchored to the new owner's reference date, so "
+        "every study day, visit window and baseline flag is unchanged. Unset: "
+        "records stay with their subject.",
+    )
     fields: list[FieldRule]
 
     @model_validator(mode="after")
@@ -601,6 +612,9 @@ class Contract(BaseModel):
                     "subject_key": d.subject_key,
                     "join_key_template": d.join_key_template,
                     "retained_in_full": d.retained_in_full,
+                    # Only when set, so turning the feature on changes the
+                    # digest and leaving it off changes nothing.
+                    **({"reassign": d.reassign} if d.reassign else {}),
                     "fields": [
                         f.model_dump(
                             mode="json", exclude={"note"}, exclude_defaults=True

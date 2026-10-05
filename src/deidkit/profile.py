@@ -214,6 +214,33 @@ _DOMAIN_CODES: frozenset[str] = frozenset({
 })
 
 
+#: Domains whose records are reassigned between subjects when asked. Not DM,
+#: EX or DS: they carry the reference dates every other domain is measured
+#: from. Not PC/PP (tied to dosing times) or TU/TR/RS (linked to each other).
+REASSIGNABLE: frozenset[str] = frozenset(
+    {"AE", "MH", "CM", "LB", "VS", "EG", "PE", "QS"}
+)
+
+
+def reassign_group(name: str) -> str | None:
+    """The reassignment group for a file, or None if it should stay put.
+
+    The domain code, so that EDC_AE_RAWDATA_... and AE land in one group and
+    the two sides of a pair move identically. SUPPAE goes with AE: its rows
+    point at AE records by AESEQ, and split from them they point at nothing.
+    """
+    code = domain_code(name)
+    up = str(name).upper()
+    if code is None and up.startswith("SUPP") and up[4:] in REASSIGNABLE:
+        code = up[4:]
+    return code if code in REASSIGNABLE else None
+
+
+#: Whole words some EDC builds name the demographics form with. Only DM: it
+#: is the one whose identity decides the anchor.
+_DOMAIN_WORDS = {"DEMOG": "DM", "DEMOGRAPHICS": "DM", "DEMOGRAPHY": "DM"}
+
+
 def domain_code(name: str) -> str | None:
     """The SDTM domain a file is, when its name says so.
 
@@ -227,7 +254,11 @@ def domain_code(name: str) -> str | None:
     up = str(name).upper()
     if up in _DOMAIN_CODES:
         return up
-    found = {t for t in re.split(r"[^A-Z0-9]+", up) if t in _DOMAIN_CODES}
+    found = {
+        _DOMAIN_WORDS.get(t, t)
+        for t in re.split(r"[^A-Z0-9]+", up)
+        if t in _DOMAIN_CODES or t in _DOMAIN_WORDS
+    }
     return found.pop() if len(found) == 1 else None
 
 _SUBJECT_KEYS = {"USUBJID", "SUBJID"}
@@ -1148,6 +1179,7 @@ def draft_contract(
     raw_edc: bool = False,
     join_key_template: str | None = None,
     subject_id_template: str | None = None,
+    reassign: bool = False,
 ) -> tuple[Contract, dict[str, dict[str, Suggestion]]]:
     """Draft a contract from profiled data.
 
@@ -1271,6 +1303,11 @@ def draft_contract(
                 else _raw_subject_key(frame)
             ),
             join_key_template=join_key_template,
+            reassign=(
+                reassign_group(name)
+                if reassign and name != anchor_domain
+                else None
+            ),
             fields=[s.rule for s in per_col.values()],
         )
         if name.upper() in RETAINED_IN_FULL:

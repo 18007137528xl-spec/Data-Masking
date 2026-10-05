@@ -382,6 +382,42 @@ checked arithmetically at the end:
 python scripts/demo_pair.py
 ```
 
+### Reassigning records between subjects
+
+For a test or training corpus, where it does not matter whether a record is
+true of anyone, `--reassign` cuts the last link a shifted, surrogated tier
+still has: the one between a person and their clinical content. Each
+subject's AE, MH, CM, LB, VS, EG, PE and QS records go to another subject,
+each domain by its own random mapping held in the vault. A's adverse events
+are filed under C, A's history under F, A's labs under B.
+
+```bash
+deidkit profile data/quarantine/sdtm_abc -o contracts/abc_sdtm.yaml --sdtm --reassign ...
+deidkit profile data/quarantine/raw_abc  -o contracts/abc_raw.yaml  --raw  --reassign ...
+```
+
+What stays true is everything a derivation reads. On a raw extract alone the
+records move with their dates exactly as written: there is no RFSTDTC in raw
+data, and the model derives study days from the new owner's own raw dates
+anyway. When the drop does carry reference dates (SDTM's DM), dates also move
+by the difference between the two subjects' reference dates, so an event on
+study day 15 for its real owner is on study day 15 for its new one and the
+`--DY` already in the file stays true. SUBJECT,
+SITE and STUDYID on each record are rewritten to the new owner's, so the
+record joins to the right DM row and the site still matches the subject
+number. DM, EX and DS are never moved: they carry the reference dates
+everything else is measured from.
+
+| | |
+|---|---|
+| order | either side may go first; whatever the first run did is stored and the other side repeats it exactly. Raw first: dates stay as written on both sides, and the SDTM run's manifest warns that `--DY`, EPOCH and baseline flags on moved records must be derived again rather than carried over. SDTM first: dates shift by the reference-date difference on both sides and those values stay valid |
+| one vault | both sides, and every later drop of the study, against the same vault, or the two sides move to different subjects |
+| what breaks | links *between* domains (an AE treated by a CM, a lab tied to a dose) and plausibility (a pregnancy test filed under a man). Fine for testing a derivation; useless for analysis |
+| safety follow-up | `deidkit reverse <surrogate> --group AE -j SAE-...` names the subject the AE record really belongs to, not the one it is filed under. Logged like any reverse lookup |
+
+The manifest's `reassignment` block records which domains moved and how many
+subjects, never who went where.
+
 ## Field treatments
 
 This is the vocabulary of `decision_treatment`: what a steward may write in the

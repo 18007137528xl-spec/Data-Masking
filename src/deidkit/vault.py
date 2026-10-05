@@ -92,6 +92,24 @@ CREATE TABLE IF NOT EXISTS vault_meta (
 -- a surrogate before subject 08 has been seen at all, so a shaped draw could
 -- hand 01 the string "08" and only later discover that 08 is a real person.
 -- Recording the whole batch before issuing anything closes that window.
+-- Record reassignment: the subject whose records in a group of domains go to
+-- another subject. Donor by lookup index, recipient encrypted (the pipeline
+-- must read it back to relabel rows) and indexed so the mapping stays a
+-- bijection. delta_days is recipient reference date minus donor reference
+-- date, held so the raw side of a pair -- which may have no reference date
+-- of its own -- moves dates exactly as the SDTM side did.
+CREATE TABLE IF NOT EXISTS reassignment (
+    grp              TEXT NOT NULL,
+    donor_lookup     BLOB NOT NULL,
+    recipient_lookup BLOB NOT NULL,
+    recipient_ct     BLOB NOT NULL,
+    delta_days       INTEGER,
+    created_at       TEXT NOT NULL,
+    PRIMARY KEY (grp, donor_lookup)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS reassignment_recipient
+    ON reassignment (grp, recipient_lookup);
+
 CREATE TABLE IF NOT EXISTS seen_original (
     entity TEXT NOT NULL,
     lookup BLOB NOT NULL,
@@ -582,6 +600,147 @@ class Vault:
                 out[o] = self.offset_for(o, entity=entity, **kw)
         self._db.commit()
         return out
+
+    # ------------------------------------------------------------------
+    # record reassignment
+    # ------------------------------------------------------------------
+    def reassignment_map(
+        self,
+        group: str,
+        keys: Iterable[str],
+        refs: dict[str, "date | None"] | None = None,
+    ) -> dict[str, tuple[str, int | None]]:
+        """donor key -> (recipient key, delta days), stable once issued.
+
+        Keys never seen in this group are dealt a random derangement among
+        themselves (Sattolo's algorithm: one cycle, so nobody keeps their own
+        records), which keeps the whole mapping a bijection without touching
+        what an earlier run issued -- the other side of a pair, or last
+        month's drop. A lone new key has nobody to swap with and maps to
+        itself; the caller reports it.
+
+        ``refs`` gives each key's real reference date. The delta is stored the
+        first time both ends of a pair have one, and filled in later if they
+        did not.
+        """
+        refs = refs or {}
+        entity = f"reassign:{group}"
+        keys = sorted(set(map(str, keys)))
+        out: dict[str, tuple[str, int | None]] = {}
+        new: list[str] = []
+        for k in keys:
+            row = self._db.execute(
+                "SELECT recipient_ct, delta_days FROM reassignment"
+                " WHERE grp = ? AND donor_lookup = ?",
+                (group, self._lookup(entity, k)),
+            ).fetchone()
+            if row is None:
+                new.append(k)
+            else:
+                out[k] = (self._fernet.decrypt(row[0]).decode("utf-8"), row[1])
+
+        recipients = list(new)
+        rng = secrets.SystemRandom()
+        for i in range(len(recipients) - 1, 0, -1):  # Sattolo
+            j = rng.randrange(i)
+            recipients[i], recipients[j] = recipients[j], recipients[i]
+        for donor, recipient in zip(new, recipients):
+            self._db.execute(
+                "INSERT INTO reassignment (grp, donor_lookup, recipient_lookup,"
+                " recipient_ct, delta_days, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    group,
+                    self._lookup(entity, donor),
+                    self._lookup(entity, recipient),
+                    self._fernet.encrypt(recipient.encode("utf-8")),
+                    None,
+                    _now(),
+                ),
+            )
+            out[donor] = (recipient, None)
+
+        for donor, (recipient, delta) in list(out.items()):
+            if delta is None and refs.get(donor) and refs.get(recipient):
+                delta = (refs[recipient] - refs[donor]).days
+                self._db.execute(
+                    "UPDATE reassignment SET delta_days = ?"
+                    " WHERE grp = ? AND donor_lookup = ?",
+                    (delta, group, self._lookup(entity, donor)),
+                )
+                out[donor] = (recipient, delta)
+        self._db.commit()
+        return out
+
+    def settle_unanchored(self, group: str, donors: Iterable[str]) -> None:
+        """Fix the delta at zero for donors with no reference dates, and mark
+        the group, so a later run with reference dates does not compute a
+        different delta and pull the two sides of a pair apart."""
+        entity = f"reassign:{group}"
+        for k in donors:
+            self._db.execute(
+                "UPDATE reassignment SET delta_days = 0"
+                " WHERE grp = ? AND donor_lookup = ? AND delta_days IS NULL",
+                (group, self._lookup(entity, str(k))),
+            )
+        self._db.execute(
+            "INSERT OR REPLACE INTO vault_meta (key, value) VALUES (?, ?)",
+            (f"reassign_unanchored:{group}", _now()),
+        )
+        self._db.commit()
+
+    def is_unanchored(self, group: str) -> bool:
+        return self._db.execute(
+            "SELECT 1 FROM vault_meta WHERE key = ?",
+            (f"reassign_unanchored:{group}",),
+        ).fetchone() is not None
+
+    def reassigned_from(
+        self, group: str, recipient: str, *, justification: str
+    ) -> str | None:
+        """Whose records a subject holds in a group. Break-glass, logged.
+
+        After reassignment, reversing a surrogate found in AE names the
+        subject the record is FILED under, not the person it happened to. A
+        safety follow-up needs the second, so this exists -- and is logged
+        exactly like ``reverse``.
+        """
+        if not justification or not justification.strip():
+            raise VaultError("reassigned_from() requires a justification")
+        entity = f"reassign:{group}"
+        donor = None
+        for donor_lk, ct in self._db.execute(
+            "SELECT donor_lookup, recipient_ct FROM reassignment WHERE grp = ?",
+            (group,),
+        ).fetchall():
+            if self._fernet.decrypt(ct).decode("utf-8") == recipient:
+                donor = donor_lk
+                break
+        original = None
+        if donor is not None:
+            # Donor is held by lookup only; find it among issued surrogates'
+            # originals and offset keys by recomputing the lookup.
+            for (ct,) in self._db.execute(
+                "SELECT recipient_ct FROM reassignment WHERE grp = ?", (group,)
+            ).fetchall():
+                cand = self._fernet.decrypt(ct).decode("utf-8")
+                if self._lookup(entity, cand) == donor:
+                    original = cand
+                    break
+        self._db.execute(
+            "INSERT INTO access_log (at, action, entity, surrogate, operator,"
+            " justification, n_records) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                _now(),
+                "reassigned_from" if original else "reassigned_from_miss",
+                entity,
+                "(recipient key)",
+                self.operator,
+                justification.strip(),
+                1 if original else 0,
+            ),
+        )
+        self._db.commit()
+        return original
 
     # ------------------------------------------------------------------
     # reverse mapping -- break-glass only

@@ -240,6 +240,7 @@ def cmd_profile(args: argparse.Namespace) -> int:
         raw_edc=args.raw,
         join_key_template=args.offset_key,
         subject_id_template=args.id_template,
+        reassign=args.reassign,
     )
 
     table = prof.suggestion_table(suggestions)
@@ -358,6 +359,11 @@ def cmd_profile(args: argparse.Namespace) -> int:
     else:
         print("dates : converted to study days (--DTC dropped; NOT SDTM-conformant)")
     print(f"tier  : {contract.tier}")
+    moving = [f"{d.name} ({d.reassign})" for d in contract.domains if d.reassign]
+    if moving:
+        print(f"reassigned between subjects: {', '.join(moving)}")
+    elif args.reassign:
+        print("reassign: no domain in this drop is one that can be reassigned")
     retained = [d.name for d in contract.domains if d.retained_in_full]
     if retained:
         print(f"retained in full: {', '.join(retained)}")
@@ -837,10 +843,20 @@ def cmd_reverse(args: argparse.Namespace) -> int:
         original = vault.reverse(
             args.entity, args.surrogate, justification=args.justification
         )
+        owner = None
+        if original is not None and args.group:
+            owner = vault.reassigned_from(
+                args.group.upper(), original, justification=args.justification
+            )
     if original is None:
         print(f"no mapping for {args.entity}/{args.surrogate} (the miss was logged)")
         return 1
     print(original)
+    if args.group:
+        print(
+            f"{args.group.upper()} records filed under it belong to: "
+            f"{owner if owner else '(not reassigned in this group)'}"
+        )
     print(
         f"\nThis lookup was written to the vault access log under operator "
         f"{_operator(args)!r}.",
@@ -949,6 +965,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="overwrite a decision sheet that already has decisions in it. "
         "Starting a review over is a legitimate thing to do; doing it by "
         "accident is not, which is why it needs saying.",
+    )
+    sp.add_argument(
+        "--reassign",
+        action="store_true",
+        help="give each subject's AE, MH, CM, LB, VS, EG, PE and QS records to "
+        "another subject (a random mapping held in the vault). On a raw "
+        "extract dates stay as written; where the drop has reference dates "
+        "they move by the difference, so carried --DY stays true. The records "
+        "stop being true of anyone: for test and training corpora, not for "
+        "analysis.",
     )
     sp.add_argument(
         "--offset-key",
@@ -1104,6 +1130,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("reverse", help="break-glass re-identification (logged)")
     sp.add_argument("surrogate")
     sp.add_argument("--entity", default="subject")
+    sp.add_argument(
+        "--group",
+        help="after resolving the subject, also say whose records it holds in "
+        "this reassignment group (e.g. AE). Use the SDTM-side surrogate.",
+    )
     sp.add_argument(
         "-j",
         "--justification",

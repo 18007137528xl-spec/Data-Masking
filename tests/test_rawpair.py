@@ -849,7 +849,7 @@ from deidkit.profile import domain_code  # noqa: E402
         ("AE", "AE"),
         ("EDC_MH_RAWDATA_US_BDM-AI-2025-001", "MH"),
         ("EDC_DM_RAWDATA_US_BDM-AI-2025-001", "DM"),
-        ("demog", None),
+        ("demog", "DM"),
         ("EDC_AE_MH_MERGED", None),  # two codes: not guessed at
         ("IS_EXPORT", None),  # English words are not domain codes
     ],
