@@ -191,6 +191,11 @@ dl.kv dd{margin:0;font-family:var(--mono);word-break:break-all}
           Dates are found by their values rather than a <code>--DTC</code> suffix and shifted
           with their written form intact, because converting <code>19/03/2025</code> to a study
           day deletes the thing the model is supposed to learn.</span></label>
+        <label class="check"><input type="checkbox" id="dummytext">
+          <span><b>Replace all free text with dummy text</b>, verbatim terms included
+          (AETERM, MHTERM, CMTRT). Random letters in the same shape: same length, spaces,
+          punctuation and case. The same text always gets the same dummy, so the raw and
+          SDTM sides still match. Nothing is left to screen or adjudicate.</span></label>
         <label class="check"><input type="checkbox" id="reassign">
           <span><b>Reassign records between subjects</b>. Each subject's AE, MH, CM, LB, VS,
           EG, PE and QS records go to another subject at random, with SUBJECT and SITE
@@ -382,6 +387,7 @@ async function readDrop(force){
       directory: $('#dir').value,
       raw: $('#raw').checked,
       reassign: $('#reassign').checked,
+      dummy_text: $('#dummytext').checked,
       source: $('#source').value,
       k_target: $('#k').value,
       offset_key: $('#offsetkey').value,
@@ -660,6 +666,7 @@ async function showQueue(){
     if (STATE.directory) $('#dir').value = STATE.directory;
     $('#raw').checked = !!STATE.raw;
     $('#reassign').checked = !!STATE.reassign;
+    $('#dummytext').checked = !!STATE.dummy_text;
     let at = 0;
     if (j.rows && j.rows.length){
       ROWS = j.rows; renderNotes(j.notes); renderRows();

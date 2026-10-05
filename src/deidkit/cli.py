@@ -241,6 +241,7 @@ def cmd_profile(args: argparse.Namespace) -> int:
         join_key_template=args.offset_key,
         subject_id_template=args.id_template,
         reassign=args.reassign,
+        dummy_text=args.dummy_text,
     )
 
     table = prof.suggestion_table(suggestions)
@@ -359,6 +360,14 @@ def cmd_profile(args: argparse.Namespace) -> int:
     else:
         print("dates : converted to study days (--DTC dropped; NOT SDTM-conformant)")
     print(f"tier  : {contract.tier}")
+    dummied = sorted(
+        f"{d.name}.{f.column}"
+        for d in contract.domains
+        for f in d.fields
+        if f.treatment.value == "dummy_text"
+    )
+    if dummied:
+        print(f"dummy text in {len(dummied)} column(s): {', '.join(dummied)}")
     moving = [f"{d.name} ({d.reassign})" for d in contract.domains if d.reassign]
     if moving:
         print(f"reassigned between subjects: {', '.join(moving)}")
@@ -965,6 +974,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="overwrite a decision sheet that already has decisions in it. "
         "Starting a review over is a legitimate thing to do; doing it by "
         "accident is not, which is why it needs saying.",
+    )
+    sp.add_argument(
+        "--dummy-text",
+        action="store_true",
+        help="replace every free-text column -- verbatim terms included "
+        "(AETERM, MHTERM, CMTRT) -- with random text of the same shape. Same "
+        "text, same dummy, matched ignoring case, so both sides of a pair "
+        "still correspond. Nothing is left to screen. For test and training "
+        "corpora: a model cannot learn to code a term from a dummy.",
     )
     sp.add_argument(
         "--reassign",

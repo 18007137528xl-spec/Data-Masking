@@ -27,7 +27,10 @@ from typing import Any
 
 import pandas as pd
 
-from . import blinding, freetext, rawdates, reassign, risk as risk_mod, transforms as tf
+from . import (
+    blinding, dummytext, freetext, rawdates, reassign, risk as risk_mod,
+    transforms as tf,
+)
 from .contract import (
     NEEDS_ANCHOR,
     NEEDS_VAULT,
@@ -564,6 +567,9 @@ class DeidPipeline:
                 index=col.index,
                 dtype="string",
             )
+
+        elif t is Treatment.DUMMY_TEXT:
+            out[name] = dummytext.dummy_column(col, self.vault)
 
         else:  # pragma: no cover - Treatment is exhaustive
             raise ContractMismatch(f"unhandled treatment {t!r}")

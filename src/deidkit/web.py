@@ -68,6 +68,7 @@ class Session:
     directory: str | None = None
     raw: bool = False
     reassign: bool = False
+    dummy_text: bool = False
     frames: dict[str, pd.DataFrame] = field(default_factory=dict)
     checksums: dict[str, str] = field(default_factory=dict)
     draft: Contract | None = None
@@ -90,6 +91,7 @@ class Session:
             "directory": self.directory,
             "raw": self.raw,
             "reassign": self.reassign,
+            "dummy_text": self.dummy_text,
             "domains": {k: len(v) for k, v in self.frames.items()},
             "rules": 0 if sheet is None else len(sheet),
             "decided": filled,
@@ -154,6 +156,7 @@ def do_profile(s: Session, body: dict[str, Any]) -> dict[str, Any]:
 
     raw = bool(body.get("raw"))
     reassign = bool(body.get("reassign"))
+    dummy_text = bool(body.get("dummy_text"))
     draft, suggestions = prof.draft_contract(
         frames,
         source=body.get("source") or Path(directory).name,
@@ -162,10 +165,12 @@ def do_profile(s: Session, body: dict[str, Any]) -> dict[str, Any]:
         join_key_template=body.get("offset_key") or None,
         subject_id_template=body.get("id_template") or None,
         reassign=reassign,
+        dummy_text=dummy_text,
     )
     sheet = dec.build_sheet(draft, suggestions)
 
     s.directory, s.raw, s.reassign = directory, raw, reassign
+    s.dummy_text = dummy_text
     s.frames, s.checksums = frames, checksums
     s.draft, s.sheet = draft, sheet
     s.approved = s.result = None

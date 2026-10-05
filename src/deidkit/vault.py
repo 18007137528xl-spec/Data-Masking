@@ -34,7 +34,7 @@ import secrets
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes, hmac
@@ -670,6 +670,45 @@ class Vault:
                 out[donor] = (recipient, delta)
         self._db.commit()
         return out
+
+    def text_dummy(self, key: str, make: "Callable[[], str]") -> str:
+        """The dummy for one free-text value, stable once issued.
+
+        ``key`` is the normalised text; ``make`` draws a candidate. Kept in
+        the surrogate table under entity 'freetext', so the original stays
+        recoverable through the usual logged break-glass path and a dummy is
+        never issued twice.
+        """
+        entity = "freetext"
+        lk = self._lookup(entity, key)
+        row = self._db.execute(
+            "SELECT surrogate FROM surrogate WHERE entity = ? AND lookup = ?",
+            (entity, lk),
+        ).fetchone()
+        if row is not None:
+            return row[0]
+        for _ in range(100):
+            candidate = make()
+            if candidate == key:
+                continue
+            clash = self._db.execute(
+                "SELECT 1 FROM surrogate WHERE entity = ? AND surrogate = ?",
+                (entity, candidate),
+            ).fetchone()
+            if clash is None:
+                break
+        else:
+            raise VaultError(
+                f"could not draw a distinct dummy for a {len(key)}-character "
+                "text in 100 tries -- the shape is too small to be distinct"
+            )
+        self._db.execute(
+            "INSERT INTO surrogate (entity, lookup, surrogate, original_ct,"
+            " created_at) VALUES (?, ?, ?, ?, ?)",
+            (entity, lk, candidate, self._fernet.encrypt(key.encode("utf-8")),
+             _now()),
+        )
+        return candidate
 
     def settle_unanchored(self, group: str, donors: Iterable[str]) -> None:
         """Fix the delta at zero for donors with no reference dates, and mark

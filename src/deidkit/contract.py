@@ -126,6 +126,22 @@ class Treatment(str, Enum):
     """Detect and replace in place. Available, but not the default for verbatim
     clinical text -- it destroys content required for regulatory review."""
 
+    DUMMY_TEXT = "dummy_text"
+    """Replace every value with random text of the same shape.
+
+    Letters become random letters of the same case, digits random digits;
+    spaces and punctuation stay where they were, so 'Severe headache, 2 days'
+    becomes something like 'Kqwrez ploxtamv, 7 hfas'. Chinese characters are
+    replaced with random Chinese characters. Nothing of the original survives,
+    so nothing needs screening or adjudication.
+
+    One text, one dummy: held in the vault, and matched ignoring case, so
+    'Headache' and 'HEADACHE' become 'Kqwrezab' and 'KQWREZAB' -- the raw side
+    and its upper-cased SDTM counterpart still correspond.
+
+    For test and training corpora. The content is gone: a model cannot learn
+    to code a verbatim term from a dummy."""
+
 
 #: Treatments that leave the column's values byte-identical.
 NON_MUTATING: frozenset[Treatment] = frozenset(
@@ -148,6 +164,7 @@ NEEDS_VAULT: frozenset[Treatment] = frozenset(
         Treatment.DATE_SHIFT,
         Treatment.DATE_SHIFT_RAW,
         Treatment.LABEL_MAP,
+        Treatment.DUMMY_TEXT,
     }
 )
 

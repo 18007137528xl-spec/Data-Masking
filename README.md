@@ -418,6 +418,29 @@ everything else is measured from.
 The manifest's `reassignment` block records which domains moved and how many
 subjects, never who went where.
 
+### Dummy text instead of screening
+
+`--dummy-text` (or the console checkbox) replaces every free-text column,
+verbatim terms included (AETERM, MHTERM, CMTRT, comments), with random text of
+the same shape:
+
+| original | dummy |
+|---|---|
+| `Severe headache, 2 days` | `Kqwrez ploxtamv, 7 hfas` |
+| `HEADACHE` / `Headache` | `KQWREZAB` / `Kqwrezab` |
+| `患者头痛3天` | six random Chinese characters, the digit still a digit |
+
+Length, spaces, punctuation, digit positions and case survive; the words do
+not. The same text always gets the same dummy, matched ignoring case and held
+in the vault, so a term repeated across subjects is still repeated and the raw
+side's `Headache` still lines up with the SDTM side's `HEADACHE`. Nothing of
+the original is left, so there is no review queue to adjudicate.
+
+Coded columns (AEDECOD, AEBODSYS, MedDRA codes) are not free text and stay as
+they are. MH and AE are no longer "retained in full" once their verbatim is
+replaced, and the contract says so. The cost is the obvious one: a model
+cannot learn to code a verbatim term from a dummy.
+
 ## Field treatments
 
 This is the vocabulary of `decision_treatment`: what a steward may write in the

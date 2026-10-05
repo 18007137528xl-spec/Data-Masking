@@ -398,6 +398,7 @@ def suggest(
     blind_treatment: bool = False,
     keep_dates: bool = False,
     raw_edc: bool = False,
+    dummy_text: bool = False,
 ) -> Suggestion:
     """Suggest a treatment for one profiled column.
 
@@ -1006,6 +1007,17 @@ def suggest(
         )
         if (domain_code(domain) or domain.upper()) in RETAINED_IN_FULL:
             note += "; required for regulatory review in this domain"
+        if dummy_text:
+            return Suggestion(
+                rule(
+                    Treatment.DUMMY_TEXT,
+                    note="replaced with random text of the same shape (same "
+                    "text, same dummy, matched ignoring case). Nothing of the "
+                    "original survives, so nothing is left to screen",
+                ),
+                "high" if any(up.endswith(s) for s in _VERBATIM_SUFFIXES) else "medium",
+                "free text, replaced with dummy text",
+            )
         return Suggestion(
             rule(Treatment.SCREEN_FREETEXT, note=note),
             "high" if any(up.endswith(s) for s in _VERBATIM_SUFFIXES) else "medium",
@@ -1180,6 +1192,7 @@ def draft_contract(
     join_key_template: str | None = None,
     subject_id_template: str | None = None,
     reassign: bool = False,
+    dummy_text: bool = False,
 ) -> tuple[Contract, dict[str, dict[str, Suggestion]]]:
     """Draft a contract from profiled data.
 
@@ -1250,6 +1263,7 @@ def draft_contract(
                 blind_treatment=blind_treatment,
                 keep_dates=keep_dates,
                 raw_edc=raw_edc,
+                dummy_text=dummy_text,
             )
             for col, p in profs.items()
         }
@@ -1310,7 +1324,14 @@ def draft_contract(
             ),
             fields=[s.rule for s in per_col.values()],
         )
-        if name.upper() in RETAINED_IN_FULL:
+        dummied = any(
+            sg.rule.treatment is Treatment.DUMMY_TEXT for sg in per_col.values()
+        )
+        if dummied:
+            # Asked for explicitly: the verbatim text in MH/AE is replaced, so
+            # the domain is not "retained in full" and must not say it is.
+            domains.append(DomainContract(**spec, retained_in_full=False))
+        elif name.upper() in RETAINED_IN_FULL:
             domains.append(DomainContract(**spec, retained_in_full=True))
         elif domain_code(name) in RETAINED_IN_FULL:
             # Known only from the file name (EDC_MH_RAWDATA_...). A raw export

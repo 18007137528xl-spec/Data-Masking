@@ -214,6 +214,14 @@ TREATMENT_HELP: dict[str, dict[str, object]] = {
         "cost": "high on clinical verbatim -- destroys content regulatory "
         "review needs; prefer screen_freetext and adjudicate",
     },
+    "dummy_text": {
+        "does": "replace every value with random text of the same shape; "
+        "same text, same dummy (ignoring case)",
+        "requires": (),
+        "optional": (),
+        "cost": "total: the content is gone. For test and training corpora "
+        "only -- nothing is left to screen, and nothing left to learn from",
+    },
 }
 
 
