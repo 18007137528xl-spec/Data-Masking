@@ -240,7 +240,10 @@ def cmd_profile(args: argparse.Namespace) -> int:
         raw_edc=args.raw,
         join_key_template=args.offset_key,
         subject_id_template=args.id_template,
-        reassign=args.reassign,
+        reassign=(
+            "subjects" if args.reassign_by_subject
+            else "rows" if args.reassign else False
+        ),
         dummy_text=args.dummy_text,
     )
 
@@ -371,7 +374,7 @@ def cmd_profile(args: argparse.Namespace) -> int:
     moving = [f"{d.name} ({d.reassign})" for d in contract.domains if d.reassign]
     if moving:
         print(f"reassigned between subjects: {', '.join(moving)}")
-    elif args.reassign:
+    elif args.reassign or args.reassign_by_subject:
         print("reassign: no domain in this drop is one that can be reassigned")
     retained = [d.name for d in contract.domains if d.retained_in_full]
     if retained:
@@ -987,12 +990,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument(
         "--reassign",
         action="store_true",
-        help="give each subject's AE, MH, CM, LB, VS, EG, PE and QS records to "
-        "another subject (a random mapping held in the vault). On a raw "
-        "extract dates stay as written; where the drop has reference dates "
-        "they move by the difference, so carried --DY stays true. The records "
-        "stop being true of anyone: for test and training corpora, not for "
-        "analysis.",
+        help="deal every AE, MH, CM, LB, VS, EG, PE and QS record to a subject "
+        "drawn at random, independently, fresh on each run. SUBJECT and SITE "
+        "follow the new owner, --SEQ is renumbered, row order is shuffled. "
+        "On a raw extract dates stay as written. The records stop being true "
+        "of anyone: for test and training corpora, not for analysis.",
+    )
+    sp.add_argument(
+        "--reassign-by-subject",
+        action="store_true",
+        help="like --reassign, but each subject's records move together, by a "
+        "mapping held in the vault -- so a raw and an SDTM side run against "
+        "the same vault move identically and still pair up.",
     )
     sp.add_argument(
         "--offset-key",

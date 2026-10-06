@@ -200,11 +200,11 @@ def _profile_notes(
     if moving:
         notes.append({
             "level": "info",
-            "text": "Records reassigned between subjects in: "
+            "text": "Records shuffled between subjects in: "
             + ", ".join(moving)
-            + ". The content no longer belongs to the subject it is filed "
-            "under. Without reference dates (a raw extract) dates stay as "
-            "written. Use the same vault for both sides of a pair.",
+            + ". Each record goes to a subject drawn at random; the content "
+            "no longer belongs to the subject it is filed under. Without "
+            "reference dates (a raw extract) dates stay as written.",
         })
     anchor_used = any(
         f.treatment in NEEDS_ANCHOR for d in contract.domains for f in d.fields

@@ -52,7 +52,7 @@ def _iso(v) -> date | None:
 
 def _sdtm_contract(frames, groups=None):
     contract, _ = draft_contract(
-        frames, source="T", sdtm_conformant=True, reassign=True,
+        frames, source="T", sdtm_conformant=True, reassign="subjects",
         subject_id_template="{STUDYID}-US-{value}",
     )
     if groups is not None:
@@ -141,7 +141,7 @@ def test_the_raw_side_moves_exactly_as_the_sdtm_side_did(pair_dirs, vault):
     sdtm = DeidPipeline(_sdtm_contract(sdtm_frames, {"AE", "MH"}), vault,
                         operator="pytest").run(sdtm_frames, checksums=s_sums)
     raw_contract, _ = draft_contract(
-        raw_frames, source="T", raw_edc=True, reassign=True,
+        raw_frames, source="T", raw_edc=True, reassign="subjects",
         join_key_template="TIG-2026-001-US-{SUBJECT}",
     )
     assert {d.reassign for d in raw_contract.domains} >= {"AE", "MH"}
@@ -170,7 +170,7 @@ def test_the_raw_side_alone_moves_records_and_keeps_dates(pair_dirs, vault):
     raw_frames, r_sums = load_study(pair_dirs[1])
     sdtm_frames, s_sums = load_study(pair_dirs[0])
     raw_contract, _ = draft_contract(
-        raw_frames, source="T", raw_edc=True, reassign=True,
+        raw_frames, source="T", raw_edc=True, reassign="subjects",
         join_key_template="TIG-2026-001-US-{SUBJECT}",
     )
     raw = DeidPipeline(raw_contract, vault, operator="pytest").run(
@@ -216,4 +216,57 @@ def test_turning_it_on_changes_the_signature(pair_dirs):
     frames, _ = load_study(pair_dirs[0])
     off, _ = draft_contract(frames, source="T", sdtm_conformant=True)
     on, _ = draft_contract(frames, source="T", sdtm_conformant=True, reassign=True)
+    by_subject, _ = draft_contract(frames, source="T", sdtm_conformant=True,
+                                  reassign="subjects")
+    assert on.rules_digest() != by_subject.rules_digest()
     assert off.rules_digest() != on.rules_digest()
+
+
+# ----------------------------------------------------------------------
+# rows: every record dealt at random, independently
+# ----------------------------------------------------------------------
+def test_every_record_is_dealt_on_its_own(pair_dirs, vault):
+    frames, sums = load_study(pair_dirs[0])
+    contract, _ = draft_contract(frames, source="T", sdtm_conformant=True,
+                                 reassign=True)
+    assert next(d for d in contract.domains if d.name == "AE").reassign_mode == "rows"
+    out = DeidPipeline(contract, vault, operator="pytest").run(frames, checksums=sums)
+    ae_in, ae_out = frames["AE"], out.frames["AE"]
+    dm_in, dm_out = frames["DM"], out.frames["DM"]
+    rep = out.manifest["reassignment"]["groups"]["AE"]
+    assert rep["mode"] == "rows" and "AESEQ" in rep["renumbered"]
+
+    # nothing lost, nothing invented
+    assert sorted(ae_out["AETERM"]) == sorted(ae_in["AETERM"])
+    # each event keeps its study day, now counted from its new owner
+    ref_in = dict(zip(dm_in["USUBJID"], dm_in["RFSTDTC"].map(_iso)))
+    ref_out = dict(zip(dm_out["USUBJID"], dm_out["RFSTDTC"].map(_iso)))
+    def days(frame, refs):
+        return sorted(
+            (t, (_iso(d) - refs[u]).days)
+            for t, d, u in zip(frame["AETERM"], frame["AESTDTC"], frame["USUBJID"])
+            if _iso(d)
+        )
+    assert days(ae_in, ref_in) == days(ae_out, ref_out)
+    # AESEQ is a key again under each new owner
+    for _, g in ae_out.groupby("USUBJID"):
+        assert sorted(int(x) for x in g["AESEQ"]) == list(range(1, len(g) + 1))
+    # and the rows are no longer in the original order
+    assert list(ae_out["AETERM"]) != list(ae_in["AETERM"])
+
+
+def test_rows_mode_on_raw_alone(pair_dirs, vault):
+    raw_frames, r_sums = load_study(pair_dirs[1])
+    contract, _ = draft_contract(raw_frames, source="T", raw_edc=True,
+                                 reassign=True)
+    out = DeidPipeline(contract, vault, operator="pytest").run(
+        raw_frames, checksums=r_sums
+    )
+    rep = out.manifest["reassignment"]["groups"]["AE_LOG"]
+    assert rep["mode"] == "rows" and rep["dates"] == "kept as written"
+    ae = out.frames["AE_LOG"]
+    assert sorted(ae["AE_TERM"]) == sorted(raw_frames["AE_LOG"]["AE_TERM"])
+    subjects = set(out.frames["DEMOG"]["SUBJECT"])
+    assert set(ae["SUBJECT"]) <= subjects
+    for _, g in ae.groupby("SUBJECT"):
+        assert sorted(int(x) for x in g["AE_NO"]) == list(range(1, len(g) + 1))

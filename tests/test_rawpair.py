@@ -1033,3 +1033,19 @@ def test_one_date_in_many_formats_lands_on_one_date(vault):
             p = rawdates.parse(out[0], order or "dmy")
             landed.add((p.year, p.month, p.day))
         assert len(landed) == 1, (group, landed)
+
+
+
+@pytest.mark.parametrize(
+    "value,order,days,expected",
+    [
+        ("5/9/2025", "mdy", 10, "5/19/2025"),
+        ("05/09/2025", "mdy", 10, "05/19/2025"),
+        ("9/5/2025", "dmy", 1, "10/5/2025"),
+        ("9-Mar-2025", None, 1, "10-Mar-2025"),
+        ("12/25/2025", "mdy", 10, "01/04/2026"),
+    ],
+)
+def test_leading_zeros_are_kept_as_written(value, order, days, expected):
+    from deidkit.reassign import move_date
+    assert move_date(value, days, order) == expected

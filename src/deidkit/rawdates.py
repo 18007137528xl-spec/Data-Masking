@@ -113,6 +113,8 @@ class RawDate:
             .replace("{yy}", f"{y % 100:02d}")
             .replace("{m}", f"{m:02d}" if m else "")
             .replace("{d}", f"{d:02d}" if d else "")
+            .replace("{m1}", str(m) if m else "")
+            .replace("{d1}", str(d) if d else "")
             .replace("{mon}", _MONTH_ABBR.get(m or 0, "").capitalize())
             .replace("{MON}", _MONTH_ABBR.get(m or 0, "").upper())
             .replace("{monl}", _MONTH_ABBR.get(m or 0, ""))
@@ -406,6 +408,16 @@ def parse(value: object, order: Order = "unknown") -> RawDate | None:
         # ISO 8601 writes 2025-03-19T14:30; an Excel cell read back as text
         # writes a space. Re-emit whichever arrived.
         tmpl = tmpl.replace("{tsep}", gd.get("tsep") or " ")
+        # 5/9/2025 is written without leading zeros, and rendering the
+        # shifted date as 03/29/2024 would change the form the model is
+        # meant to learn from. One digit anywhere in the day or month means
+        # the value is unpadded; 12/25/2025 shows nothing either way and
+        # keeps the padded default.
+        written = [
+            gd.get(k) for k in ("a", "b", "d", "m") if gd.get(k) is not None
+        ]
+        if any(len(w) == 1 for w in written):
+            tmpl = tmpl.replace("{d}", "{d1}").replace("{m}", "{m1}")
         return RawDate(y, mo, d, tmpl, gran, gd.get("tail"))
     return _parse_unknown(text, order)
 

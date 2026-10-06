@@ -34,6 +34,7 @@ surrogates and screening then see an ordinary drop.
 
 from __future__ import annotations
 
+import secrets
 from datetime import date, timedelta
 from typing import Any
 
@@ -113,6 +114,165 @@ def _same(a: Any, b: Any) -> bool:
     return str(a).strip() == str(b).strip()
 
 
+def _relabel(
+    frame: pd.DataFrame,
+    d: DomainContract,
+    donors: list[str | None],
+    moving: list[int],
+    recipient: dict[int, str],
+    delta: dict[int, int],
+    anchor: pd.DataFrame,
+    row_of: dict[str, int],
+    spec: Any,
+    date_rules: list[FieldRule],
+) -> pd.DataFrame:
+    """Give rows ``moving`` to ``recipient[i]``: rewrite the subject-level
+    columns to the new owner's values and move dates by ``delta[i]``."""
+    new = frame.copy()
+    date_cols = {r.column for r in date_rules}
+    # Columns that repeat a subject-level value from the anchor domain --
+    # SUBJECT, SITE, STUDYID -- shown by the data rather than assumed from
+    # names: every row must equal its own subject's anchor value. DOMAIN
+    # ('AE' vs 'DM') fails this and is left alone.
+    mirrors: dict[str, str] = {}
+    for col in frame.columns:
+        if col in date_cols:
+            continue
+        candidates = [col] if col in anchor.columns else []
+        if col == d.subject_key and spec.subject_column in anchor.columns:
+            candidates.append(spec.subject_column)
+        for a in candidates:
+            j = frame.columns.get_loc(col)
+            if all(
+                _same(frame.iat[i, j], anchor.at[row_of[donors[i]], a])
+                for i in moving
+            ):
+                mirrors[col] = a
+                break
+    if d.subject_key and d.subject_key not in mirrors:
+        raise ReassignError(
+            f"{d.name}.{d.subject_key}: does not match "
+            f"{spec.domain}.{spec.subject_column} row for row, so a record "
+            "cannot be relabelled to its new subject"
+        )
+    for col, a in mirrors.items():
+        j = new.columns.get_loc(col)
+        for i in moving:
+            new.iat[i, j] = anchor.at[row_of[recipient[i]], a]
+    for r in date_rules:
+        order = r.date_order or rawdates.infer_order(frame[r.column])
+        j = new.columns.get_loc(r.column)
+        for i in moving:
+            if delta[i]:
+                new.iat[i, j] = move_date(frame.iat[i, j], delta[i], order)
+
+    after = _keys(new, d)
+    wrong = [i for i in moving if str(after.iat[i]) != recipient[i]]
+    if wrong:
+        raise ReassignError(
+            f"{d.name}: {len(wrong)} relabelled row(s) still resolve to their "
+            "old subject -- the join_key_template uses a column that does not "
+            f"repeat {spec.domain}'s value"
+        )
+    return new
+
+
+def _sequence_columns(
+    frame: pd.DataFrame, donors: list[str | None], skip: set[str]
+) -> list[str]:
+    """Columns that number each subject's records 1..n (AESEQ, AE_NO).
+
+    Found by the data: every subject's values are exactly 1..n, and somebody
+    has more than one. VISITNUM repeats within a subject and is not one; a
+    dose that happens to be 1 for a subject with one record is not proof.
+    """
+    found = []
+    for col in frame.columns:
+        if col in skip:
+            continue
+        per: dict[str, list[int]] = {}
+        ok = True
+        for v, k in zip(frame[col], donors):
+            if k is None:
+                continue
+            text = str(v).strip()
+            if text.endswith(".0"):  # a number column read back as float
+                text = text[:-2]
+            if not text.isdigit():
+                ok = False
+                break
+            per.setdefault(k, []).append(int(text))
+        if not ok or not per or max(len(x) for x in per.values()) < 2:
+            continue
+        if all(sorted(x) == list(range(1, len(x) + 1)) for x in per.values()):
+            found.append(col)
+    return found
+
+
+def _rows_mode(
+    frame: pd.DataFrame,
+    d: DomainContract,
+    ks: pd.Series,
+    anchor: pd.DataFrame,
+    row_of: dict[str, int],
+    refs: dict[str, date | None],
+    spec: Any,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Every record to a subject drawn at random, independently.
+
+    No sets: a subject's three adverse events land on three different
+    subjects, or the same one, by chance. The draw is fresh each run and not
+    kept -- the original drop is the record of who had what.
+    """
+    rng = secrets.SystemRandom()
+    pool = sorted(row_of)
+    donors = [None if pd.isna(k) else str(k) for k in ks]
+    stray = {k for k in donors if k is not None and k not in row_of}
+    if stray:
+        raise ReassignError(
+            f"{d.name}: {len(stray)} subject(s) have records here but no row in "
+            f"{spec.domain}, so their records have no subject list to be dealt "
+            "from. Reassignment needs every subject in the anchor domain."
+        )
+    moving = [i for i, k in enumerate(donors) if k is not None]
+    recipient = {i: rng.choice(pool) for i in moving}
+    delta = {}
+    for i in moving:
+        a, b = refs.get(donors[i]), refs.get(recipient[i])
+        delta[i] = (b - a).days if a and b else 0
+    date_rules = [r for r in d.fields if r.column in frame.columns and _is_date_rule(r)]
+    seqs = _sequence_columns(
+        frame, donors, {r.column for r in date_rules} | {d.subject_key or ""}
+    )
+    new = _relabel(frame, d, donors, moving, recipient, delta, anchor, row_of,
+                   spec, date_rules)
+
+    # Renumber 1..n under each new owner, so AESEQ is still a key.
+    for col in seqs:
+        counter: dict[str, int] = {}
+        j = new.columns.get_loc(col)
+        for i in moving:
+            counter[recipient[i]] = counter.get(recipient[i], 0) + 1
+            was = frame.iat[i, j]
+            n = counter[recipient[i]]
+            new.iat[i, j] = n if isinstance(was, (int, float)) else str(n)
+
+    # And deal the rows out in a random order, so position says nothing
+    # about who a record came from or when it was entered.
+    order = list(range(len(new)))
+    rng.shuffle(order)
+    new = new.iloc[order].reset_index(drop=True)
+    return new, {
+        "mode": "rows",
+        "domains": [d.name],
+        "rows": len(moving),
+        "subjects": len(pool),
+        "renumbered": seqs,
+        "dates": "moved by the reference-date difference"
+        if any(delta.values()) else "kept as written",
+    }
+
+
 def apply(
     frames: dict[str, pd.DataFrame], contract: Contract, vault: Vault
 ) -> tuple[dict[str, pd.DataFrame], dict[str, Any]]:
@@ -158,6 +318,17 @@ def apply(
     report: dict[str, Any] = {}
     groups: dict[str, list[DomainContract]] = {}
     for d in marked:
+        if d.reassign_mode == "rows":
+            ks = _keys(frames[d.name], d)
+            if ks is None:
+                raise ReassignError(
+                    f"{d.name}: no subject key to reassign by -- its "
+                    "subject_key or join_key_template must name columns it has"
+                )
+            out[d.name], report[d.name] = _rows_mode(
+                frames[d.name], d, ks, anchor, row_of, refs, spec
+            )
+            continue
         groups.setdefault(d.reassign, []).append(d)
 
     for group, doms in groups.items():
@@ -229,56 +400,12 @@ def apply(
                         mapping[k] = (mapping[k][0], 0)
                     report[group]["dates"] = "kept as written"
 
-            # Columns that repeat a subject-level value from the anchor
-            # domain -- SUBJECT, SITE, STUDYID -- shown by the data rather
-            # than assumed from names: every row must equal its own subject's
-            # anchor value. DOMAIN ('AE' vs 'DM') fails this and is left alone.
-            mirrors: dict[str, str] = {}
-            for col in frame.columns:
-                if col in date_cols:
-                    continue
-                candidates = [col] if col in anchor.columns else []
-                if col == d.subject_key and spec.subject_column in anchor.columns:
-                    candidates.append(spec.subject_column)
-                for a in candidates:
-                    if all(
-                        _same(frame.iat[i, frame.columns.get_loc(col)],
-                              anchor.at[row_of[donors[i]], a])
-                        for i in moving
-                    ):
-                        mirrors[col] = a
-                        break
-            if d.subject_key and d.subject_key not in mirrors:
-                raise ReassignError(
-                    f"{d.name}.{d.subject_key}: does not match "
-                    f"{spec.domain}.{spec.subject_column} row for row, so a "
-                    "record cannot be relabelled to its new subject"
-                )
-
-            for col, a in mirrors.items():
-                j = new.columns.get_loc(col)
-                for i in moving:
-                    new.iat[i, j] = anchor.at[row_of[mapping[donors[i]][0]], a]
-
-            for r in date_rules:
-                order = r.date_order or rawdates.infer_order(frame[r.column])
-                j = new.columns.get_loc(r.column)
-                for i in moving:
-                    new.iat[i, j] = move_date(
-                        frame.iat[i, j], mapping[donors[i]][1] or 0, order
-                    )
-
-            # The relabelled rows must now be found under their new owner.
-            after = _keys(new, d)
-            wrong = [
-                i for i in moving if str(after.iat[i]) != mapping[donors[i]][0]
-            ]
-            if wrong:
-                raise ReassignError(
-                    f"{d.name}: {len(wrong)} relabelled row(s) still resolve to "
-                    "their old subject -- the join_key_template uses a column "
-                    f"that does not repeat {spec.domain}'s value"
-                )
+            new = _relabel(
+                frame, d, donors, moving,
+                {i: mapping[donors[i]][0] for i in moving},
+                {i: mapping[donors[i]][1] or 0 for i in moving},
+                anchor, row_of, spec, date_rules,
+            )
             out[d.name] = new
 
         if vault.is_unanchored(group):

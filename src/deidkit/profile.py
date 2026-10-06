@@ -1191,7 +1191,7 @@ def draft_contract(
     raw_edc: bool = False,
     join_key_template: str | None = None,
     subject_id_template: str | None = None,
-    reassign: bool = False,
+    reassign: bool | str = False,
     dummy_text: bool = False,
 ) -> tuple[Contract, dict[str, dict[str, Suggestion]]]:
     """Draft a contract from profiled data.
@@ -1322,6 +1322,9 @@ def draft_contract(
                 if reassign and name != anchor_domain
                 else None
             ),
+            # True means the default the console offers: every record dealt
+            # at random. "subjects" keeps each subject's records together.
+            reassign_mode="subjects" if reassign == "subjects" else "rows",
             fields=[s.rule for s in per_col.values()],
         )
         dummied = any(

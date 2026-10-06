@@ -406,6 +406,14 @@ class DomainContract(BaseModel):
         "every study day, visit window and baseline flag is unchanged. Unset: "
         "records stay with their subject.",
     )
+    reassign_mode: Literal["rows", "subjects"] = Field(
+        default="subjects",
+        description="With 'reassign': 'rows' deals every record to a subject "
+        "drawn at random, independently, fresh on each run -- a subject's "
+        "three AEs land on three different subjects. 'subjects' moves each "
+        "subject's records together by a mapping held in the vault, which is "
+        "what keeps a raw and an SDTM side moving identically.",
+    )
     fields: list[FieldRule]
 
     @model_validator(mode="after")
@@ -631,7 +639,10 @@ class Contract(BaseModel):
                     "retained_in_full": d.retained_in_full,
                     # Only when set, so turning the feature on changes the
                     # digest and leaving it off changes nothing.
-                    **({"reassign": d.reassign} if d.reassign else {}),
+                    **(
+                        {"reassign": d.reassign, "reassign_mode": d.reassign_mode}
+                        if d.reassign else {}
+                    ),
                     "fields": [
                         f.model_dump(
                             mode="json", exclude={"note"}, exclude_defaults=True
