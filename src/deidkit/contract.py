@@ -406,9 +406,11 @@ class DomainContract(BaseModel):
         "every study day, visit window and baseline flag is unchanged. Unset: "
         "records stay with their subject.",
     )
-    reassign_mode: Literal["rows", "subjects"] = Field(
+    reassign_mode: Literal["values", "rows", "subjects"] = Field(
         default="subjects",
-        description="With 'reassign': 'rows' deals every record to a subject "
+        description="With 'reassign': 'values' deals every record to a random "
+        "subject AND shuffles every other column on its own across the domain, "
+        "so nothing on a row belongs together. 'rows' deals every record to a subject "
         "drawn at random, independently, fresh on each run -- a subject's "
         "three AEs land on three different subjects. 'subjects' moves each "
         "subject's records together by a mapping held in the vault, which is "

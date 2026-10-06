@@ -378,6 +378,9 @@ def do_run(s: Session, body: dict[str, Any]) -> dict[str, Any]:
             result.risk_report.to_dict() if result.risk_report is not None else None
         ),
         "queue_rows": len(result.review_queue),
+        # Whether anything was shuffled, said on the page: from the output
+        # alone a reassigned record and an untouched one look the same.
+        "reassignment": (result.manifest.get("reassignment") or {}).get("groups"),
     }
     return {"state": s.state(), **s.last_run}
 

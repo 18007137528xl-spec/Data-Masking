@@ -228,7 +228,7 @@ def test_turning_it_on_changes_the_signature(pair_dirs):
 def test_every_record_is_dealt_on_its_own(pair_dirs, vault):
     frames, sums = load_study(pair_dirs[0])
     contract, _ = draft_contract(frames, source="T", sdtm_conformant=True,
-                                 reassign=True)
+                                 reassign="rows")
     assert next(d for d in contract.domains if d.name == "AE").reassign_mode == "rows"
     out = DeidPipeline(contract, vault, operator="pytest").run(frames, checksums=sums)
     ae_in, ae_out = frames["AE"], out.frames["AE"]
@@ -258,7 +258,7 @@ def test_every_record_is_dealt_on_its_own(pair_dirs, vault):
 def test_rows_mode_on_raw_alone(pair_dirs, vault):
     raw_frames, r_sums = load_study(pair_dirs[1])
     contract, _ = draft_contract(raw_frames, source="T", raw_edc=True,
-                                 reassign=True)
+                                 reassign="rows")
     out = DeidPipeline(contract, vault, operator="pytest").run(
         raw_frames, checksums=r_sums
     )
@@ -270,3 +270,45 @@ def test_rows_mode_on_raw_alone(pair_dirs, vault):
     assert set(ae["SUBJECT"]) <= subjects
     for _, g in ae.groupby("SUBJECT"):
         assert sorted(int(x) for x in g["AE_NO"]) == list(range(1, len(g) + 1))
+
+
+
+# ----------------------------------------------------------------------
+# values (the default): every column shuffled on its own as well
+# ----------------------------------------------------------------------
+def test_values_mode_breaks_every_link_on_a_row(pair_dirs, vault):
+    frames, sums = load_study(pair_dirs[0])
+    contract, _ = draft_contract(frames, source="T", sdtm_conformant=True,
+                                 reassign=True)
+    ae_rule = next(d for d in contract.domains if d.name == "AE")
+    assert ae_rule.reassign_mode == "values"
+    out = DeidPipeline(contract, vault, operator="pytest").run(frames, checksums=sums)
+    rep = out.manifest["reassignment"]["groups"]["AE"]
+    assert rep["mode"] == "values"
+    assert {"AEDECOD", "AEBODSYS", "AESEV", "AESTDTC"} <= set(rep["columns_shuffled"])
+    assert not {"USUBJID", "STUDYID", "AESEQ"} & set(rep["columns_shuffled"])
+
+    ae_in, ae_out = frames["AE"], out.frames["AE"]
+    # every column keeps its values, just not its row
+    for col in ("AEDECOD", "AEBODSYS", "AESEV"):
+        assert sorted(ae_out[col].astype(str)) == sorted(ae_in[col].astype(str))
+    # the dictionary pairing is broken: AEDECOD no longer predicts AEBODSYS
+    pairs_in = set(zip(ae_in["AEDECOD"], ae_in["AEBODSYS"]))
+    pairs_out = set(zip(ae_out["AEDECOD"], ae_out["AEBODSYS"]))
+    assert len(pairs_out - pairs_in) > 10
+    # whose record it is still resolves, and AESEQ is still a key
+    assert set(ae_out["USUBJID"]) <= set(out.frames["DM"]["USUBJID"])
+    for _, g in ae_out.groupby("USUBJID"):
+        assert sorted(int(x) for x in g["AESEQ"]) == list(range(1, len(g) + 1))
+
+
+def test_values_mode_on_raw_keeps_the_site_with_the_subject(pair_dirs, vault):
+    raw_frames, r_sums = load_study(pair_dirs[1])
+    contract, _ = draft_contract(raw_frames, source="T", raw_edc=True,
+                                 reassign=True)
+    out = DeidPipeline(contract, vault, operator="pytest").run(
+        raw_frames, checksums=r_sums
+    )
+    ae = out.frames["AE_LOG"]
+    assert set(ae["SUBJECT"]) <= set(out.frames["DEMOG"]["SUBJECT"])
+    assert "AE_TERM" in out.manifest["reassignment"]["groups"]["AE_LOG"]["columns_shuffled"]

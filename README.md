@@ -387,10 +387,12 @@ python scripts/demo_pair.py
 For a test or training corpus, where it does not matter whether a record is
 true of anyone, `--reassign` (or the console checkbox) cuts the last link a
 shifted, surrogated tier still has: the one between a person and their
-clinical content. Every AE, MH, CM, LB, VS, EG, PE and QS record is dealt to a
-subject drawn at random, one record at a time. A subject's three adverse
-events land on three different subjects, or by chance the same one; the draw
-is fresh on every run.
+clinical content. In AE, MH, CM, LB, VS, EG, PE and QS every record is dealt to
+a subject drawn at random, one record at a time, and then every other column
+is shuffled on its own across the domain: AEDECOD no longer goes with its
+AEBODSYS, the severity with the term, the start date with the end date. The
+draw is fresh on every run. `--reassign-rows` stops after the first step, so
+each record keeps its own columns together.
 
 ```bash
 deidkit profile data/quarantine/raw_abc -o contracts/abc_raw.yaml --raw --reassign ...

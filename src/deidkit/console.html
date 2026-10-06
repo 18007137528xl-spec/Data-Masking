@@ -197,11 +197,11 @@ dl.kv dd{margin:0;font-family:var(--mono);word-break:break-all}
           punctuation and case. The same text always gets the same dummy, so the raw and
           SDTM sides still match. Nothing is left to screen or adjudicate.</span></label>
         <label class="check"><input type="checkbox" id="reassign">
-          <span><b>Shuffle records between subjects</b>. Every AE, MH, CM, LB, VS, EG, PE and
-          QS record is dealt to a subject drawn at random, one record at a time. SUBJECT and
-          SITE follow the new owner, --SEQ is renumbered, row order is shuffled, and on a raw
-          extract the dates stay as written. The content no longer belongs to anyone: for
-          test and training data only.</span></label>
+          <span><b>Shuffle records between subjects</b>. In AE, MH, CM, LB, VS, EG, PE and QS
+          every record goes to a subject drawn at random, and every other column is shuffled on
+          its own, so AEDECOD no longer goes with its AEBODSYS. SUBJECT, SITE and STUDYID
+          follow the new owner and --SEQ is renumbered. Tick this <i>before</i> reading the
+          drop. For test and training data only.</span></label>
         <div class="row">
           <div class="field">
             <label for="source">Study / source name</label>
@@ -607,6 +607,21 @@ function renderResults(j){
       Quasi-identifiers counted: ${esc((risk.quasi_identifiers || []).join(', ') || 'none')}.
       A k computed over site-level columns alone says how many rows share a site, not how
       hard it is to find a person.</div>`;
+  }
+
+  const moved = j.reassignment || {};
+  if (Object.keys(moved).length){
+    html += `<div class="note good"><b>Shuffled between subjects</b>
+      ${Object.entries(moved).map(([name, g]) =>
+        `${esc(name)}: ${esc(typeof g.rows === 'number' ? g.rows
+          : Object.values(g.rows || {}).reduce((a, b) => a + b, 0))} record(s)` +
+        (g.columns_shuffled && g.columns_shuffled.length
+          ? `, ${esc(g.columns_shuffled.length)} column(s) shuffled on their own` : '')
+      ).join('; ')}.</div>`;
+  }else if (STATE.reassign){
+    html += `<div class="note warn"><b>Nothing was shuffled</b>
+      Shuffling was ticked, but no domain in this drop is one that gets shuffled
+      (AE, MH, CM, LB, VS, EG, PE, QS by file name).</div>`;
   }
 
   html += `<div class="card"><dl class="kv">

@@ -125,9 +125,10 @@ def _relabel(
     row_of: dict[str, int],
     spec: Any,
     date_rules: list[FieldRule],
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, dict[str, str]]:
     """Give rows ``moving`` to ``recipient[i]``: rewrite the subject-level
-    columns to the new owner's values and move dates by ``delta[i]``."""
+    columns to the new owner's values and move dates by ``delta[i]``.
+    Returns the frame and the subject-level columns it rewrote."""
     new = frame.copy()
     date_cols = {r.column for r in date_rules}
     # Columns that repeat a subject-level value from the anchor domain --
@@ -174,7 +175,7 @@ def _relabel(
             "old subject -- the join_key_template uses a column that does not "
             f"repeat {spec.domain}'s value"
         )
-    return new
+    return new, mirrors
 
 
 def _sequence_columns(
@@ -217,8 +218,15 @@ def _rows_mode(
     row_of: dict[str, int],
     refs: dict[str, date | None],
     spec: Any,
+    shuffle_values: bool = False,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Every record to a subject drawn at random, independently.
+
+    With ``shuffle_values`` every other column is then shuffled on its own
+    across the domain as well, so nothing on a row belongs together any more
+    -- AEDECOD no longer goes with its AEBODSYS, nor the start date with the
+    end date. Only the columns that say whose record it is (SUBJECT, SITE,
+    STUDYID) and the per-subject sequence number stay put.
 
     No sets: a subject's three adverse events land on three different
     subjects, or the same one, by chance. The draw is fresh each run and not
@@ -239,13 +247,15 @@ def _rows_mode(
     delta = {}
     for i in moving:
         a, b = refs.get(donors[i]), refs.get(recipient[i])
-        delta[i] = (b - a).days if a and b else 0
+        # Moving dates to keep a study day true means nothing once the date
+        # itself is dealt to a different row.
+        delta[i] = (b - a).days if a and b and not shuffle_values else 0
     date_rules = [r for r in d.fields if r.column in frame.columns and _is_date_rule(r)]
     seqs = _sequence_columns(
         frame, donors, {r.column for r in date_rules} | {d.subject_key or ""}
     )
-    new = _relabel(frame, d, donors, moving, recipient, delta, anchor, row_of,
-                   spec, date_rules)
+    new, mirrors = _relabel(frame, d, donors, moving, recipient, delta, anchor,
+                            row_of, spec, date_rules)
 
     # Renumber 1..n under each new owner, so AESEQ is still a key.
     for col in seqs:
@@ -257,13 +267,29 @@ def _rows_mode(
             n = counter[recipient[i]]
             new.iat[i, j] = n if isinstance(was, (int, float)) else str(n)
 
+    shuffled: list[str] = []
+    if shuffle_values:
+        import re as _re
+
+        fixed = set(mirrors) | set(seqs) | {d.subject_key or ""}
+        if d.join_key_template:
+            fixed |= set(_re.findall(r"{(\w+)}", d.join_key_template))
+        for col in new.columns:
+            if col in fixed or new[col].nunique(dropna=False) < 2:
+                continue
+            perm = list(range(len(new)))
+            rng.shuffle(perm)
+            new[col] = new[col].iloc[perm].to_numpy()
+            shuffled.append(col)
+
     # And deal the rows out in a random order, so position says nothing
     # about who a record came from or when it was entered.
     order = list(range(len(new)))
     rng.shuffle(order)
     new = new.iloc[order].reset_index(drop=True)
     return new, {
-        "mode": "rows",
+        "mode": "values" if shuffle_values else "rows",
+        "columns_shuffled": shuffled,
         "domains": [d.name],
         "rows": len(moving),
         "subjects": len(pool),
@@ -327,6 +353,18 @@ def apply(
                 )
             out[d.name], report[d.name] = _rows_mode(
                 frames[d.name], d, ks, anchor, row_of, refs, spec
+            )
+            continue
+        if d.reassign_mode == "values":
+            ks = _keys(frames[d.name], d)
+            if ks is None:
+                raise ReassignError(
+                    f"{d.name}: no subject key to reassign by -- its "
+                    "subject_key or join_key_template must name columns it has"
+                )
+            out[d.name], report[d.name] = _rows_mode(
+                frames[d.name], d, ks, anchor, row_of, refs, spec,
+                shuffle_values=True,
             )
             continue
         groups.setdefault(d.reassign, []).append(d)
@@ -400,7 +438,7 @@ def apply(
                         mapping[k] = (mapping[k][0], 0)
                     report[group]["dates"] = "kept as written"
 
-            new = _relabel(
+            new, _ = _relabel(
                 frame, d, donors, moving,
                 {i: mapping[donors[i]][0] for i in moving},
                 {i: mapping[donors[i]][1] or 0 for i in moving},

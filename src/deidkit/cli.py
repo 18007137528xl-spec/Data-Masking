@@ -242,7 +242,8 @@ def cmd_profile(args: argparse.Namespace) -> int:
         subject_id_template=args.id_template,
         reassign=(
             "subjects" if args.reassign_by_subject
-            else "rows" if args.reassign else False
+            else "rows" if args.reassign_rows
+            else True if args.reassign else False
         ),
         dummy_text=args.dummy_text,
     )
@@ -374,7 +375,7 @@ def cmd_profile(args: argparse.Namespace) -> int:
     moving = [f"{d.name} ({d.reassign})" for d in contract.domains if d.reassign]
     if moving:
         print(f"reassigned between subjects: {', '.join(moving)}")
-    elif args.reassign or args.reassign_by_subject:
+    elif args.reassign or args.reassign_rows or args.reassign_by_subject:
         print("reassign: no domain in this drop is one that can be reassigned")
     retained = [d.name for d in contract.domains if d.retained_in_full]
     if retained:
@@ -990,11 +991,17 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument(
         "--reassign",
         action="store_true",
-        help="deal every AE, MH, CM, LB, VS, EG, PE and QS record to a subject "
-        "drawn at random, independently, fresh on each run. SUBJECT and SITE "
-        "follow the new owner, --SEQ is renumbered, row order is shuffled. "
-        "On a raw extract dates stay as written. The records stop being true "
-        "of anyone: for test and training corpora, not for analysis.",
+        help="shuffle the AE, MH, CM, LB, VS, EG, PE and QS domains: every "
+        "record goes to a subject drawn at random and every other column is "
+        "shuffled on its own, so AEDECOD no longer goes with its AEBODSYS. "
+        "SUBJECT, SITE and STUDYID follow the new owner and --SEQ is "
+        "renumbered. Fresh on each run. For test and training corpora only.",
+    )
+    sp.add_argument(
+        "--reassign-rows",
+        action="store_true",
+        help="like --reassign, but each record keeps its columns together: "
+        "only the subject it is filed under is random.",
     )
     sp.add_argument(
         "--reassign-by-subject",

@@ -1323,8 +1323,12 @@ def draft_contract(
                 else None
             ),
             # True means the default the console offers: every record dealt
-            # at random. "subjects" keeps each subject's records together.
-            reassign_mode="subjects" if reassign == "subjects" else "rows",
+            # at random and every column shuffled on its own. "rows" keeps a
+            # record's columns together; "subjects" keeps a subject's records
+            # together.
+            reassign_mode=(
+                reassign if reassign in ("subjects", "rows") else "values"
+            ),
             fields=[s.rule for s in per_col.values()],
         )
         dummied = any(
