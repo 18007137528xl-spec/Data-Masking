@@ -34,6 +34,7 @@ surrogates and screening then see an ordinary drop.
 
 from __future__ import annotations
 
+import re
 import secrets
 from datetime import date, timedelta
 from typing import Any
@@ -210,6 +211,47 @@ def _sequence_columns(
     return found
 
 
+_SUBJECT_LEVEL_NAMES = re.compile(
+    r"^(STUDYID|STUDY|PROJECT|USUBJID|SUBJID|SUBJECT|SUBJECTID|SUBJNUM|PATID|"
+    r"SITEID|SITE|SITENUM|SITENUMBER|SITENO|STUDYSITEID|INVID|COUNTRY)$"
+)
+
+
+def _self_anchor(
+    frame: pd.DataFrame, d: DomainContract, ks: pd.Series
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    """One row per subject, built from the domain itself, for a drop with no
+    DM to read subjects and sites from.
+
+    The columns kept are the subject-level ones: the subject key, and any
+    column that never varies within a subject -- shown by subjects who have
+    several records. With nobody holding more than one record there is no
+    such evidence, and only the usual names (STUDYID, SUBJECT, SITE...) count.
+    """
+    keys = [None if pd.isna(k) else str(k) for k in ks]
+    rows: dict[str, list[int]] = {}
+    for i, k in enumerate(keys):
+        if k is not None:
+            rows.setdefault(k, []).append(i)
+    multi = [ix for ix in rows.values() if len(ix) > 1]
+    cols = []
+    for j, col in enumerate(frame.columns):
+        if col == d.subject_key:
+            cols.append(col)
+            continue
+        if len(multi) >= 2:
+            if all(
+                all(_same(frame.iat[i, j], frame.iat[ix[0], j]) for i in ix)
+                for ix in rows.values()
+            ):
+                cols.append(col)
+        elif _SUBJECT_LEVEL_NAMES.match(re.sub(r"[ _\-.]", "", str(col).upper())):
+            cols.append(col)
+    firsts = [ix[0] for ix in rows.values()]
+    anchor = frame.iloc[firsts][cols].reset_index(drop=True)
+    return anchor, {k: n for n, k in enumerate(rows)}
+
+
 def _rows_mode(
     frame: pd.DataFrame,
     d: DomainContract,
@@ -309,66 +351,72 @@ def apply(
         return frames, {}
 
     spec = contract.anchor
-    if spec.domain not in frames:
-        raise ReassignError(
-            f"reassignment needs the anchor domain {spec.domain!r} in the drop: "
-            "it is where each subject's reference date and site come from"
-        )
-    anchor_dom = contract.domain(spec.domain)
-    if anchor_dom.reassign:
-        raise ReassignError(
-            f"{spec.domain} is the anchor domain and cannot be reassigned: "
-            "every other domain's dates are measured from it"
-        )
-    anchor = frames[spec.domain].reset_index(drop=True)
-    akeys = _keys(anchor, anchor_dom)
-    if akeys is None:
-        raise ReassignError(
-            f"{spec.domain}: no subject key to reassign by -- set its "
-            "subject_key or join_key_template"
-        )
-    row_of = {str(k): i for i, k in enumerate(akeys) if not pd.isna(k)}
+    # The subject list, sites and reference dates normally come from DM. A
+    # drop of one AE file has no DM -- the anchor is the AE file itself -- and
+    # then each domain is dealt among its own subjects, with the subject-level
+    # columns read from the domain (see _self_anchor).
+    shared = None
+    if spec.domain in frames and not contract.domain(spec.domain).reassign:
+        anchor_dom = contract.domain(spec.domain)
+        anchor = frames[spec.domain].reset_index(drop=True)
+        akeys = _keys(anchor, anchor_dom)
+        if akeys is None:
+            raise ReassignError(
+                f"{spec.domain}: no subject key to reassign by -- set its "
+                "subject_key or join_key_template"
+            )
+        row_of = {str(k): i for i, k in enumerate(akeys) if not pd.isna(k)}
 
-    # Real reference dates, where the anchor domain has them.
-    refs: dict[str, date | None] = {}
-    if spec.date_column in anchor.columns:
-        rule = anchor_dom.rule(spec.date_column)
-        order = (rule.date_order if rule else None) or rawdates.infer_order(
-            anchor[spec.date_column]
-        )
-        for k, i in row_of.items():
-            p = rawdates.parse(anchor.at[i, spec.date_column], order)
-            refs[k] = p.to_date() if p else None
+        # Real reference dates, where the anchor domain has them.
+        refs: dict[str, date | None] = {}
+        if spec.date_column in anchor.columns:
+            rule = anchor_dom.rule(spec.date_column)
+            order = (rule.date_order if rule else None) or rawdates.infer_order(
+                anchor[spec.date_column]
+            )
+            for k, i in row_of.items():
+                p = rawdates.parse(anchor.at[i, spec.date_column], order)
+                refs[k] = p.to_date() if p else None
+        shared = (anchor, row_of, refs)
 
     out = dict(frames)
     report: dict[str, Any] = {}
     groups: dict[str, list[DomainContract]] = {}
     for d in marked:
-        if d.reassign_mode == "rows":
+        if d.reassign_mode in ("rows", "values"):
             ks = _keys(frames[d.name], d)
             if ks is None:
                 raise ReassignError(
                     f"{d.name}: no subject key to reassign by -- its "
                     "subject_key or join_key_template must name columns it has"
                 )
-            out[d.name], report[d.name] = _rows_mode(
-                frames[d.name], d, ks, anchor, row_of, refs, spec
-            )
-            continue
-        if d.reassign_mode == "values":
-            ks = _keys(frames[d.name], d)
-            if ks is None:
-                raise ReassignError(
-                    f"{d.name}: no subject key to reassign by -- its "
-                    "subject_key or join_key_template must name columns it has"
+            if shared is not None:
+                anchor_ctx = shared
+                local_spec = spec
+            else:
+                a, r = _self_anchor(frames[d.name], d, ks)
+                anchor_ctx = (a, r, {})
+                local_spec = spec.model_copy(
+                    update={"domain": d.name, "subject_column": d.subject_key or ""}
                 )
             out[d.name], report[d.name] = _rows_mode(
-                frames[d.name], d, ks, anchor, row_of, refs, spec,
-                shuffle_values=True,
+                frames[d.name], d, ks, *anchor_ctx, local_spec,
+                shuffle_values=d.reassign_mode == "values",
             )
+            if shared is None:
+                report[d.name]["subjects_from"] = d.name
             continue
         groups.setdefault(d.reassign, []).append(d)
 
+    if groups and shared is None:
+        raise ReassignError(
+            f"moving each subject's records together needs the anchor domain "
+            f"{spec.domain!r} in the drop, separate from the domains being "
+            "moved: it is where each subject's reference date and site come "
+            "from. Without it, use the default shuffle instead."
+        )
+    if shared is not None:
+        anchor, row_of, refs = shared
     for group, doms in groups.items():
         dom_keys = {d.name: _keys(frames[d.name], d) for d in doms}
         for name, ks in dom_keys.items():

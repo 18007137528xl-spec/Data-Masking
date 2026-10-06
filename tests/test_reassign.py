@@ -312,3 +312,43 @@ def test_values_mode_on_raw_keeps_the_site_with_the_subject(pair_dirs, vault):
     ae = out.frames["AE_LOG"]
     assert set(ae["SUBJECT"]) <= set(out.frames["DEMOG"]["SUBJECT"])
     assert "AE_TERM" in out.manifest["reassignment"]["groups"]["AE_LOG"]["columns_shuffled"]
+
+
+# ----------------------------------------------------------------------
+# a drop of one file: no DM to take subjects and sites from
+# ----------------------------------------------------------------------
+def test_an_ae_file_on_its_own_is_shuffled(pair_dirs, vault):
+    frames, sums = load_study(pair_dirs[0])
+    only = {"AE": frames["AE"]}
+    contract, _ = draft_contract(only, source="T", sdtm_conformant=True,
+                                 reassign=True)
+    assert contract.anchor.domain == "AE"
+    out = DeidPipeline(contract, vault, operator="pytest").run(only, checksums={})
+    rep = out.manifest["reassignment"]["groups"]["AE"]
+    assert rep["mode"] == "values" and rep["subjects_from"] == "AE"
+    ae_in, ae_out = frames["AE"], out.frames["AE"]
+    pairs_in = set(zip(ae_in["AEDECOD"], ae_in["AEBODSYS"]))
+    assert len(set(zip(ae_out["AEDECOD"], ae_out["AEBODSYS"])) - pairs_in) > 10
+    assert ae_out["USUBJID"].nunique() <= ae_in["USUBJID"].nunique()
+    for _, g in ae_out.groupby("USUBJID"):
+        assert sorted(int(x) for x in g["AESEQ"]) == list(range(1, len(g) + 1))
+
+
+def test_without_dm_the_site_still_follows_the_subject(vault):
+    subj = [f"10{s}-00{n}" for s in (1, 2) for n in (1, 2, 3)]
+    rows = []
+    for k in subj:
+        for seq in (1, 2):
+            rows.append({"SUBJECT": k, "SITE": k[:3], "AE_NO": str(seq),
+                         "AE_TERM": f"term {k} {seq}", "SEVERITY": "MILD" if seq == 1 else "SEVERE"})
+    frame = pd.DataFrame(rows)
+    contract, _ = draft_contract({"EDC_AE_RAWDATA": frame}, source="T",
+                                 raw_edc=True, reassign=True)
+    out = DeidPipeline(contract, vault, operator="pytest").run(
+        {"EDC_AE_RAWDATA": frame}, checksums={}
+    )
+    ae = out.frames["EDC_AE_RAWDATA"]
+    rep = out.manifest["reassignment"]["groups"]["EDC_AE_RAWDATA"]
+    assert "SITE" not in rep["columns_shuffled"]
+    # each subject sits at exactly one site, the one its number says
+    assert (ae.groupby("SUBJECT")["SITE"].nunique() == 1).all()

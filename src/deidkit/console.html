@@ -621,7 +621,9 @@ function renderResults(j){
   }else if (STATE.reassign){
     html += `<div class="note warn"><b>Nothing was shuffled</b>
       Shuffling was ticked, but no domain in this drop is one that gets shuffled
-      (AE, MH, CM, LB, VS, EG, PE, QS by file name).</div>`;
+      (AE, MH, CM, LB, VS, EG, PE, QS, recognised by file name: ae.csv or
+      EDC_AE_RAWDATA_... both count). If the box was ticked after the drop was read,
+      read it again.</div>`;
   }
 
   html += `<div class="card"><dl class="kv">

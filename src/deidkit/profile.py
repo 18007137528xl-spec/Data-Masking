@@ -1317,11 +1317,10 @@ def draft_contract(
                 else _raw_subject_key(frame)
             ),
             join_key_template=join_key_template,
-            reassign=(
-                reassign_group(name)
-                if reassign and name != anchor_domain
-                else None
-            ),
+            # DM, EX and DS are never in a group, so the anchor is never
+            # moved -- except in a drop with no DM, where the anchor is the
+            # AE file itself and the reassignment builds its own subject list.
+            reassign=reassign_group(name) if reassign else None,
             # True means the default the console offers: every record dealt
             # at random and every column shuffled on its own. "rows" keeps a
             # record's columns together; "subjects" keeps a subject's records
