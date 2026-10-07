@@ -24,8 +24,10 @@ file meets it first.
 Word documents are rewritten in place, keeping every table, heading, style
 and number: body, tables, text boxes, headers, footers, footnotes, endnotes
 and comments, plus the document properties. A PDF can only be read as text,
-so its masked copy is a text file. Images are not read at all -- a sponsor
-logo survives -- and the report says how many there were.
+so with PyMuPDF installed it is redacted in place -- the text removed from
+the file, the replacement drawn where it stood, pages and layout kept --
+and without it the masked copy is a text file. Images are not read at all
+-- a sponsor logo survives -- and the report says how many there were.
 """
 
 from __future__ import annotations
@@ -141,6 +143,12 @@ def read_text(path: Path) -> list[str]:
                 blocks += [e.text for e in core.iter() if e.text and e.text.strip()]
         return blocks
     if suffix == ".pdf":
+        pm = _pymupdf()
+        if pm is not None:
+            with pm.open(str(path)) as doc:
+                return [page.get_text("text") for page in doc] + [
+                    v for v in (doc.metadata or {}).values() if isinstance(v, str) and v
+                ]
         from pypdf import PdfReader
 
         return [page.extract_text() or "" for page in PdfReader(str(path)).pages]
@@ -472,8 +480,90 @@ def _write_docx(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]
     return {"replaced": replaced, "images_not_read": images}
 
 
+def _pymupdf():
+    try:
+        import pymupdf  # noqa: F401
+
+        return pymupdf
+    except ImportError:
+        return None
+
+
 def output_name(src: Path) -> str:
-    return src.stem + (".txt" if src.suffix.lower() == ".pdf" else src.suffix.lower())
+    if src.suffix.lower() == ".pdf" and _pymupdf() is None:
+        return src.stem + ".txt"
+    return src.stem + src.suffix.lower()
+
+
+def _fit(pm, text: str, width: float, size: float, font: str) -> float:
+    """The largest font size, up to the original, at which ``text`` fits."""
+    while size > 4 and pm.get_text_length(text, fontname=font, fontsize=size) > width:
+        size -= 0.5
+    return max(size, 4)
+
+
+def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
+    """Redact each term where it sits on the page and write the replacement
+    in its place, so the masked PDF keeps its pages, tables and layout.
+
+    Redaction removes the text from the file, not just from view -- a black
+    box over a selectable word is the classic leak. Matching is done per
+    line on the characters' own positions, with the same whole-term rule as
+    everywhere else. A term broken across two lines is not found here; the
+    read-back counts it, and the report says so.
+    """
+    pm = _pymupdf()
+    m = _matcher(mapping)
+    doc = pm.open(str(src))
+    replaced = images = empty = 0
+    for page in doc:
+        images += len(page.get_images(full=True))
+        hits = []
+        raw = page.get_text("rawdict")
+        if not page.get_text("text").strip():
+            empty += 1
+        if m is not None:
+            pat, lookup = m
+            for block in raw.get("blocks", []):
+                for line in block.get("lines", []):
+                    chars = [c for span in line["spans"] for c in
+                             ({**ch, "size": span["size"]} for ch in span["chars"])]
+                    text = "".join(c["c"] for c in chars)
+                    for x in pat.finditer(text):
+                        box = pm.Rect(chars[x.start()]["bbox"])
+                        for c in chars[x.start() + 1:x.end()]:
+                            box |= pm.Rect(c["bbox"])
+                        hits.append((box, lookup[x.group(0).lower()],
+                                     chars[x.start()]["size"],
+                                     chars[x.start()]["origin"]))
+        for box, *_ in hits:
+            page.add_redact_annot(box, fill=False, cross_out=False)
+        if hits:
+            page.apply_redactions(
+                images=pm.PDF_REDACT_IMAGE_NONE,
+                graphics=getattr(pm, "PDF_REDACT_LINE_ART_NONE", 0),
+            )
+            # Written on the original baseline, so the replacement sits in
+            # the line rather than floating at the top of the box.
+            for box, new, size, origin in hits:
+                font = "helv" if new.isascii() else "china-s"
+                page.insert_text(
+                    origin, new, fontname=font,
+                    fontsize=_fit(pm, new, box.width, size, font),
+                )
+            replaced += len(hits)
+    # Title, author, subject, keywords: the protocol's name is usually there.
+    doc.set_metadata({})
+    try:
+        doc.del_xml_metadata()
+    except Exception:  # noqa: BLE001 - older PyMuPDF
+        pass
+    doc.save(str(dst), garbage=4, deflate=True, clean=True)
+    doc.close()
+    out = {"replaced": replaced, "images_not_read": images}
+    if empty:
+        out["pages_without_text"] = empty
+    return out
 
 
 def write(src: Path, out_dir: Path, mapping: dict[str, str]) -> dict[str, Any]:
@@ -485,6 +575,8 @@ def write(src: Path, out_dir: Path, mapping: dict[str, str]) -> dict[str, Any]:
                             "sha256_in": hashlib.sha256(src.read_bytes()).hexdigest()}
     if suffix == ".docx":
         info |= _write_docx(src, dst, mapping)
+    elif suffix == ".pdf" and _pymupdf() is not None:
+        info |= _write_pdf(src, dst, mapping)
     else:
         pages = read_text(src)
         total = 0
@@ -560,7 +652,9 @@ def apply(
         "notes": [
             "Images are not read: a logo or a scanned signature in the document "
             "survives masking. images_not_read counts them per file.",
-            "A PDF is masked as text; its layout is not kept.",
+            "A PDF is redacted in place: the text is removed from the file and "
+            "the replacement drawn where it stood. A term broken across two "
+            "lines is not matched there and shows up as residual.",
             "The term list with the originals is in the _review folder beside "
             "this one, not here.",
         ],

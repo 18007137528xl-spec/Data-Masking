@@ -145,7 +145,40 @@ def test_nothing_is_written_until_every_term_is_decided(tmp_path, vault):
     assert not (tmp_path / "out").exists()
 
 
-def test_a_pdf_is_masked_as_text(tmp_path, vault):
+def test_a_pdf_is_redacted_in_place(tmp_path, vault):
+    pm = pytest.importorskip("pymupdf")
+    src = tmp_path / "p.pdf"
+    doc = pm.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "Sponsor: Acme Oncology Inc.", fontsize=11)
+    page.insert_text((72, 96), "Study drug Zentolimab, NCT01234567.", fontsize=11)
+    page.insert_text((72, 120), "研究者：王建国，北京协和医院", fontname="china-s", fontsize=11)
+    page.draw_rect(pm.Rect(60, 60, 400, 130))  # a table border must survive
+    doc.new_page().insert_text((72, 72), "Page two mentions Zentolimab again.")
+    doc.set_metadata({"title": "Zentolimab protocol", "author": "Jane Roe"})
+    doc.save(str(src))
+
+    terms = pr.scan([src], vault)
+    found = {t.term for t in terms}
+    assert {"Zentolimab", "NCT01234567", "王建国", "北京协和医院"} <= found
+    for t in terms:
+        t.decision = "OK"
+    res = pr.apply([src], terms, vault, tmp_path / "out", approved_by="tester")
+    out = tmp_path / "out" / "p.pdf"
+    assert out.exists() and not (tmp_path / "out" / "p.txt").exists()
+    assert res["manifest"]["residual_occurrences"] == 0
+    with pm.open(str(out)) as masked:
+        assert masked.page_count == 2
+        text = "".join(pg.get_text() for pg in masked)
+        assert "Zentolimab" not in text and "NCT01234567" not in text
+        assert "王建国" not in text and "Acme" not in text
+        assert "DRUG" in text and "Sponsor:" in text  # replacement drawn, rest kept
+        assert masked[0].get_drawings()  # the border is still there
+        assert not (masked.metadata or {}).get("author")
+
+
+def test_without_pymupdf_a_pdf_falls_back_to_text(tmp_path, vault, monkeypatch):
+    monkeypatch.setattr(pr, "_pymupdf", lambda: None)
     src = tiny_pdf(tmp_path / "p.pdf", ["Sponsor: Acme Oncology Inc.",
                                         "Study drug Zentolimab, NCT01234567."])
     terms = pr.scan([src], vault)

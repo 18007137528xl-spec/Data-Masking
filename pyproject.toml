@@ -28,9 +28,11 @@ excel = ["openpyxl>=3.1"]
 surrogates = ["faker>=24.0"]
 # Parquet output for the published tiers.
 parquet = ["pyarrow>=15.0"]
-# Protocol masking: Word is rewritten through lxml, PDF read with pypdf.
+# Protocol masking: Word is rewritten through lxml; a PDF is redacted in
+# place with PyMuPDF (AGPL -- fine for an internal tool, check before
+# shipping it to anyone), with pypdf as the text-only fallback.
 # python-docx is only used to build test documents.
-protocol = ["lxml>=4.9", "pypdf>=4.0", "python-docx>=1.1"]
+protocol = ["lxml>=4.9", "pypdf>=4.0", "python-docx>=1.1", "pymupdf>=1.24"]
 dev = ["pytest>=8.0"]
 # Cloud backends. Each pulls the key-service SDK plus the fsspec filesystem for
 # that provider's object storage, so quarantine and the tiers can live in
@@ -51,6 +53,7 @@ all = [
     "lxml>=4.9",
     "pypdf>=4.0",
     "python-docx>=1.1",
+    "pymupdf>=1.24",
 ]
 
 [project.scripts]

@@ -478,8 +478,12 @@ then says `DRUG A` wherever the data does, and run the data first so its
 labels exist. A Word document is rewritten in place -- body, tables, text
 boxes, headers, footers, footnotes, comments and the document properties --
 keeping every style; a term split across formatting ("Zento" in bold +
-"limab") is still one term. A PDF can only be read as text, so its masked
-copy is a `.txt`.
+"limab") is still one term. A PDF is redacted in place: the term is removed
+from the file -- not covered by a box over text that is still selectable --
+and the replacement is written on the same baseline, so pages, tables and
+layout stay as they were. A term broken across two lines of a PDF is not
+matched; the read-back counts it as residual. A scanned PDF has no text to
+find and needs OCR first.
 
 After writing, every output is read back and searched for every approved
 term; the count must be zero, and the manifest records it. Images are not
@@ -495,7 +499,9 @@ deidkit protocol apply protocol.docx --terms terms.csv --vault vault/abc.db \
     -o tiers/abc_protocol --approved-by you@example.com
 ```
 
-Needs the `protocol` extra (`pip install -e '.[protocol]'`, included in `all`).
+Needs the `protocol` extra (`pip install -e '.[protocol]'`, included in `all`). PDF
+redaction uses PyMuPDF, which is AGPL-licensed: fine for an internal tool, worth
+a look before the tool itself is given to anyone outside.
 
 ## Field treatments
 
