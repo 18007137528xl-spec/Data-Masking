@@ -448,6 +448,55 @@ they are. MH and AE are no longer "retained in full" once their verbatim is
 replaced, and the contract says so. The cost is the obvious one: a model
 cannot learn to code a verbatim term from a dummy.
 
+## Masking the protocol
+
+A protocol is not PHI, but it names everything the data tier hides: the
+sponsor, the drug and its compound code, the protocol and registry numbers,
+the investigators, the hospitals and the CRO. The console's **Protocol** tab
+(top of the left rail) masks it with the same review-then-sign flow:
+
+| | On screen | What you do |
+|---|---|---|
+| 01 | Read the protocol | a `.docx`, `.pdf` or `.txt` on the server, or a folder of them, and the study's vault |
+| 02 | Review every term | OK (replace as proposed), Change (your own text) or Keep; add what the scan missed |
+| 03 | Sign and write | your name and an output folder |
+| 04 | Results | what was replaced, and a read-back of the output |
+
+What the scan proposes, and what it becomes:
+
+| Category | Found by | Becomes |
+|---|---|---|
+| drug / compound | names the data already relabelled, INN stems (-mab, -tinib…), compound codes (`MK-3475`), ® / ™ | the data's label (`DRUG A`, `TRT B`), or a new `DRUG` label |
+| sponsor | company suffixes (Inc., Ltd., Pharmaceuticals, 有限公司…), "Sponsor:" lines | `SPONSOR A` |
+| study number | NCT, EudraCT, CTIS, IND, "Protocol No.", `ABC-XY-2025-001` shapes | a same-shape surrogate from the vault |
+| person | titles (Dr., Prof.), degrees (MD, PhD), 研究者 / 联系人 lines | `PERSON A` |
+| contact | e-mail, phone with a Tel/电话 label, web addresses | random characters, same shape |
+| institution | Hospital, University, Medical Center, 医院, 大学, known CROs | `INSTITUTION A` |
+
+Replacements come from the vault, so use the study's data vault: the protocol
+then says `DRUG A` wherever the data does, and run the data first so its
+labels exist. A Word document is rewritten in place -- body, tables, text
+boxes, headers, footers, footnotes, comments and the document properties --
+keeping every style; a term split across formatting ("Zento" in bold +
+"limab") is still one term. A PDF can only be read as text, so its masked
+copy is a `.txt`.
+
+After writing, every output is read back and searched for every approved
+term; the count must be zero, and the manifest records it. Images are not
+read, so a logo survives -- the report counts them. The list of original
+terms goes to a `_review` folder beside the output, not into it.
+
+From the command line:
+
+```bash
+deidkit protocol scan  protocol.docx --vault vault/abc.db -o terms.csv
+# fill in the decision column: OK, CHANGE (+ replacement) or KEEP
+deidkit protocol apply protocol.docx --terms terms.csv --vault vault/abc.db \
+    -o tiers/abc_protocol --approved-by you@example.com
+```
+
+Needs the `protocol` extra (`pip install -e '.[protocol]'`, included in `all`).
+
 ## Field treatments
 
 This is the vocabulary of `decision_treatment`: what a steward may write in the

@@ -671,6 +671,24 @@ class Vault:
         self._db.commit()
         return out
 
+    def labelled(self, entity: str) -> dict[str, str]:
+        """Every original in a label namespace with its label.
+
+        In-process only, for the protocol masker to give a drug the label the
+        data already gave it. Nothing here names a person -- these are
+        treatment names -- so it is not a break-glass lookup and is not
+        logged as one.
+        """
+        if entity not in ("treatment", "treatment_product"):
+            raise VaultError(f"labelled() is for treatment labels, not {entity!r}")
+        return {
+            self._fernet.decrypt(ct).decode("utf-8"): label
+            for label, ct in self._db.execute(
+                "SELECT surrogate, original_ct FROM surrogate WHERE entity = ?",
+                (entity,),
+            )
+        }
+
     def text_dummy(self, key: str, make: "Callable[[], str]") -> str:
         """The dummy for one free-text value, stable once issued.
 

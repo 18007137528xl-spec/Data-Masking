@@ -1155,6 +1155,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sp.set_defaults(func=cmd_serve)
 
+    sp = sub.add_parser(
+        "protocol",
+        help="mask a protocol: sponsor, drug, study numbers, people, sites",
+    )
+    sp.add_argument("action", choices=["scan", "apply"])
+    sp.add_argument("path", help="a .docx / .pdf / .txt protocol, or a folder of them")
+    sp.add_argument("-o", "--out", required=True,
+                    help="scan: the term sheet (CSV) to write; apply: the output folder")
+    sp.add_argument("--terms", help="apply: the reviewed term sheet")
+    sp.add_argument("--approved-by", help="apply: the person signing the term list")
+    add_vault_args(sp)
+    sp.set_defaults(func=cmd_protocol)
+
     sp = sub.add_parser("vault", help="inspect the crosswalk")
     sp.add_argument("action", choices=["stats", "log"])
     add_vault_args(sp)
@@ -1179,6 +1192,46 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_reverse)
 
     return p
+
+
+def cmd_protocol(args: argparse.Namespace) -> int:
+    from . import protocol as pr
+
+    try:
+        paths = pr.documents(args.path)
+        vault = _open_vault(args)
+    except (ValueError, VaultError) as exc:
+        return _err(str(exc))
+    with vault:
+        if args.action == "scan":
+            terms = pr.scan(paths, vault)
+            pr.save_terms(terms, args.out)
+            print(f"{len(terms)} term(s) proposed from {len(paths)} file(s) -> {args.out}")
+            print(
+                "\nNEXT: fill in the decision column -- OK (replace as proposed), "
+                "CHANGE (and write the replacement), or KEEP -- and add any term "
+                "the scan missed as a row of its own. Then:\n"
+                f"  deidkit protocol apply {args.path} --terms {args.out} "
+                f"--vault {args.vault} -o <folder> --approved-by <you>"
+            )
+            return 0
+        if not args.terms or not args.approved_by:
+            return _err("apply needs --terms and --approved-by")
+        try:
+            terms = pr.load_terms(args.terms)
+            for t in terms:
+                if t.decision != "KEEP" and not t.proposed:
+                    t.proposed = pr.propose(t, vault)
+            res = pr.apply(paths, terms, vault, args.out, approved_by=args.approved_by)
+        except ValueError as exc:
+            return _err(str(exc))
+    m = res["manifest"]
+    for f in m["files"]:
+        print(f"{f['source']} -> {f['output']}: {f['replaced']} replacement(s)")
+    print(f"approved terms left in the output: {m['residual_occurrences']}")
+    print(f"still flagged by the scan       : {m['still_flagged_after_masking']}")
+    print(f"term list (originals)           : {res['review_dir']}")
+    return 1 if m["residual_occurrences"] else 0
 
 
 def cmd_serve(args: argparse.Namespace) -> int:

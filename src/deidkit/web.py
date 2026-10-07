@@ -82,6 +82,11 @@ class Session:
     notes: list[dict[str, str]] = field(default_factory=list)
     last_approval: dict[str, Any] | None = None
     last_run: dict[str, Any] | None = None
+    # The protocol, reviewed alongside the data in the same console.
+    p_path: str | None = None
+    p_vault: str | None = None
+    p_terms: list[Any] = field(default_factory=list)
+    p_result: dict[str, Any] | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def state(self) -> dict[str, Any]:
@@ -415,7 +420,142 @@ def do_resume(s: Session) -> dict[str, Any]:
     }
 
 
+# ----------------------------------------------------------------------
+# protocol
+# ----------------------------------------------------------------------
+def _p_rows(s: Session) -> list[dict[str, Any]]:
+    from dataclasses import asdict
+
+    return [asdict(t) for t in s.p_terms]
+
+
+def _p_vault(s: Session, path: str | None = None) -> Vault:
+    vp = (path or s.p_vault or "").strip()
+    if not vp:
+        raise ApiError(
+            "A vault file is needed: replacements come from it, so the protocol "
+            "says DRUG A wherever the data does. Use the study's data vault."
+        )
+    try:
+        return Vault(vp, operator="console")
+    except VaultError as exc:
+        raise ApiError(str(exc)) from exc
+
+
+def do_p_scan(s: Session, body: dict[str, Any]) -> dict[str, Any]:
+    from . import protocol as pr
+
+    decided = sum(1 for t in s.p_terms if t.decision)
+    if decided and not body.get("force"):
+        raise ApiError(
+            f"{decided} term decision(s) are recorded for the protocol already. "
+            "Reading again starts the list over.",
+            needs_force=True, decided=decided,
+        )
+    path = (body.get("path") or "").strip()
+    try:
+        paths = pr.documents(path)
+    except ValueError as exc:
+        raise ApiError(str(exc)) from exc
+    with _p_vault(s, body.get("vault")) as vault:
+        try:
+            terms = pr.scan(paths, vault)
+        except ImportError as exc:
+            raise ApiError(
+                f"{exc}. Install the protocol extra on this server: "
+                ".venv\\Scripts\\python.exe -m pip install -e .[protocol]"
+            ) from exc
+    s.p_path, s.p_vault = path, (body.get("vault") or "").strip()
+    s.p_terms, s.p_result = terms, None
+    return do_p_resume(s)
+
+
+def do_p_decide(s: Session, body: dict[str, Any]) -> dict[str, Any]:
+    from . import protocol as pr
+
+    for r in body.get("rows") or []:
+        i = int(r.get("index", -1))
+        if not 0 <= i < len(s.p_terms):
+            raise ApiError("That term is not in the list any more; read again.")
+        dec_ = (r.get("decision") or "").upper()
+        if dec_ and dec_ not in pr.DECISIONS:
+            raise ApiError(f"decision must be one of {', '.join(pr.DECISIONS)}")
+        s.p_terms[i].decision = dec_
+        s.p_terms[i].replacement = r.get("replacement") or ""
+    s.p_result = None
+    return {"ok": True}
+
+
+def do_p_add(s: Session, body: dict[str, Any]) -> dict[str, Any]:
+    """A term the scan missed. It goes in decided OK: the person typing it in
+    has already decided it must go."""
+    import re as _re
+
+    from . import protocol as pr
+
+    term = (body.get("term") or "").strip()
+    category = body.get("category") or ""
+    if not term:
+        raise ApiError("Type the term to add.")
+    if category not in pr.CATEGORIES:
+        raise ApiError(f"Choose a category: {', '.join(pr.CATEGORIES)}.")
+    if any(t.term.lower() == term.lower() for t in s.p_terms):
+        raise ApiError(f"{term!r} is in the list already.")
+    if not s.p_path:
+        raise ApiError("Read the protocol first.")
+    texts = "\n".join(t for p in pr.documents(s.p_path) for t in pr.read_text(p))
+    t = pr.Term(term, category, confidence="high", source="added", decision="OK")
+    t.count = len(_re.findall(pr._boundary(term), texts, flags=_re.I))
+    m = _re.search(pr._boundary(term), texts, flags=_re.I)
+    t.example = pr._context(texts, m.start(), m.end()) if m else "(not found in the text)"
+    with _p_vault(s) as vault:
+        t.proposed = pr.propose(t, vault)
+    s.p_terms.insert(0, t)
+    s.p_result = None
+    return do_p_resume(s)
+
+
+def do_p_apply(s: Session, body: dict[str, Any]) -> dict[str, Any]:
+    from . import protocol as pr
+
+    if not s.p_terms:
+        raise ApiError("Read the protocol first.")
+    out = (body.get("out") or "").strip()
+    if not out:
+        raise ApiError("Choose an output folder for the masked protocol.")
+    src = Path(s.p_path or ".").resolve()
+    if Path(out).resolve() == (src if src.is_dir() else src.parent):
+        raise ApiError(
+            "Write the masked copy somewhere other than the folder the original "
+            "is in, so the two cannot be confused."
+        )
+    with _p_vault(s) as vault:
+        try:
+            res = pr.apply(
+                pr.documents(s.p_path), s.p_terms, vault, out,
+                approved_by=body.get("approved_by") or "",
+            )
+        except ValueError as exc:
+            raise ApiError(str(exc)) from exc
+    s.p_result = res
+    return do_p_resume(s)
+
+
+def do_p_resume(s: Session, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "path": s.p_path,
+        "vault": s.p_vault,
+        "rows": _p_rows(s),
+        "result": s.p_result,
+    }
+
+
 ROUTES = {
+    "/api/protocol/scan": do_p_scan,
+    "/api/protocol/decide": do_p_decide,
+    "/api/protocol/add": do_p_add,
+    "/api/protocol/apply": do_p_apply,
+    "/api/protocol/resume": do_p_resume,
     "/api/state": lambda s, b: {"state": s.state()},
     "/api/profile": do_profile,
     "/api/decide": do_decide,

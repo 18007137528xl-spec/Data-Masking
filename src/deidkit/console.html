@@ -154,6 +154,19 @@ dl.kv dt{color:var(--ink-3)}
 dl.kv dd{margin:0;font-family:var(--mono);word-break:break-all}
 .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--rule);border-top-color:var(--accent);border-radius:50%;animation:s .7s linear infinite;vertical-align:-1px}
 @keyframes s{to{transform:rotate(360deg)}}
+
+/* data / protocol switch at the top of the rail */
+.modes{display:flex;gap:4px;margin:0 16px 14px;padding:3px;background:var(--paper);border:1px solid var(--rule);border-radius:8px}
+.modes button{flex:1;border:0;background:none;border-radius:6px;padding:6px 8px;font-size:13px;color:var(--ink-2);font-weight:600}
+.modes button[aria-pressed="true"]{background:var(--accent);color:#fff}
+@media (max-width:820px){.modes{margin:0 12px 10px}}
+.chip.cat{color:var(--ink-2);border-color:var(--rule);background:var(--paper);margin-left:5px;text-transform:none;letter-spacing:0}
+.pick button[aria-pressed="true"][data-v="KEEP"]{background:var(--ink-3);border-color:var(--ink-3);color:#fff}
+.ctx{color:var(--ink-3);font-size:12.5px;max-width:52ch;margin-top:3px}
+.becomes{font-family:var(--mono);font-size:13px}
+tr.kept td{opacity:.62}
+.addrow{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:14px}
+.addrow .field{margin:0;flex:1 1 220px}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
@@ -161,6 +174,16 @@ dl.kv dd{margin:0;font-family:var(--mono);word-break:break-all}
 <div class="shell">
   <nav class="rail">
     <div class="brand"><b>deidkit</b><span>de-identification console</span></div>
+    <div class="modes" role="group" aria-label="What to mask">
+      <button id="mode-data" aria-pressed="true">Data</button>
+      <button id="mode-protocol" aria-pressed="false">Protocol</button>
+    </div>
+    <ul class="steps" id="psteps" hidden>
+      <li><button data-pstep="0" aria-current="true"><span class="num">01</span>Read the protocol<span class="tick" hidden title="done">✓</span></button></li>
+      <li><button data-pstep="1" disabled><span class="num">02</span>Review every term<span class="tick" hidden title="done">✓</span></button></li>
+      <li><button data-pstep="2" disabled><span class="num">03</span>Sign and write<span class="tick" hidden title="done">✓</span></button></li>
+      <li><button data-pstep="3" disabled><span class="num">04</span>Results<span class="tick" hidden title="done">✓</span></button></li>
+    </ul>
     <ul class="steps" id="steps">
       <li><button data-step="0" aria-current="true"><span class="num">01</span>Read the drop<span class="tick" hidden title="done">✓</span></button></li>
       <li><button data-step="1" disabled><span class="num">02</span>Review every column<span class="tick" hidden title="done">✓</span></button></li>
@@ -316,6 +339,103 @@ dl.kv dd{margin:0;font-family:var(--mono);word-break:break-all}
       <div class="head"><h1>Results</h1></div>
       <div id="results"></div>
     </section>
+
+    <!-- protocol 01 -->
+    <section data-ppanel="0" hidden>
+      <div class="head">
+        <h1>Read the protocol</h1>
+        <p>Point this at a protocol on this server, or a folder of them: Word (.docx), PDF,
+           or text. The tool proposes what to mask — sponsor, drug and compound names,
+           protocol and registry numbers, people, contact details, hospitals and CROs — and
+           you decide every term before anything is written.</p>
+      </div>
+      <div class="card">
+        <div class="field">
+          <label for="ppath">Protocol file or folder on this server</label>
+          <input type="text" id="ppath" placeholder="/data/quarantine/study_abc/protocol.docx" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="pvault">Vault file</label>
+          <input type="text" id="pvault" placeholder="/vault/study_abc.db" spellcheck="false">
+          <span class="hint">Use the study's data vault. Replacements come from it, so a drug the
+            data relabelled DRUG A is DRUG A in the protocol too, and a study number gets the
+            same surrogate wherever it appears.</span>
+        </div>
+        <button class="go" id="btn-pscan">Read and propose</button>
+      </div>
+    </section>
+
+    <!-- protocol 02 -->
+    <section data-ppanel="1" hidden>
+      <div class="head">
+        <h1>Review every term</h1>
+        <p>OK replaces the term as proposed, Change replaces it with your own text, Keep leaves it.
+           Least confident first. Everything the scan missed, add at the bottom — a blank row
+           blocks writing.</p>
+      </div>
+      <div class="bar">
+        <div class="count" id="ptally"></div>
+        <div class="meter"><i id="pmeterfill"></i></div>
+        <button class="ghost" id="btn-pbulk"></button>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Term</th><th>Where</th><th>Becomes</th><th>Decision</th></tr></thead>
+          <tbody id="prows"></tbody>
+        </table>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <b>Add a term the scan missed</b>
+        <div class="addrow">
+          <div class="field">
+            <label for="pnew">Term, exactly as written</label>
+            <input type="text" id="pnew" spellcheck="false">
+          </div>
+          <div class="field" style="flex:0 1 220px">
+            <label for="pnewcat">Category</label>
+            <select id="pnewcat">
+              <option value="drug">drug or compound</option>
+              <option value="sponsor">sponsor or company</option>
+              <option value="study_id">protocol / registry number</option>
+              <option value="person">person</option>
+              <option value="contact">e-mail, phone, web address</option>
+              <option value="site">hospital, university, CRO</option>
+            </select>
+          </div>
+          <button class="ghost" id="btn-padd">Add</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- protocol 03 -->
+    <section data-ppanel="2" hidden>
+      <div class="head">
+        <h1>Sign and write</h1>
+        <p>The masked copy is written with a manifest carrying your name and a fingerprint of
+           the term list. Then it is read back: any approved term still found in it is reported.</p>
+      </div>
+      <div class="card">
+        <div class="row">
+          <div class="field">
+            <label for="pwho">Approved by</label>
+            <input type="text" id="pwho" placeholder="a person, not a service account" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="pout">Output folder</label>
+            <input type="text" id="pout" placeholder="/tiers/study_abc/protocol" spellcheck="false">
+            <span class="hint">Not the folder the original is in. The list of original terms goes
+              to a <code>_review</code> folder beside it, not into it.</span>
+          </div>
+        </div>
+        <button class="go" id="btn-papply">Mask and write</button>
+      </div>
+    </section>
+
+    <!-- protocol 04 -->
+    <section data-ppanel="3" hidden>
+      <div class="head"><h1>Results</h1></div>
+      <div id="presults"></div>
+    </section>
   </main>
 </div>
 
@@ -362,11 +482,11 @@ function busy(btn, on, label){
 /* ---- steps ---------------------------------------------------------- */
 function go(n){
   document.querySelectorAll('[data-panel]').forEach(p => p.hidden = +p.dataset.panel !== n);
-  document.querySelectorAll('.steps button').forEach(b =>
+  document.querySelectorAll('#steps button').forEach(b =>
     b.setAttribute('aria-current', String(+b.dataset.step === n)));
   window.scrollTo({top:0});
 }
-document.querySelectorAll('.steps button').forEach(b =>
+document.querySelectorAll('#steps button').forEach(b =>
   b.addEventListener('click', () => { if (!b.disabled) go(+b.dataset.step); }));
 
 function unlock(n, done){
@@ -418,7 +538,7 @@ async function readDrop(force){
 
 /* Steps after a re-read belong to the old drop; lock them again. */
 function lockFrom(n){
-  document.querySelectorAll('.steps button').forEach(b => {
+  document.querySelectorAll('#steps button').forEach(b => {
     if (+b.dataset.step >= n){ b.disabled = true; b.querySelector('.tick').hidden = true; }
   });
 }
@@ -670,6 +790,184 @@ async function showQueue(){
   }catch(e){ showError(e.message); }
 }
 
+/* ---- protocol ------------------------------------------------------- */
+let PROWS = [];
+const CAT = {drug:'drug', sponsor:'sponsor', study_id:'study number', person:'person',
+             contact:'contact', site:'institution'};
+
+function setMode(m){
+  const prot = m === 'protocol';
+  $('#mode-data').setAttribute('aria-pressed', String(!prot));
+  $('#mode-protocol').setAttribute('aria-pressed', String(prot));
+  $('#steps').hidden = prot; $('#psteps').hidden = !prot;
+  document.querySelectorAll('[data-panel]').forEach(p => { if (prot) p.hidden = true; });
+  if (prot){ pgo(+(document.querySelector('#psteps [aria-current="true"]')?.dataset.pstep || 0)); }
+  else {
+    document.querySelectorAll('[data-ppanel]').forEach(p => p.hidden = true);
+    go(+(document.querySelector('#steps [aria-current="true"]')?.dataset.step || 0));
+  }
+}
+$('#mode-data').addEventListener('click', () => setMode('data'));
+$('#mode-protocol').addEventListener('click', () => setMode('protocol'));
+
+function pgo(n){
+  document.querySelectorAll('[data-ppanel]').forEach(p => p.hidden = +p.dataset.ppanel !== n);
+  document.querySelectorAll('#psteps button').forEach(b =>
+    b.setAttribute('aria-current', String(+b.dataset.pstep === n)));
+  window.scrollTo({top:0});
+}
+document.querySelectorAll('#psteps button').forEach(b =>
+  b.addEventListener('click', () => { if (!b.disabled) pgo(+b.dataset.pstep); }));
+function punlock(n, done){
+  const b = document.querySelector(`#psteps button[data-pstep="${n}"]`);
+  b.disabled = false;
+  if (done !== undefined) b.querySelector('.tick').hidden = !done;
+}
+function plockFrom(n){
+  document.querySelectorAll('#psteps button').forEach(b => {
+    if (+b.dataset.pstep >= n){ b.disabled = true; b.querySelector('.tick').hidden = true; }
+  });
+}
+
+$('#btn-pscan').dataset.label = 'Read and propose';
+$('#btn-pscan').addEventListener('click', () => pscan(false));
+async function pscan(force){
+  const btn = $('#btn-pscan');
+  busy(btn, true, 'reading…');
+  try{
+    const j = await api('/api/protocol/scan', {path: $('#ppath').value, vault: $('#pvault').value, force});
+    PROWS = j.rows; prender();
+    plockFrom(2); $('#presults').innerHTML = '';
+    punlock(0, true); punlock(1); pgo(1);
+  }catch(e){
+    if (e.body && e.body.needs_force){
+      $('#err').innerHTML = `<div class="note warn"><b>This would throw away your review</b>
+        ${esc(e.message)}
+        <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+          <button class="ghost" id="btn-pkeep">Keep my decisions</button>
+          <button class="ghost" id="btn-pdiscard">Discard ${esc(e.body.decided)} decision(s) and read again</button>
+        </div></div>`;
+      $('#btn-pkeep').onclick = () => { showError(''); pgo(1); };
+      $('#btn-pdiscard').onclick = () => { showError(''); pscan(true); };
+    } else showError(e.message);
+  }
+  finally{ busy(btn, false); }
+}
+
+function prender(){
+  $('#prows').innerHTML = PROWS.map((r, i) => {
+    const d = r.decision || '';
+    const cls = d === '' ? 'undecided' : d === 'CHANGE' ? 'changed' : d === 'KEEP' ? 'kept' : '';
+    const becomes = d === 'KEEP' ? '(kept as written)' : d === 'CHANGE' ? (r.replacement || '…') : r.proposed;
+    return `<tr class="${cls}" data-i="${i}">
+      <td><div class="col">${esc(r.term)}</div>
+        <span class="chip ${esc(r.confidence)}">${esc(r.confidence)}</span><span class="chip cat">${esc(CAT[r.category] || r.category)}</span>
+        ${r.source === 'data' ? '<div class="detail">named in the data</div>' : ''}
+        ${r.source === 'added' ? '<div class="detail">added by you</div>' : ''}</td>
+      <td><div class="count">${esc(r.count)}×</div><div class="ctx">${esc(r.example)}</div></td>
+      <td><div class="becomes">${esc(becomes)}</div></td>
+      <td>
+        <div class="pick">
+          <button data-v="OK" aria-pressed="${d === 'OK'}">OK</button>
+          <button data-v="CHANGE" aria-pressed="${d === 'CHANGE'}">Change</button>
+          <button data-v="KEEP" aria-pressed="${d === 'KEEP'}">Keep</button>
+        </div>
+        <div class="override" ${d === 'CHANGE' ? '' : 'hidden'}>
+          <input type="text" data-f="replacement" placeholder="replace with…" value="${esc(r.replacement)}">
+        </div>
+      </td></tr>`;
+  }).join('');
+  ptally();
+}
+$('#prows').addEventListener('click', e => {
+  const b = e.target.closest('.pick button');
+  if (!b) return;
+  const i = +b.closest('tr').dataset.i;
+  PROWS[i].decision = PROWS[i].decision === b.dataset.v ? '' : b.dataset.v;
+  if (PROWS[i].decision === 'CHANGE' && !PROWS[i].replacement) PROWS[i].replacement = PROWS[i].proposed;
+  if (PROWS[i].decision !== 'CHANGE') PROWS[i].replacement = '';
+  prender(); psave([i]);
+});
+$('#prows').addEventListener('change', e => {
+  const f = e.target.closest('[data-f]');
+  if (!f) return;
+  const i = +f.closest('tr').dataset.i;
+  PROWS[i][f.dataset.f] = f.value;
+  prender(); psave([i]);
+});
+async function psave(idx){
+  try{
+    await api('/api/protocol/decide', {rows: idx.map(i => ({index:i, decision:PROWS[i].decision, replacement:PROWS[i].replacement}))});
+    plockFrom(3); $('#presults').innerHTML = '';
+  }catch(e){ showError(e.message); }
+}
+function ptally(){
+  const done = PROWS.filter(r => r.decision).length, blank = PROWS.length - done;
+  const high = PROWS.filter(r => r.confidence === 'high' && !r.decision).length;
+  $('#ptally').innerHTML = blank
+    ? `${done} of ${PROWS.length} decided &middot; <b>${blank} still blank</b>`
+    : `${done} of ${PROWS.length} decided`;
+  $('#pmeterfill').style.width = (PROWS.length ? done / PROWS.length * 100 : 0) + '%';
+  const bulk = $('#btn-pbulk');
+  bulk.hidden = high === 0;
+  bulk.textContent = `Accept the ${high} high-confidence terms`;
+  if (PROWS.length && !blank){ punlock(1, true); punlock(2); } else { plockFrom(2); }
+}
+$('#btn-pbulk').addEventListener('click', () => {
+  const idx = [];
+  PROWS.forEach((r, i) => { if (r.confidence === 'high' && !r.decision){ r.decision = 'OK'; idx.push(i); } });
+  prender(); psave(idx);
+});
+$('#btn-padd').addEventListener('click', async () => {
+  try{
+    const j = await api('/api/protocol/add', {term: $('#pnew').value, category: $('#pnewcat').value});
+    PROWS = j.rows; $('#pnew').value = ''; prender(); plockFrom(3);
+  }catch(e){ showError(e.message); }
+});
+
+$('#btn-papply').dataset.label = 'Mask and write';
+$('#btn-papply').addEventListener('click', async () => {
+  const btn = $('#btn-papply');
+  busy(btn, true, 'writing…');
+  try{
+    const j = await api('/api/protocol/apply', {approved_by: $('#pwho').value, out: $('#pout').value});
+    prenderResults(j.result);
+    punlock(2, true); punlock(3, true); pgo(3);
+  }catch(e){ showError(e.message); }
+  finally{ busy(btn, false); }
+});
+function prenderResults(r){
+  if (!r){ $('#presults').innerHTML = ''; return; }
+  const m = r.manifest;
+  let html = m.residual_occurrences
+    ? `<div class="note halt"><b>${esc(m.residual_occurrences)} approved term occurrence(s) are still in the output</b>
+        Do not release it. The usual cause is text the reader cannot reach: a text box drawn as
+        a shape, a chart label, or an embedded object.</div>`
+    : `<div class="note good"><b>No approved term is left in the output</b>
+        Every masked file was read back and searched for every term on the list.</div>`;
+  html += `<div class="tablewrap"><table><thead><tr><th>File</th><th>Written as</th><th>Replacements</th><th>Not read</th></tr></thead><tbody>
+    ${m.files.map(f => `<tr><td class="mono">${esc(f.source)}</td><td class="mono">${esc(f.output)}</td>
+      <td class="count">${esc(f.replaced)}</td>
+      <td class="why">${f.images_not_read ? esc(f.images_not_read) + ' image(s) — a logo survives' : ''}
+        ${f.pages_without_text ? esc(f.pages_without_text) + ' page(s) with no text — scanned, needs OCR' : ''}</td></tr>`).join('')}
+    </tbody></table></div>`;
+  if (r.still_flagged && r.still_flagged.length){
+    html += `<div class="note warn" style="margin-top:16px"><b>The scan still flags ${esc(r.still_flagged.length)} term(s) in the masked copy</b>
+      Not on your list, or new combinations the replacements made. Look at them; if any must go,
+      add it in step 02 and write again:
+      ${r.still_flagged.slice(0, 30).map(t => `<span class="chip cat">${esc(t.term)}</span>`).join(' ')}</div>`;
+  }
+  html += `<div class="card" style="margin-top:16px"><dl class="kv">
+    <dt>written to</dt><dd>${esc(r.out_dir)}</dd>
+    <dt>approved by</dt><dd>${esc(m.approved_by)}</dd>
+    <dt>fingerprint</dt><dd>${esc(m.rules_fingerprint)}</dd>
+    <dt>term list</dt><dd>${esc(r.review_dir)}</dd></dl></div>
+    <div class="note info"><b>The term list holds the originals</b>
+    The <span class="mono">_review</span> folder maps every masked term back to what it replaced.
+    Keep it with the vault, not with the masked protocol.</div>`;
+  $('#presults').innerHTML = html;
+}
+
 /* ---- boot ------------------------------------------------------------ */
 /* The page holds nothing the server does not. Closing the tab or pressing
    F5 mid-review used to show an empty form, and reading the folder again then
@@ -693,6 +991,18 @@ async function showQueue(){
     if (j.run){ renderResults(j.run); unlock(3, true); unlock(4, true); at = 4; }
     go(at);
   }catch(e){ /* a fresh server: start at step 1 */ }
+  try{
+    const p = await api('/api/protocol/resume', {});
+    if (p.path) $('#ppath').value = p.path;
+    if (p.vault) $('#pvault').value = p.vault;
+    if (p.rows && p.rows.length){
+      PROWS = p.rows; prender(); punlock(0, true); punlock(1);
+      let at = 1;
+      if (p.result){ prenderResults(p.result); punlock(2, true); punlock(3, true); at = 3; }
+      document.querySelectorAll('#psteps button').forEach(b =>
+        b.setAttribute('aria-current', String(+b.dataset.pstep === at)));
+    }
+  }catch(e){ /* nothing to resume */ }
 })();
 </script>
 </body>
