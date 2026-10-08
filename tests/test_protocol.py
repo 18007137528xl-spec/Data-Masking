@@ -245,3 +245,30 @@ def test_the_names_a_review_found_left_behind(tmp_path, vault):
     assert res["manifest"]["residual_occurrences"] == 0
     manifest = (tmp_path / "out" / "protocol_manifest.json").read_text(encoding="utf-8")
     assert "EMPA" not in manifest
+
+
+def test_a_name_wrapped_onto_the_next_pdf_line_is_still_redacted(tmp_path, vault):
+    pm = pytest.importorskip("pymupdf")
+    src = tmp_path / "p.pdf"
+    doc = pm.open()
+    page = doc.new_page()
+    # one paragraph, wrapped by width so the company name breaks over two lines
+    page.insert_textbox(pm.Rect(72, 72, 172, 160),
+                        "Funded by Example Biologics, Inc and run by Dr. Xiaofeng Li",
+                        fontsize=11)
+    page.insert_text((72, 170), "Title: lead", fontsize=11)
+    page.insert_text((72, 200), "Schedule of Activities", fontsize=11)
+    page.insert_text((72, 214), "Clinic visits every 4 weeks.", fontsize=11)
+    doc.save(str(src))
+
+    terms = pr.scan([src], vault)
+    by = _by_term(terms)
+    assert "Example Biologics, Inc" in by
+    assert "Xiaofeng Li" in by and "Xiaofeng Li Title" not in by
+    assert not any("Activities Clinic" in t for t in by)
+    for t in terms:
+        t.decision = "OK"
+    res = pr.apply([src], terms, vault, tmp_path / "out", approved_by="tester")
+    assert res["manifest"]["residual_occurrences"] == 0, res["residual_terms"]
+    text = "".join(pg.get_text() for pg in pm.open(str(tmp_path / "out" / "p.pdf")))
+    assert "Example" not in text and "Biologics" not in text and "Xiaofeng" not in text

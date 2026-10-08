@@ -129,6 +129,31 @@ def _docx_paragraphs(root) -> Iterable[list[Any]]:
             yield nodes
 
 
+def _pdf_blocks(page) -> list[str]:
+    """A page's text, one string per block, where a line that ran to the
+    right edge and wrapped is joined to the next with a newline, and a line
+    that stopped short (a heading, the end of a paragraph) is followed by a
+    blank line. Only a wrapped line may lend its last words to the next."""
+    out = []
+    for block in page.get_text("dict").get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        lines = [ln for ln in block.get("lines", []) if ln.get("spans")]
+        if not lines:
+            continue
+        right = max(ln["bbox"][2] for ln in lines)
+        width = right - min(ln["bbox"][0] for ln in lines) or 1
+        parts = []
+        for i, ln in enumerate(lines):
+            text = "".join(sp["text"] for sp in ln["spans"])
+            if i:
+                wrapped = lines[i - 1]["bbox"][2] >= right - 0.12 * width
+                parts.append("\n" if wrapped else "\n\n")
+            parts.append(text)
+        out.append("".join(parts))
+    return out
+
+
 def read_text(path: Path) -> list[str]:
     """The document as a list of text blocks (paragraphs, or PDF pages)."""
     suffix = path.suffix.lower()
@@ -150,7 +175,7 @@ def read_text(path: Path) -> list[str]:
         pm = _pymupdf()
         if pm is not None:
             with pm.open(str(path)) as doc:
-                return [page.get_text("text") for page in doc] + [
+                return [t for page in doc for t in _pdf_blocks(page)] + [
                     v for v in (doc.metadata or {}).values() if isinstance(v, str) and v
                 ]
         from pypdf import PdfReader
@@ -168,7 +193,7 @@ _CO_SUFFIX = (
     r"Pharmaceuticals?|Pharma|Therapeutics|Biosciences|Biotech(?:nology)?|"
     r"Biologics|Biopharma(?:ceuticals)?|Oncology|Laboratories)"
 )
-_CAP = r"[A-Z][\w&'.-]*"
+_CAP = r"(?!(?:Sponsor|Prescribing|Information|Study|Protocol|The|By|From|For|And|Of|US|Page|Title|Version)\b)[A-Z][\w&'-]*"
 # Where a Chinese name can start: after punctuation, a space, or one of the
 # little words that sit in front of a name ("由北京协和医院牵头"). Without it the
 # match runs back to the start of the sentence.
@@ -263,6 +288,7 @@ _NAME_STOP = {
     "hospital", "university", "medical", "center", "centre", "clinic", "institute",
     "sponsor", "study", "protocol", "investigator", "monitor", "department",
     "page", "version", "date", "tel", "phone", "email", "fax",
+    "title", "role", "signature", "name", "position", "affiliation",
 }
 #: Words in front of "(drug)" that are not a brand.
 _NOT_A_BRAND = {
@@ -278,10 +304,19 @@ _NOT_A_NAME = {
 }
 
 
+def _key(text: str) -> str:
+    """A term as a lookup key: case and the kind of whitespace do not count,
+    so "Example\nBiologics" found across a line break is the same term."""
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
 def _boundary(term: str) -> str:
     """A whole-term regex: word edges where the term starts or ends with a
-    word character, none for CJK, where words are not separated."""
-    esc = re.escape(term)
+    word character, none for CJK, where words are not separated. Spaces
+    inside the term match any run of whitespace, line breaks included: a
+    name wrapped onto the next line of a PDF is still the name."""
+    term = re.sub(r"\s+", " ", term.strip())
+    esc = r"\s+".join(re.escape(w) for w in term.split(" "))
     lead = r"(?<![A-Za-z0-9_])" if re.match(r"[A-Za-z0-9_]", term) else ""
     trail = r"(?![A-Za-z0-9_])" if re.search(r"[A-Za-z0-9_]$", term) else ""
     return lead + esc + trail
@@ -323,7 +358,7 @@ def scan(
 
     def add(term: str, category: str, confidence: str, source: str,
             text: str, start: int, end: int) -> None:
-        term = term.strip(" \t,.;:：，。()（）")
+        term = re.sub(r"\s+", " ", term).strip(" \t,.;:：，。()（）")
         if re.search(r"[\u4e00-\u9fa5]", term) and category in ("site", "sponsor", "drug"):
             cut = _ZH_CUT.match(term)
             if cut and 0 < cut.end() and len(term) - cut.end() >= 3:
@@ -338,7 +373,7 @@ def scan(
                 end += len(tail.group(0))
         if len(term) < 2 or term.lower() in _NOT_A_NAME:
             return
-        key = term.lower()
+        key = _key(term)
         if key in found:
             if _rank(confidence) > _rank(found[key].confidence):
                 found[key].confidence = confidence
@@ -357,10 +392,30 @@ def scan(
             if m:
                 add(text[m.start():m.end()], "drug", "high", "data", text,
                     m.start(), m.end())
-        for category, conf, pat in _PATTERNS:
-            for m in pat.finditer(text):
-                g = 1 if m.groups() and m.group(1) else 0
-                add(m.group(g), category, conf, "pattern", text, m.start(g), m.end(g))
+        # One line at a time: a name does not continue onto the next line
+        # of the source, and letting a pattern run across one is how
+        # "Schedule of Activities" + "Clinic visit" became "Activities Clinic".
+        lines = text.splitlines()
+        for n, line in enumerate(lines):
+            for category, conf, pat in _PATTERNS:
+                for m in pat.finditer(line):
+                    g = 1 if m.groups() and m.group(1) else 0
+                    term = m.group(g)
+                    # ...except where a PDF wrapped the name itself: a match
+                    # at the very start of a line takes the capitalised
+                    # words ending the line before ("Example" / "Biologics,
+                    # Inc"), or a masked copy reads "Example SPONSOR A".
+                    if (category in ("sponsor", "site") and n
+                            and not line[:m.start(g)].strip()):
+                        prev = re.search(rf"((?:{_CAP}[ \t]+){{0,2}}{_CAP})[ \t]*$", lines[n - 1])
+                        if prev and not any(w.lower() in _NAME_STOP for w in prev.group(1).split()):
+                            term = prev.group(1) + " " + term
+                    # and a person's surname wrapped to the next line
+                    # ("Dr. Xiaofeng" / "Li") is looked for there.
+                    ctx = line
+                    if category == "person" and n + 1 < len(lines) and lines[n + 1]:
+                        ctx = line + " " + lines[n + 1]
+                    add(term, category, conf, "pattern", ctx, m.start(g), m.end(g))
         if detector is not None and text.strip():
             for f in detector.detect(text):
                 cat = {"PERSON": "person", "EMAIL_ADDRESS": "contact",
@@ -413,7 +468,7 @@ def scan(
     m = _matcher({t.term: "" for t in found.values()})
     if m is not None:
         for x in m[0].finditer(joined):
-            counts[x.group(0).lower()] = counts.get(x.group(0).lower(), 0) + 1
+            counts[_key(x.group(0))] = counts.get(_key(x.group(0)), 0) + 1
     kept = []
     for key, t in found.items():
         t.count = counts.get(key, 0)
@@ -475,7 +530,7 @@ def _matcher(mapping: dict[str, str]) -> tuple[re.Pattern[str], dict[str, str]] 
         return None
     terms = sorted(mapping, key=len, reverse=True)
     pat = re.compile("|".join(_boundary(t) for t in terms), re.I)
-    return pat, {t.lower(): r for t, r in mapping.items()}
+    return pat, {_key(t): r for t, r in mapping.items()}
 
 
 def replace_text(text: str, mapping: dict[str, str]) -> tuple[str, int]:
@@ -488,7 +543,7 @@ def replace_text(text: str, mapping: dict[str, str]) -> tuple[str, int]:
     def sub(x: re.Match[str]) -> str:
         nonlocal n
         n += 1
-        return lookup[x.group(0).lower()]
+        return lookup[_key(x.group(0))]
 
     return pat.sub(sub, text), n
 
@@ -508,7 +563,7 @@ def _rewrite_paragraph(nodes: list[Any], pat, lookup) -> int:
     for m in matches:
         for c in range(pos, m.start()):
             out[owner[c]] += full[c]
-        out[owner[m.start()]] += lookup[m.group(0).lower()]
+        out[owner[m.start()]] += lookup[_key(m.group(0))]
         pos = m.end()
     for c in range(pos, len(full)):
         out[owner[c]] += full[c]
@@ -586,8 +641,9 @@ def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
     Redaction removes the text from the file, not just from view -- a black
     box over a selectable word is the classic leak. Matching is done per
     line on the characters' own positions, with the same whole-term rule as
-    everywhere else. A term broken across two lines is not found here; the
-    read-back counts it, and the report says so.
+    everywhere else, over each block with its lines joined, so a term
+    wrapped onto the next line is found and redacted on both. A word split
+    by a hyphen at the line end is not; the read-back counts it.
     """
     pm = _pymupdf()
     m = _matcher(mapping)
@@ -602,19 +658,32 @@ def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
         if m is not None:
             pat, lookup = m
             for block in raw.get("blocks", []):
+                # The block's lines joined with a newline that has no box, so
+                # a term wrapped onto the next line ("Example" / "Biologics,
+                # Inc") is still found -- and redacted on both lines.
+                chars: list[dict[str, Any]] = []
                 for line in block.get("lines", []):
-                    chars = [c for span in line["spans"] for c in
-                             ({**ch, "size": span["size"]} for ch in span["chars"])]
-                    text = "".join(c["c"] for c in chars)
-                    for x in pat.finditer(text):
-                        box = pm.Rect(chars[x.start()]["bbox"])
-                        for c in chars[x.start() + 1:x.end()]:
-                            box |= pm.Rect(c["bbox"])
-                        hits.append((box, lookup[x.group(0).lower()],
-                                     chars[x.start()]["size"],
-                                     chars[x.start()]["origin"]))
-        for box, *_ in hits:
-            page.add_redact_annot(box, fill=False, cross_out=False)
+                    if chars:
+                        chars.append({"c": "\n", "bbox": None})
+                    chars += [{**ch, "size": span["size"]}
+                              for span in line["spans"] for ch in span["chars"]]
+                text = "".join(c["c"] for c in chars)
+                for x in pat.finditer(text):
+                    # one [box, baseline origin, size] per line the term is on
+                    pieces: list[list[Any]] = []
+                    new_line = True
+                    for c in chars[x.start():x.end()]:
+                        if c["bbox"] is None:
+                            new_line = True
+                        elif new_line:
+                            pieces.append([pm.Rect(c["bbox"]), c["origin"], c["size"]])
+                            new_line = False
+                        else:
+                            pieces[-1][0] |= pm.Rect(c["bbox"])
+                    hits.append((pieces, lookup[_key(x.group(0))]))
+        for pieces, _ in hits:
+            for box, _, _ in pieces:
+                page.add_redact_annot(box, fill=False, cross_out=False)
         if hits:
             page.apply_redactions(
                 images=pm.PDF_REDACT_IMAGE_NONE,
@@ -622,12 +691,13 @@ def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
             )
             # Written on the original baseline, so the replacement sits in
             # the line rather than floating at the top of the box.
-            for box, new, size, origin in hits:
+            # A wrapped term is written once, in the widest of its pieces --
+            # a fragment at the end of a line has no room for it.
+            for pieces, new in hits:
+                box, origin, size = max(pieces, key=lambda p: p[0].width)
                 font = "helv" if new.isascii() else "china-s"
-                page.insert_text(
-                    origin, new, fontname=font,
-                    fontsize=_fit(pm, new, box.width, size, font),
-                )
+                page.insert_text(origin, new, fontname=font,
+                                 fontsize=_fit(pm, new, box.width, size, font))
             replaced += len(hits)
     # Title, author, subject, keywords: the protocol's name is usually there.
     doc.set_metadata({})
@@ -686,18 +756,25 @@ def write(src: Path, out_dir: Path, mapping: dict[str, str]) -> dict[str, Any]:
     return info
 
 
-def residual(out_paths: Iterable[Path], terms: Iterable[str]) -> int:
-    """How many times an approved term still appears in the output. The
-    answer has to be zero; anything else is a leak the report names."""
+def residual_terms(out_paths: Iterable[Path], terms: Iterable[str]) -> dict[str, int]:
+    """Which approved terms still appear in the output, and how often. The
+    answer has to be empty; anything else is a leak the report names."""
     terms = [t for t in terms if t]
     if not terms:
-        return 0
+        return {}
     pat = re.compile("|".join(_boundary(t) for t in sorted(terms, key=len, reverse=True)), re.I)
-    return sum(
-        len(pat.findall(t))
-        for p in out_paths
-        for t in [re.sub(r"_+", " ", p.stem)] + read_text(p)
-    )
+    by_key = {_key(t): t for t in terms}
+    left: dict[str, int] = {}
+    for p in out_paths:
+        for text in [re.sub(r"_+", " ", p.stem)] + read_text(p):
+            for x in pat.finditer(text):
+                name = by_key.get(_key(x.group(0)), x.group(0))
+                left[name] = left.get(name, 0) + 1
+    return left
+
+
+def residual(out_paths: Iterable[Path], terms: Iterable[str]) -> int:
+    return sum(residual_terms(out_paths, terms).values())
 
 
 def apply(
@@ -718,7 +795,8 @@ def apply(
     out = Path(out_dir)
     files = [write(p, out, mapping) for p in paths]
     outs = [out / f["output"] for f in files]
-    left = residual(outs, mapping)
+    left_terms = residual_terms(outs, mapping)
+    left = sum(left_terms.values())
     # Anything the scan would still flag in the masked copy, ignoring what was
     # deliberately kept and what the replacements themselves look like.
     kept = {t.term.lower() for t in terms if t.decision == "KEEP"}
@@ -767,7 +845,9 @@ def apply(
     (review / "still_flagged.json").write_text(
         json.dumps(again, indent=2, ensure_ascii=False), encoding="utf-8")
     return {"manifest": manifest, "out_dir": str(out), "review_dir": str(review),
-            "still_flagged": again, "files": files}
+            "still_flagged": again, "files": files,
+            # On the page only: the manifest keeps the count, not the names.
+            "residual_terms": left_terms}
 
 
 # ----------------------------------------------------------------------

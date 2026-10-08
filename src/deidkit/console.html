@@ -941,8 +941,11 @@ function prenderResults(r){
   const m = r.manifest;
   let html = m.residual_occurrences
     ? `<div class="note halt"><b>${esc(m.residual_occurrences)} approved term occurrence(s) are still in the output</b>
-        Do not release it. The usual cause is text the reader cannot reach: a text box drawn as
-        a shape, a chart label, or an embedded object.</div>`
+        Do not release it. ${Object.entries(r.residual_terms || {}).map(([t, n]) =>
+          `<span class="chip cat">${esc(t)} ×${esc(n)}</span>`).join(' ')}
+        The usual causes: a word split by a hyphen at a line end, or text the reader cannot
+        reach (a shape, a chart label, an embedded object). Add the piece that survived as a term
+        of its own in step 02 and write again.</div>`
     : `<div class="note good"><b>No approved term is left in the output</b>
         Every masked file was read back and searched for every term on the list.</div>`;
   html += `<div class="tablewrap"><table><thead><tr><th>File</th><th>Written as</th><th>Replacements</th><th>Not read</th></tr></thead><tbody>
