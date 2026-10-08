@@ -946,11 +946,19 @@ function prenderResults(r){
     : `<div class="note good"><b>No approved term is left in the output</b>
         Every masked file was read back and searched for every term on the list.</div>`;
   html += `<div class="tablewrap"><table><thead><tr><th>File</th><th>Written as</th><th>Replacements</th><th>Not read</th></tr></thead><tbody>
-    ${m.files.map(f => `<tr><td class="mono">${esc(f.source)}</td><td class="mono">${esc(f.output)}</td>
+    ${(r.files || m.files).map(f => `<tr><td class="mono">${esc(f.source || '')}</td><td class="mono">${esc(f.output)}</td>
       <td class="count">${esc(f.replaced)}</td>
       <td class="why">${f.images_not_read ? esc(f.images_not_read) + ' image(s) — a logo survives' : ''}
         ${f.pages_without_text ? esc(f.pages_without_text) + ' page(s) with no text — scanned, needs OCR' : ''}</td></tr>`).join('')}
     </tbody></table></div>`;
+  const leftDrug = (r.still_flagged || []).filter(t => ['drug', 'sponsor', 'study_id'].includes(t.category));
+  if (leftDrug.length){
+    html += `<div class="note halt" style="margin-top:16px"><b>Half-masked: ${esc(leftDrug.length)} drug, sponsor or study name(s) are still in the output</b>
+      A document that says DRUG A on one page and names the product or the company on another is
+      worse than either choice made fully: it reads like a redacted copy of a real protocol.
+      Add these in step 02 (or Keep them on purpose) and write again:
+      ${leftDrug.map(t => `<span class="chip cat">${esc(t.term)}</span>`).join(' ')}</div>`;
+  }
   if (r.still_flagged && r.still_flagged.length){
     html += `<div class="note warn" style="margin-top:16px"><b>The scan still flags ${esc(r.still_flagged.length)} term(s) in the masked copy</b>
       Not on your list, or new combinations the replacements made. Look at them; if any must go,

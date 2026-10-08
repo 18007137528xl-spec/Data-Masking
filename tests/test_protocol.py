@@ -209,3 +209,39 @@ def test_the_console_round_trip(tmp_path, monkeypatch):
     with pytest.raises(web.ApiError) as e:
         web.do_p_scan(s, {"path": str(src), "vault": str(tmp_path / "v.db")})
     assert e.value.extra.get("needs_force")
+
+
+def test_the_names_a_review_found_left_behind(tmp_path, vault):
+    """From a real review of a masked protocol: a surname left after its
+    first name, the file name, an abbreviation, a code with a space, a brand
+    in a reference, and two companies named without Inc. or Ltd."""
+    d = docx.Document()
+    d.add_paragraph("Prepared by @Xiaofeng Li")
+    d.add_paragraph("Short title: EMPA add-on to metformin, 24 weeks")
+    d.add_paragraph("Investigational product: empagliflozin (BI 10773)")
+    d.add_paragraph("Developed by Boehringer Ingelheim and Eli Lilly.")
+    d.add_paragraph("1. JARDIANCE (empagliflozin) tablets, prescribing information.")
+    src = tmp_path / "EX-EMPA-301_Protocol.docx"
+    d.save(src)
+
+    terms = pr.scan([src], vault)
+    by = _by_term(terms)
+    assert "Xiaofeng Li" in by and by["Xiaofeng Li"].category == "person"
+    for t in ("EMPA", "JARDIANCE", "BI 10773", "Boehringer Ingelheim", "Eli Lilly"):
+        assert t in by, t
+    # the abbreviation and the brand become the same label as the drug
+    assert by["EMPA"].proposed == by["empagliflozin"].proposed
+    assert by["JARDIANCE"].proposed == by["empagliflozin"].proposed
+    assert by["BI 10773"].proposed == by["empagliflozin"].proposed
+    for t in terms:
+        t.decision = "OK"
+    res = pr.apply([src], terms, vault, tmp_path / "out", approved_by="tester")
+    (out,) = (tmp_path / "out").glob("*.docx")
+    assert "EMPA" not in out.name
+    text = "\n".join(pr.read_text(out))
+    for gone in ("Li", "EMPA", "empagliflozin", "JARDIANCE", "10773",
+                 "Boehringer", "Lilly", "Xiaofeng"):
+        assert gone not in text.split() and gone.lower() not in text.lower().split(), gone
+    assert res["manifest"]["residual_occurrences"] == 0
+    manifest = (tmp_path / "out" / "protocol_manifest.json").read_text(encoding="utf-8")
+    assert "EMPA" not in manifest

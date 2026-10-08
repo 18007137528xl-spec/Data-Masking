@@ -47,7 +47,11 @@ def test_the_shape_survives_and_the_text_does_not(vault):
     d = dummy_value(text, vault)
     assert _shape(d) == _shape(text)
     assert d != text
-    assert not set(d.lower().split()) & set(text.lower().split())
+    # no word survives. Short ones are left out of the check: a random draw
+    # of two letters lands on "Li" again once in 676 runs, which is chance,
+    # not a leak -- and a test that fails by chance teaches people to ignore it.
+    words = lambda x: {w.strip(",.()") for w in x.lower().split() if len(w.strip(",.()")) >= 4}
+    assert not words(d) & words(text)
 
 
 def test_the_same_text_gets_the_same_dummy_whatever_its_case(vault):

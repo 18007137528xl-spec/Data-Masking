@@ -71,6 +71,10 @@ class Term:
     proposed: str = ""
     decision: str = ""
     replacement: str = ""
+    #: Another name for a term already on the list -- the abbreviation EMPA,
+    #: the brand JARDIANCE for empagliflozin -- which takes the same
+    #: replacement, so one drug does not become DRUG A and DRUG C.
+    alias_of: str = ""
 
     def final(self) -> str | None:
         """What the term becomes, or None when it stays."""
@@ -183,6 +187,16 @@ _INN = (
     r"relin|relix|lukast|dronate|parin|xaban|gatran|sentan|fungin|"
     r"floxacin|oxacin|cycline|vastatin|statin|setron|tegravir|kinra|leukin"
 )
+_PHARMA = (
+    r"Boehringer[ -]Ingelheim|Eli Lilly(?: and Company)?|Lilly|Pfizer|Merck(?: Sharp & Dohme)?|"
+    r"MSD|Novartis|Hoffmann-La Roche|Roche|Genentech|AstraZeneca|GlaxoSmithKline|GSK|"
+    r"Sanofi(?:-Aventis)?|Bayer|AbbVie|Amgen|Bristol[- ]Myers Squibb|BMS|Johnson & Johnson|"
+    r"Janssen|Takeda|Astellas|Daiichi[- ]Sankyo|Eisai|Otsuka|Novo Nordisk|Gilead|Regeneron|"
+    r"Vertex|Biogen|Moderna|BioNTech|Servier|Ipsen|Teva|Viatris|Chugai|Shionogi|"
+    r"Jiangsu Hengrui|Hengrui|BeiGene|Innovent|Junshi|Hansoh|CSPC|Sino Biopharm|Zai Lab|"
+    r"Akeso|Hutchmed|Fosun"
+)
+_PHARMA_ZH = r"恒瑞医药|恒瑞|百济神州|信达生物|君实生物|豪森药业|石药集团|正大天晴|再鼎医药|康方生物|和黄医药|复星医药|勃林格殷格翰|礼来|辉瑞|默沙东|诺华|罗氏|阿斯利康|葛兰素史克|赛诺菲|拜耳|艾伯维|安进|百时美施贵宝|强生|杨森|武田|安斯泰来|第一三共|卫材|诺和诺德|吉利德"
 _ZH_DRUG = r"单抗|替尼|西尼|帕利|司他|他汀|沙坦|普利|洛尔|霉素|西林|铂|紫杉醇|比星|那肽|鲁肽|格列净|格列汀|韦"
 _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
     # registry and protocol numbers
@@ -197,8 +211,10 @@ _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
     ("study_id", "high", re.compile(r"(?:方案编号|试验编号|研究编号)\s*[:：]?\s*([A-Za-z0-9_./-]{4,})")),
     # BDM-AI-2025-001, TIG-2026-001: letters then two or more hyphen groups
     ("study_id", "medium", re.compile(r"\b[A-Z]{2,}(?:-[A-Z0-9]+){2,5}\b")),
-    # compound codes: MK-3475, BMS-936558, ABBV951
+    # compound codes: MK-3475, BMS-936558, ABBV951, and with a space,
+    # BI 10773 -- but not a year (ICH 2016) or a short count (Day 120)
     ("drug", "medium", re.compile(r"\b[A-Z]{1,5}-?\d{3,6}[A-Z]?\b")),
+    ("drug", "medium", re.compile(r"\b[A-Z]{2,5} (?!(?:19|20)\d\d\b)\d{4,6}[A-Z]?\b")),
     # trade marks
     ("drug", "high", re.compile(r"\b([A-Z][A-Za-z0-9-]{2,})\s?[®™]")),
     # INN stems: zentolimab, osimertinib -- and their Chinese counterparts
@@ -221,7 +237,11 @@ _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
         rf"(?:\s+(?:of|for)\s+(?:{_CAP}\s?){{1,5}})?)")),
     ("site", "medium", re.compile(
         rf"{_ZH_START}({_ZH}{{2,25}}?(?:医院|大学|研究所|研究院|医学院|卫生院))")),
+    # big pharma by name, with no Inc. or Ltd. to give it away
+    ("sponsor", "high", re.compile(rf"\b({_PHARMA})\b")),
+    ("sponsor", "high", re.compile(rf"({_PHARMA_ZH})")),
     # people
+    ("person", "high", re.compile(r"(?<![\w.])@([A-Z][a-z'-]+(?:\s+[A-Z][a-z'-]+){0,2})")),
     ("person", "high", re.compile(
         r"\b(?:Dr|Prof|Professor|Mr|Ms|Mrs)\.?\s+([A-Z][a-z'-]+(?:\s+[A-Z]\.)?(?:\s+[A-Z][a-z'-]+){0,2})")),
     ("person", "high", re.compile(
@@ -236,6 +256,20 @@ _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
         r"(?i:(?:tel|phone|telephone|fax|mobile|cell|电话|传真|手机)\.?\s*[:：]?\s*)"
         r"(\+?\d[\d\s().-]{6,}\d)")),
 ]
+
+#: Words that end a name rather than continue it.
+_NAME_STOP = {
+    "and", "or", "of", "the", "at", "in", "on", "for", "to", "with", "md", "phd",
+    "hospital", "university", "medical", "center", "centre", "clinic", "institute",
+    "sponsor", "study", "protocol", "investigator", "monitor", "department",
+    "page", "version", "date", "tel", "phone", "email", "fax",
+}
+#: Words in front of "(drug)" that are not a brand.
+_NOT_A_BRAND = {
+    "tablet", "tablets", "capsule", "capsules", "dose", "doses", "study", "drug",
+    "placebo", "treatment", "arm", "group", "oral", "injection", "solution",
+    "administered", "receive", "receiving", "with", "plus", "versus", "and",
+}
 
 #: Words a pattern can produce that name nothing.
 _NOT_A_NAME = {
@@ -280,7 +314,11 @@ def scan(
     *, propose_replacements: bool = True,
 ) -> list[Term]:
     """Propose the terms to mask, with a count and an example for each."""
-    texts = [t for p in paths for t in read_text(p)]
+    paths = list(paths)
+    # The file name is the first place a study's identity leaks:
+    # EX-EMPA-301_Protocol.pdf. It is scanned like a line of text.
+    texts = [re.sub(r"[_]+", " ", p.stem) for p in paths]
+    texts += [t for p in paths for t in read_text(p)]
     found: dict[str, Term] = {}
 
     def add(term: str, category: str, confidence: str, source: str,
@@ -291,6 +329,13 @@ def scan(
             if cut and 0 < cut.end() and len(term) - cut.end() >= 3:
                 start += cut.end()
                 term = term[cut.end():]
+        if category == "person" and not re.search(r"[\u4e00-\u9fa5]", term):
+            # "Xiaofeng" found, "Xiaofeng Li" written: a surname after the
+            # match belongs to it, or the masked line reads "PERSON B Li".
+            tail = re.match(r"(?:\s+[A-Z][a-z'-]{1,15}){1,2}\b", text[end:])
+            if tail and not any(w.lower() in _NAME_STOP for w in tail.group(0).split()):
+                term += tail.group(0)
+                end += len(tail.group(0))
         if len(term) < 2 or term.lower() in _NOT_A_NAME:
             return
         key = term.lower()
@@ -335,6 +380,32 @@ def scan(
                 if m:
                     add(head, "sponsor", "low", "pattern", joined, m.start(), m.end())
 
+    # Other names for a drug already found: its abbreviation (EMPA for
+    # empagliflozin, in a short title or a file name), its brand
+    # ("JARDIANCE (empagliflozin)", "empagliflozin (Jardiance®)") and its
+    # development code ("empagliflozin (BI 10773)"). Each is tied to the
+    # drug, so it is replaced with the same label.
+    aliases: dict[str, str] = {}
+    drugs = [t for t in list(found.values())
+             if t.category == "drug" and t.term.isalpha() and len(t.term) >= 6]
+    for d in drugs:
+        for x in re.finditer(r"\b[A-Z]{4,6}\b", joined):
+            tok = x.group(0)
+            if d.term.upper().startswith(tok) and tok != d.term.upper():
+                add(tok, "drug", "high", "abbreviation", joined, x.start(), x.end())
+                aliases[tok.lower()] = d.term.lower()
+        name = _boundary(d.term)
+        for pat in (
+            rf"\b([A-Z][A-Za-z]{{3,}})\s*[®™]?\s*\(\s*{name}",
+            rf"{name}\s*\(\s*([A-Z][A-Za-z]{{3,}}|[A-Z]{{1,5}}[- ]?\d{{3,6}}[A-Z]?)\s*[®™]?\s*\)",
+        ):
+            for x in re.finditer(pat, joined, flags=re.I):
+                brand = x.group(1)
+                if brand.lower() in _NOT_A_BRAND or brand.lower() == d.term.lower():
+                    continue
+                add(brand, "drug", "high", "brand", joined, x.start(1), x.end(1))
+                aliases[brand.lower()] = d.term.lower()
+
     # Count what each term would actually replace, longest first: a mention
     # of "Pembrolizumab" inside "Pembrolizumab 200 mg Q3W" belongs to the
     # longer term, and a term nothing is left for is dropped.
@@ -347,9 +418,15 @@ def scan(
     for key, t in found.items():
         t.count = counts.get(key, 0)
         if t.count:
-            if propose_replacements:
+            if key in aliases and aliases[key] in found:
+                t.alias_of = found[aliases[key]].term
+            if propose_replacements and not t.alias_of:
                 t.proposed = propose(t, vault, labels)
             kept.append(t)
+    if propose_replacements:
+        for t in kept:
+            if t.alias_of:
+                t.proposed = found[t.alias_of.lower()].proposed
     order = {"low": 0, "medium": 1, "high": 2}
     kept.sort(key=lambda t: (order[t.confidence], -t.count, t.term.lower()))
     return kept
@@ -566,10 +643,23 @@ def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
     return out
 
 
+def masked_name(src: Path, mapping: dict[str, str]) -> str:
+    """The output file name, with the same terms replaced as in the text --
+    a masked EX-EMPA-301_Protocol.pdf must not keep its name."""
+    name = output_name(src)
+    stem, dot, ext = name.rpartition(".")
+    readable = re.sub(r"_+", " ", stem)
+    masked, n = replace_text(readable, mapping)
+    if not n:
+        return name
+    masked = re.sub(r'[\\/:*?"<>|\s]+', "_", masked).strip("_")
+    return f"{masked}.{ext}"
+
+
 def write(src: Path, out_dir: Path, mapping: dict[str, str]) -> dict[str, Any]:
     """Write the masked copy of one document and say what was done."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    dst = out_dir / output_name(src)
+    dst = out_dir / masked_name(src, mapping)
     suffix = src.suffix.lower()
     info: dict[str, Any] = {"source": src.name, "output": dst.name,
                             "sha256_in": hashlib.sha256(src.read_bytes()).hexdigest()}
@@ -603,7 +693,11 @@ def residual(out_paths: Iterable[Path], terms: Iterable[str]) -> int:
     if not terms:
         return 0
     pat = re.compile("|".join(_boundary(t) for t in sorted(terms, key=len, reverse=True)), re.I)
-    return sum(len(pat.findall(t)) for p in out_paths for t in read_text(p))
+    return sum(
+        len(pat.findall(t))
+        for p in out_paths
+        for t in [re.sub(r"_+", " ", p.stem)] + read_text(p)
+    )
 
 
 def apply(
@@ -644,7 +738,9 @@ def apply(
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "approved_by": approved_by,
         "rules_fingerprint": rules_digest(terms),
-        "files": files,
+        # Output names only: the original file name is part of what is
+        # being masked, so it goes to the _review folder with the terms.
+        "files": [{k: v for k, v in f.items() if k != "source"} for f in files],
         "terms_replaced_by_category": by_cat,
         "terms_kept": len(kept),
         "residual_occurrences": left,
@@ -665,17 +761,20 @@ def apply(
     review = out.parent / f"{out.name}_review"
     review.mkdir(parents=True, exist_ok=True)
     save_terms(terms, review / "protocol_terms.csv")
+    (review / "files.json").write_text(
+        json.dumps([{"source": f["source"], "output": f["output"]} for f in files],
+                   indent=2, ensure_ascii=False), encoding="utf-8")
     (review / "still_flagged.json").write_text(
         json.dumps(again, indent=2, ensure_ascii=False), encoding="utf-8")
     return {"manifest": manifest, "out_dir": str(out), "review_dir": str(review),
-            "still_flagged": again}
+            "still_flagged": again, "files": files}
 
 
 # ----------------------------------------------------------------------
 # the term sheet, for the command line
 # ----------------------------------------------------------------------
 _SHEET = ["term", "category", "count", "confidence", "source", "example",
-          "proposed", "decision", "replacement"]
+          "proposed", "decision", "replacement", "alias_of"]
 
 
 def save_terms(terms: list[Term], path: str | Path) -> None:

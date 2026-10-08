@@ -485,8 +485,21 @@ layout stay as they were. A term broken across two lines of a PDF is not
 matched; the read-back counts it as residual. A scanned PDF has no text to
 find and needs OCR first.
 
+A drug has more names than one, and a masked protocol that says `DRUG A` on
+one page and names the product on another is worse than either choice made
+fully. So the scan also offers the drug's other names, each tied to it and
+given the same label: its abbreviation (`EMPA`), its brand
+(`JARDIANCE (empagliflozin)`) and its development code
+(`empagliflozin (BI 10773)`). Large sponsors are recognised by name without
+an Inc. or Ltd., and a person's surname is kept with the first name it
+follows. The file name is scanned and masked like a line of text, and the
+original name goes to the `_review` folder rather than the manifest.
+
 After writing, every output is read back and searched for every approved
-term; the count must be zero, and the manifest records it. Images are not
+term; the count must be zero, and the manifest records it. A drug, sponsor
+or study name the scan still finds in the output is shown as a halt, not a
+footnote. What masking names cannot do: a marketed drug stays recognisable
+from its published half-life, dose and indication, and those stay. Images are not
 read, so a logo survives -- the report counts them. The list of original
 terms goes to a `_review` folder beside the output, not into it.
 
