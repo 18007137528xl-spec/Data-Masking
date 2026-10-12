@@ -181,6 +181,19 @@ def do_profile(s: Session, body: dict[str, Any]) -> dict[str, Any]:
     s.approved = s.result = None
     s.last_approval = s.last_run = None
     s.notes = _profile_notes(draft, frames, raw)
+    unknown = sorted(
+        f"{d}.{c}" for d, cols in suggestions.items() for c, sg in cols.items()
+        if sg.rationale.startswith("unrecognised")
+    )
+    if unknown:
+        s.notes.append({
+            "level": "warn",
+            "text": f"{len(unknown)} column(s) the profiler could not place, at the top "
+            "of the list: " + ", ".join(unknown[:60])
+            + (" …" if len(unknown) > 60 else "")
+            + ". Column names only -- these are safe to send to whoever maintains "
+            "the tool, so the next version recognises them.",
+        })
 
     return {
         "state": s.state(),

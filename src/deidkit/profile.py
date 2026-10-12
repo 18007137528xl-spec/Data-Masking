@@ -71,6 +71,12 @@ class ColumnProfile:
     #: values with no letters or digits to replace.
     shapeable: bool = False
     samples: list[str] = field(default_factory=list)
+    #: Fraction of non-blank values that read as a number.
+    numeric_rate: float = 0.0
+    #: Up to 60 distinct values, most frequent first. Used in memory to judge
+    #: a column nobody named -- never written to the decision sheet, the
+    #: review file or the manifest.
+    top_values: list[str] = field(default_factory=list, repr=False)
 
     @property
     def null_rate(self) -> float:
@@ -132,7 +138,9 @@ def profile_column(series: pd.Series, *, n_samples: int = 3) -> ColumnProfile:
     raw_rate, raw_precise = rawdates.date_like_rate(probe)
     for v in probe:
         p = parse_dtc(v)
-        if p.year is not None:
+        # A four-digit record id (9000, 9001...) parses as a year; only a
+        # year a study could have happened in counts.
+        if p.year is not None and 1900 <= p.year <= 2100:
             date_hits += 1
             if p.granularity != "day":
                 partial_hits += 1
@@ -156,6 +164,11 @@ def profile_column(series: pd.Series, *, n_samples: int = 3) -> ColumnProfile:
         raw_date_formats=rawdates.describe_formats(probe) if raw_rate else {},
         shapeable=_shapeable(text, int(non_null.nunique())),
         samples=[str(v)[:80] for v in non_null.head(n_samples)],
+        numeric_rate=(
+            float(pd.to_numeric(text.str.strip(), errors="coerce").notna().mean())
+            if len(text) else 0.0
+        ),
+        top_values=[str(v)[:120] for v in text.value_counts().head(60).index],
     )
 
 
@@ -292,6 +305,13 @@ _RETAIN_SUFFIXES = (
     "NRIND", "LOBXFL",
     # SDTM's Y/N flag convention: --FL (BLFL, DTHFL, DRVFL, ...)
     "FL",
+    # CDASH collection fields: performed / occurred / pre-specified, the
+    # seriousness criteria, action taken, and what came with a result
+    "PERF", "OCCUR", "PRESP", "CONTRT", "SCONG", "SDISAB", "SDTH", "SHOSP",
+    "SLIFE", "SMIE", "SCAN", "SOD", "ACNOTH", "ACNDEV", "CLSIG", "SIG",
+    "NRLO", "NRHI", "ORNRLO", "ORNRHI", "STNRLO", "STNRHI", "STNRC", "LOINC",
+    "FAST", "SPCCND", "EVAL", "EVALINT", "GRADE", "TOXGRV", "FRQ", "UNIT",
+    "RESU", "ORRESU", "ND", "STRESU", "STAGE", "SEVERITY", "OUTCOME",
 )
 
 #: Record sequence keys. Retained, but they are not clinical content -- saying
@@ -360,7 +380,8 @@ _RAW_TREATMENT_NAMES = {
 _RAW_PRODUCT_NAMES = {"STUDYDRUG", "STUDYMED", "IMPNAME", "DRUG", "COMPOUND"}
 
 #: Site identifiers as raw EDC spells them.
-_RAW_SITE_KEYS = {"SITE", "SITECODE", "SITENO", "CENTRE", "CENTER", "CENTREID"}
+_RAW_SITE_KEYS = {"SITE", "SITECODE", "SITENO", "CENTRE", "CENTER", "CENTREID",
+                  "SITENUMBER", "STUDYENVSITENUMBER", "SITENUM"}
 
 #: Type tags raw EDC hangs off the end of a column name: SEX_CD, RACE_TXT,
 #: VISIT_NO, DOSE_AMT. They carry no meaning of their own, and leaving them on
@@ -425,6 +446,14 @@ def suggest(
     """
     col = profile.column
     up = col.upper()
+    rave_tag = None
+    if raw_edc:
+        # Medidata Rave exports each field several ways: AESEV (the label as
+        # shown), AESEV_STD (the coded value), AESTDAT_RAW (as typed),
+        # AESTDAT_INT (a SAS number). Recognise the field under its own name.
+        tag = re.match(r"^(.+?)[_ ](RAW|INT|STD|DEC)$", up)
+        if tag:
+            up, rave_tag = tag.group(1), tag.group(2)
     if raw_edc:
         # Raw EDC spells the same things with separators: AE_START, SITE_ZIP,
         # PATIENT_ID. Every recognizer below is written against SDTM's
@@ -600,6 +629,22 @@ def suggest(
             ),
             "medium",
             "EDC audit timestamp",
+        )
+
+    # --- Rave's numeric copy of a date ---------------------------------
+    # AESTDAT_INT holds the date as a SAS number (days or seconds since
+    # 1960). No date parser reads it, so retained it would publish the real
+    # date as an integer -- and the readable copy beside it carries the
+    # same information.
+    if rave_tag == "INT" and (
+        _is_cdash_date(up) or re.search(r"(DAT|DT|DTM|DATE|TIM|TIME)$", up)
+    ):
+        return Suggestion(
+            rule(Treatment.DROP, note="Rave's numeric copy of a date (SAS "
+                 "days or seconds since 1960); the readable column beside it "
+                 "carries the date and is shifted"),
+            "high",
+            "numeric copy of a date",
         )
 
     # --- a date collected in pieces ------------------------------------
@@ -965,7 +1010,7 @@ def suggest(
         )
 
     # --- EDC structural keys ---------------------------------------------
-    if _EDC_STRUCTURAL.search(up):
+    if _EDC_STRUCTURAL.search(up) or up in _EDC_STRUCTURAL_EXACT:
         return Suggestion(
             rule(
                 Treatment.RETAIN,
@@ -1024,7 +1069,57 @@ def suggest(
             "verbatim free text",
         )
 
-    # --- fallback -----------------------------------------------------
+    # --- fallback: judged by the values -------------------------------
+    nonblank = profile.n - profile.n_null
+    if nonblank == 0:
+        return Suggestion(
+            rule(Treatment.RETAIN, note="empty in this drop: nothing to publish"),
+            "high",
+            "empty column",
+        )
+    if (
+        profile.numeric_rate >= 0.95
+        and re.search(r"(DAT|DT|DTM|DATE|TIM|TIME)(N|NUM|INT|C)?$", up)
+    ):
+        return Suggestion(
+            rule(Treatment.DROP, note="REVIEW: named like a date but holds "
+                 "numbers -- a SAS date or datetime without a format reads "
+                 "this way, and retained it publishes the real date"),
+            "low",
+            "number named like a date",
+        )
+    if profile.numeric_rate >= 0.95 and not (
+        profile.unique_rate > 0.95 and profile.n_unique > 20
+    ):
+        return Suggestion(
+            rule(Treatment.RETAIN, note="numbers, repeating across rows: a "
+                 "measurement or a coded value, not a key"),
+            "medium",
+            "numeric values",
+        )
+    categorical = (
+        (profile.n_unique <= 30 or profile.unique_rate <= 0.05)
+        and profile.mean_length <= 40
+    )
+    if categorical:
+        hits = _identifier_hits(profile.top_values)
+        if hits:
+            return Suggestion(
+                rule(Treatment.DROP, note="REVIEW: a short list of values, but "
+                     f"some read as {', '.join(sorted(hits))}. Dropped until "
+                     "someone looks: a pick-list of investigator names is "
+                     "still a list of names"),
+                "low",
+                "categorical, but names or contacts in it",
+            )
+        return Suggestion(
+            rule(Treatment.RETAIN, note=f"{profile.n_unique} distinct short "
+                 "values repeated across rows, none of them reading as a name, "
+                 "contact or address: a pick-list or a coded answer"),
+            "medium",
+            f"categorical ({profile.n_unique} values)",
+        )
+
     if profile.unique_rate > 0.95 and profile.n_unique > 20:
         return Suggestion(
             rule(
@@ -1078,7 +1173,8 @@ def _date_part_of(up: str, siblings: frozenset[str]) -> str | None:
 
 _AUDIT_DATE = re.compile(
     r"(ENTRY|ENTERED|CREATED|MODIF|UPDAT|LASTUPD|LOCKED|SIGNED|VERIF|REVIEW|"
-    r"SDV|QUERY|EXPORT|EXTRACT|TRANSFER|RECEIV|LOAD)"
+    r"SDV|QUERY|EXPORT|EXTRACT|TRANSFER|RECEIV|LOAD|RECORDDATE|SAVETS|"
+    r"LASTCHANGE|TIMESTAMP)"
 )
 
 #: EDC user fields. "Last updated by" is a person -- the coordinator or CRA
@@ -1102,8 +1198,19 @@ _SITE_NAME = re.compile(
 #: EDC form/page/folder keys. System bookkeeping, not clinical content.
 _EDC_STRUCTURAL = re.compile(
     r"(FOLDEROID|FOLDERNAME|FORMOID|FORMNAME|DATAPAGEID|PAGEOID|ITEMOID|"
-    r"ITEMGROUPOID|INSTANCEID|RECORDPOSITION|PAGEREPEATKEY|LOGLINE)"
+    r"ITEMGROUPOID|INSTANCEID|RECORDPOSITION|PAGEREPEATKEY|LOGLINE|"
+    # Medidata Rave's export header, on every form
+    r"PROJECTID|ENVIRONMENTNAME|STUDYSITEID|SITEGROUP|INSTANCENAME|"
+    r"INSTANCEREPEATNUMBER|FOLDERID|FOLDERSEQ|TARGETDAYS|DATAPAGENAME|"
+    r"PAGEREPEATNUMBER|RECORDID|RECORDACTIVE|"
+    # Veeva / InForm / generic
+    r"FORMID|FORMSEQ|FORMREPEAT|ITEMGROUPREPEAT|EVENTID|EVENTNAME|"
+    r"VISITID|CRFID|CRFNAME|CRFVERSION|PAGENO|PAGENUM|LINENO|ROWNUM)"
 )
+#: The whole column name is a structural key (searching for PROJECT inside
+#: a name would catch too much).
+_EDC_STRUCTURAL_EXACT = {"PROJECT", "FOLDER", "FORM", "PAGE", "INSTANCE",
+                         "ENVIRONMENT", "STUDYVERSION", "PROTOCOLVERSION"}
 
 #: Subject-key names seen in raw EDC exports, in the order they are trusted.
 #: A raw extract has no USUBJID; without a subject key the domain has no
@@ -1120,6 +1227,27 @@ def _raw_subject_key(frame: pd.DataFrame) -> str | None:
         if cand in upper:
             return upper[cand]
     return None
+
+
+_DETECTOR: Any = None
+_IDENTIFIER_TYPES = {"PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER", "LOCATION",
+                     "US_SSN", "IP_ADDRESS", "URL", "MEDICAL_LICENSE", "NRP",
+                     "ORGANIZATION", "FACILITY"}
+
+
+def _identifier_hits(values: list[str]) -> set[str]:
+    """What kinds of identifier the detector finds among these values."""
+    global _DETECTOR
+    if _DETECTOR is None:
+        from . import freetext
+
+        _DETECTOR = freetext.build_detector()
+    found: set[str] = set()
+    for v in values:
+        for f in _DETECTOR.detect(str(v)):
+            if f.entity_type in _IDENTIFIER_TYPES:
+                found.add(f.entity_type.lower().replace("_", " "))
+    return found
 
 
 def _link_embedded_site(

@@ -1049,3 +1049,70 @@ def test_one_date_in_many_formats_lands_on_one_date(vault):
 def test_leading_zeros_are_kept_as_written(value, order, days, expected):
     from deidkit.reassign import move_date
     assert move_date(value, days, order) == expected
+
+
+# ----------------------------------------------------------------------
+# a Rave-style export: few columns should be left "unrecognised"
+# ----------------------------------------------------------------------
+def _rave_ae(n: int = 40) -> pd.DataFrame:
+    import random
+
+    rng = random.Random(7)
+    subj = [f"10{1 + i % 3}-{i:03d}" for i in range(n)]
+    sev = [rng.choice(["Mild", "Moderate", "Severe"]) for _ in range(n)]
+    return pd.DataFrame({
+        "projectid": ["123"] * n, "project": ["BDM-AI-2025-001"] * n,
+        "environmentName": ["PROD"] * n, "subjectId": [str(5000 + i) for i in range(n)],
+        "StudySiteId": [s[:3] for s in subj], "Subject": subj,
+        "siteid": [s[:3] for s in subj], "Site": [s[:3] for s in subj],
+        "SiteNumber": [s[:3] for s in subj], "SiteGroup": ["China"] * n,
+        "instanceId": [str(9000 + i) for i in range(n)],
+        "InstanceName": ["Log forms"] * n, "InstanceRepeatNumber": ["0"] * n,
+        "folderid": ["77"] * n, "Folder": ["LOG"] * n, "FolderName": ["Log"] * n,
+        "FolderSeq": ["99"] * n, "TargetDays": [""] * n,
+        "DataPageId": [str(300 + i) for i in range(n)], "DataPageName": ["Adverse Events"] * n,
+        "PageRepeatNumber": ["0"] * n, "RecordId": [str(800 + i) for i in range(n)],
+        "RecordPosition": ["1"] * n,
+        "MinCreated": [f"2025-0{1 + i % 9}-1{i % 9}T10:00:00" for i in range(n)],
+        "MaxUpdated": [f"2025-0{1 + i % 9}-1{i % 9}T11:00:00" for i in range(n)],
+        "SaveTS": [f"2025-0{1 + i % 9}-1{i % 9}T11:00:00" for i in range(n)],
+        "StudyEnvSiteNumber": [s[:3] for s in subj],
+        "AETERM": [rng.choice(["Headache", "Nausea", "Rash on arm"]) for _ in range(n)],
+        "AESEV": sev, "AESEV_STD": [s[0] for s in sev],
+        "AESTDAT": [f"1{i % 9} JAN 2025" for i in range(n)],
+        "AESTDAT_RAW": [f"1{i % 9} JAN 2025" for i in range(n)],
+        "AESTDAT_INT": [str(23750 + i) for i in range(n)],
+        "AESER": [rng.choice(["Yes", "No"]) for _ in range(n)],
+        "AECONTRT": [rng.choice(["Yes", "No"]) for _ in range(n)],
+        "AEACN": ["Dose not changed"] * n,
+        "AETOXGR": [str(rng.randint(1, 3)) for _ in range(n)],
+        "Q12_ANY_HOSP": [rng.choice(["Y", "N"]) for _ in range(n)],
+        "WEIGHT_KG": [str(rng.randint(50, 90)) for _ in range(n)],
+        "VISDAT_N": [str(23700 + i) for i in range(n)],
+    })
+
+
+def test_a_rave_export_is_mostly_recognised():
+    from deidkit.profile import draft_contract
+
+    frames = {"EDC_AE_RAWDATA": _rave_ae()}
+    _, sugg = draft_contract(frames, source="s", raw_edc=True)
+    s = sugg["EDC_AE_RAWDATA"]
+    unknown = sorted(c for c, x in s.items() if x.rationale.startswith("unrecognised"))
+    assert unknown == [], unknown
+    assert s["AESTDAT_INT"].rule.treatment is Treatment.DROP
+    assert s["AESTDAT_RAW"].rule.treatment is Treatment.DATE_SHIFT_RAW
+    assert s["MaxUpdated"].rule.treatment is Treatment.DROP  # audit stamp
+    assert s["Q12_ANY_HOSP"].rule.treatment is Treatment.RETAIN
+    assert s["WEIGHT_KG"].rule.treatment is Treatment.RETAIN
+    # a run of four-digit record ids is not a column of years
+    assert s["instanceId"].rule.treatment is not Treatment.DATE_SHIFT_RAW
+
+
+def test_a_pick_list_of_names_is_not_waved_through():
+    from deidkit.profile import draft_contract
+
+    f = _rave_ae()
+    f["PI_SIGNOFF"] = ["Dr. John Smith", "Dr. Maria Gonzalez"] * (len(f) // 2)
+    _, sugg = draft_contract({"EDC_AE_RAWDATA": f}, source="s", raw_edc=True)
+    assert sugg["EDC_AE_RAWDATA"]["PI_SIGNOFF"].rule.treatment is Treatment.DROP
