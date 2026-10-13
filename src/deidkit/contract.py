@@ -471,6 +471,9 @@ class DomainContract(BaseModel):
                 Treatment.DATE_SHIFT,
                 Treatment.DATE_SHIFT_RAW,
                 Treatment.SURROGATE_ID,
+                # One label per product, consistently: a relabelling that
+                # loses nothing but the name, which is the point of blinding.
+                Treatment.LABEL_MAP,
             }
             bad = [
                 f.column

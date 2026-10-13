@@ -314,3 +314,23 @@ def test_the_launchers_find_the_key_the_right_way_round():
     for text in (bat, sh):
         assert "DEVELOPMENT" in text
         assert "serve --open" in text
+
+
+def test_the_console_blinds_the_study_drug_unless_told_not_to(session, tmp_path):
+    d = tmp_path / "ex"
+    d.mkdir()
+    pd.DataFrame({
+        "SUBJECT": [f"001-{i:04d}" for i in range(12)],
+        "EXTRT": ["Empagliflozin", "Placebo"] * 6,
+    }).to_csv(d / "EX.csv", index=False)
+
+    def treatment(body):
+        out = web.do_profile(session, {"directory": str(d), "raw": True,
+                                       "force": True, **body})
+        return next(r["proposed_treatment"] for r in out["rows"]
+                    if r["column"] == "EXTRT"), out["state"]["blind"]
+
+    assert treatment({}) == ("label_map", True)
+    assert treatment({"blind": False}) == ("screen_freetext", False)
+    assert 'id="blind" checked' in (Path(web.__file__).parent / "console.html").read_text(
+        encoding="utf-8")

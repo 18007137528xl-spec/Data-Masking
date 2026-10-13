@@ -106,3 +106,83 @@ def test_free_text_replaced_with_dummy_is_settled():
     s = _conf(_study(ZQ=notes), "ZQ", dummy_text=True)
     assert s.rule.treatment.value == "dummy_text"
     assert s.confidence == "high"
+
+
+def test_a_pick_list_of_anything_but_answers_is_not_settled():
+    # No name in it, and still not settled: high needs every value to be an
+    # ordinary answer, not merely the absence of a name.
+    for values in (["Atrial fibrillation", "Gout"], ["甘露", "欧明"],
+                   ["SHR-1210", "JS001"]):
+        s = _conf(_study(ZQ=_cycle(values)), "ZQ")
+        assert s.confidence != "high" or s.rule.treatment.value != "retain", values
+
+
+# --- people filed under their role ----------------------------------------
+def test_staff_names_are_dropped_whatever_the_column_is_called():
+    for col in ("INV_NAME", "INVNAM_RAW", "PI_SIGN", "CRCNAME", "ENTERED_BY",
+                "研究者签名", "医生姓名"):
+        for raw in (True, False):
+            _, sugg = draft_contract(_study(**{col: _cycle(["甘露", "欧明"])}),
+                                     source="s", raw_edc=raw)
+            s = sugg[FILE][col]
+            assert s.rule.treatment.value == "drop", (col, raw)
+            assert s.confidence == "high", (col, raw)
+
+
+# --- the study drug --------------------------------------------------------
+def _ex(**cols):
+    frames = _study(**cols)
+    frames["EDC_EX_RAWDATA"] = frames.pop(FILE)
+    return frames
+
+
+def test_product_columns_are_blinded_by_their_values():
+    for values in (["SHR-1210", "Placebo"], ["Empagliflozin 10 mg", "Placebo"],
+                   ["恩格列净片", "安慰剂"], ["BI 10773"]):
+        _, sugg = draft_contract(_ex(IPX=_cycle(values)), source="s",
+                                 raw_edc=True, blind_treatment=True)
+        s = sugg["EDC_EX_RAWDATA"]["IPX"]
+        assert s.rule.treatment.value == "label_map", values
+        assert s.rule.entity == "treatment_product"
+
+
+def test_concomitant_medications_are_not_blinded():
+    frames = _study(CMDRUG=_cycle(["Atorvastatin", "Metformin"]))
+    frames["EDC_CM_RAWDATA"] = frames.pop(FILE)
+    _, sugg = draft_contract(frames, source="s", raw_edc=True,
+                             blind_treatment=True)
+    assert sugg["EDC_CM_RAWDATA"]["CMDRUG"].rule.treatment.value != "label_map"
+
+
+def test_one_drug_gets_one_label_whatever_its_case(tmp_path):
+    from deidkit import Vault
+    from deidkit.transforms import label_map
+
+    v = Vault(tmp_path / "v.db", key=Vault.generate_key(), operator="t")
+    a = label_map(pd.Series(["Empagliflozin", "Placebo"]), v,
+                  entity="treatment_product", prefix="DRUG", keep_values=["Placebo"])
+    b = label_map(pd.Series(["EMPAGLIFLOZIN ", "PLACEBO"]), v,
+                  entity="treatment_product", prefix="DRUG", keep_values=["Placebo"])
+    assert a[0] == b[0] and a[0].startswith("DRUG ")
+    assert list(b)[1] == "PLACEBO"
+    assert v.reverse("treatment_product", a[0], justification="t") == "Empagliflozin"
+    v.close()
+
+
+# --- day/month order ---------------------------------------------------------
+def test_an_ambiguous_date_column_takes_the_order_its_siblings_prove():
+    frames = _study(
+        AESTDAT=_cycle(["03/04/2025", "05/06/2025"]),   # never above 12
+        AEENDAT=_cycle(["23/04/2025", "15/06/2025"]),   # proves dmy
+    )
+    _, sugg = draft_contract(frames, source="s", raw_edc=True)
+    s = sugg[FILE]["AESTDAT"]
+    assert s.confidence == "high"
+    assert s.rule.date_order == "dmy"
+    assert "other columns" in s.rule.note
+
+
+def test_an_ambiguous_date_column_alone_still_asks():
+    frames = _study(AESTDAT=_cycle(["03/04/2025", "05/06/2025"]))
+    _, sugg = draft_contract(frames, source="s", raw_edc=True)
+    assert sugg[FILE]["AESTDAT"].confidence == "low"

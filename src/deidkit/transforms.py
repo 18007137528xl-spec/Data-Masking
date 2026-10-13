@@ -342,16 +342,31 @@ def label_map(
     the protocol, and it is held in the vault, so unblinding is possible and
     reversal is logged like any other re-identification.
     """
-    keep = {str(k) for k in keep_values}
-    subject_values = sorted(
-        {str(v) for v in values.dropna().unique() if str(v) not in keep}
-    )
-    mapping = vault.label_map(entity, subject_values, prefix=prefix)
+    # Matched ignoring case and edge spaces: the raw side writes
+    # Empagliflozin, SDTM writes EMPAGLIFLOZIN, and the protocol looks drugs
+    # up upper-cased. Three spellings of one drug got three labels, and a
+    # raw -> SDTM pair then taught that DRUG A converts to DRUG C. The vault
+    # keeps the first spelling it saw, so unblinding returns a real one.
+    def key(v: object) -> str:
+        return str(v).strip().upper()
+
+    keep = {key(k) for k in keep_values}
+    try:
+        known = {key(o): lab for o, lab in vault.labelled(entity).items()}
+    except Exception:  # noqa: BLE001 - not a treatment namespace
+        known = {}
+    first: dict[str, str] = {}
+    for v in values.dropna().unique():
+        k = key(v)
+        if k not in keep and k not in known:
+            first.setdefault(k, str(v))
+    issued = vault.label_map(entity, sorted(first.values()), prefix=prefix)
+    by_key = {**known, **{k: issued[v] for k, v in first.items()}}
     return pd.Series(
         [
             None
             if pd.isna(v)
-            else (str(v) if str(v) in keep else mapping[str(v)])
+            else (str(v) if key(v) in keep else by_key[key(v)])
             for v in values
         ],
         index=values.index,

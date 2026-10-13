@@ -214,6 +214,11 @@ tr.kept td{opacity:.62}
           Dates are found by their values rather than a <code>--DTC</code> suffix and shifted
           with their written form intact, because converting <code>19/03/2025</code> to a study
           day deletes the thing the model is supposed to learn.</span></label>
+        <label class="check"><input type="checkbox" id="blind" checked>
+          <span><b>Blind the study drug</b>. Arm and product columns (ARM, EXTRT, and any
+          column whose values are drug names or codes such as SHR-1210) become
+          <code>TRT A</code> / <code>DRUG A</code>, the same labels the protocol gets.
+          Placebo stays placebo. Concomitant medications (CM) are left alone.</span></label>
         <label class="check"><input type="checkbox" id="dummytext">
           <span><b>Replace all free text with dummy text</b>, verbatim terms included
           (AETERM, MHTERM, CMTRT). Random letters in the same shape: same length, spaces,
@@ -508,6 +513,7 @@ async function readDrop(force){
       raw: $('#raw').checked,
       reassign: $('#reassign').checked,
       dummy_text: $('#dummytext').checked,
+      blind: $('#blind').checked,
       source: $('#source').value,
       k_target: $('#k').value,
       offset_key: $('#offsetkey').value,
@@ -993,6 +999,7 @@ function prenderResults(r){
     $('#raw').checked = !!STATE.raw;
     $('#reassign').checked = !!STATE.reassign;
     $('#dummytext').checked = !!STATE.dummy_text;
+    $('#blind').checked = STATE.blind !== false;
     let at = 0;
     if (j.rows && j.rows.length){
       ROWS = j.rows; renderNotes(j.notes); renderRows();

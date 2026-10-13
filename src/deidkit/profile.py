@@ -84,6 +84,9 @@ class ColumnProfile:
     #: zeros, or all one width of 4+ digits -- how subject and record numbers
     #: look). Empty for a column that is not numeric.
     numeric_shape: str = ""
+    #: True when raw_date_order was settled by other columns written in the
+    #: same form, because this one never had a day above 12.
+    order_borrowed: bool = False
 
     @property
     def null_rate(self) -> float:
@@ -178,6 +181,34 @@ def profile_column(series: pd.Series, *, n_samples: int = 3) -> ColumnProfile:
         top_values=[str(v)[:120] for v in text.value_counts().head(60).index],
         numeric_shape=_numeric_shape(text),
     )
+
+
+def _borrow_date_orders(all_profs: dict[str, dict[str, ColumnProfile]]) -> None:
+    """Settle day/month order for a column that cannot settle it alone.
+
+    One EDC writes every date in a study the same way. A column whose days
+    all happened to fall on the 1st-12th proves nothing by itself, but if
+    other columns written in the same form (same template, e.g.
+    {dd}/{mm}/{yyyy}) prove dmy and none proves mdy, it is dmy too. If the
+    drop disagrees with itself, or nothing proves anything, it stays
+    unresolved and a person decides.
+    """
+    votes: dict[str, set[str]] = {}
+    for profs in all_profs.values():
+        for p in profs.values():
+            if p.raw_date_order in ("dmy", "mdy"):
+                for t in p.raw_date_formats:
+                    votes.setdefault(t, set()).add(p.raw_date_order)
+    for profs in all_profs.values():
+        for p in profs.values():
+            if p.raw_date_order != "unknown":
+                continue
+            found: set[str] = set()
+            for t in p.raw_date_formats:
+                found |= votes.get(t, set())
+            if len(found) == 1:
+                p.raw_date_order = found.pop()
+                p.order_borrowed = True
 
 
 def _numeric_shape(text: pd.Series) -> str:
@@ -409,6 +440,18 @@ _RAW_FREETEXT_NAMES = re.compile(
 )
 
 #: Treatment and product names as raw EDC spells them.
+#: A role followed by what was written down about the person in it.
+_ROLE_NAME = re.compile(
+    r"(?:(?:INV|INVEST|SUBINV|PI|DR|DOCTOR|PHYS|NURSE|CRC|CRA|MONITOR|"
+    r"ASSESSOR|EVALUATOR|RATER|REPORTER|RECORDER|SIGNER|REVIEWER|STAFF|USER)"
+    r"(?:NAM|NAME|NM|SIGN|SIG|SIGNATURE|INITIALS?|INIT)"
+    r"|(?:ENTERED|COMPLETED|SIGNED|RECORDED|ASSESSED|REVIEWED|VERIFIED)BY)$"
+)
+_ROLE_NAME_ZH = re.compile(
+    r"(研究者|医生|医师|护士|签名|签字|姓名|评估者|评估人|记录者|记录人|填表人|"
+    r"录入人|监查员|协调员)"
+)
+
 _RAW_TREATMENT_NAMES = {
     "TREATMENT", "TREATMENTARM", "TRTNAME", "TRTGROUP", "TRTGRP", "RANDARM",
     "RANDOMISEDARM", "RANDOMIZEDARM", "ARMTXT", "ARMDESC", "COHORT",
@@ -688,6 +731,23 @@ def suggest(
             rule(Treatment.DROP), "high", "direct identifier, no analytic value"
         )
 
+    # A person's name filed under their role: INV_NAME, PI_SIGN, CRC_NAM,
+    # 研究者签名. Matched on the squeezed name with any Rave tag removed, in
+    # SDTM mode too -- INVNAM_RAW is still an investigator's name.
+    role = re.sub(r"(RAW|INT|STD|DEC)$", "", re.sub(r"[ _\-.]", "", col.upper()))
+    if _ROLE_NAME.search(role) or _ROLE_NAME_ZH.search(col):
+        return Suggestion(
+            rule(
+                Treatment.DROP,
+                note="a person's name or signature filed under their role "
+                "(investigator, physician, coordinator, assessor). It "
+                "identifies staff and, through them, the site; it carries no "
+                "clinical content.",
+            ),
+            "high",
+            "staff name or signature",
+        )
+
     if _AUDIT_DATE.search(up) and (
         up.endswith("DTC") or up.endswith("DT") or profile.looks_date
         or profile.looks_raw_date
@@ -811,6 +871,11 @@ def suggest(
                     f"format ({', '.join(profile.raw_date_formats) or 'mixed'}). "
                     + (
                         f"day/month order established from the data: {order}"
+                        + (
+                            " (from other columns written the same way -- "
+                            "this one never has a day above 12)"
+                            if profile.order_borrowed else ""
+                        )
                         if order in {"dmy", "mdy"}
                         else "no ambiguous all-numeric values, so no order to "
                         "establish"
@@ -903,6 +968,29 @@ def suggest(
             ),
             "high",
             "product name (blinded)" if is_product else "treatment arm (blinded)",
+        )
+
+    # A product column the names above did not catch -- EXDRUG, IPNAME,
+    # 研究药物 -- recognised by what it holds. Not in CM: concomitant
+    # medications are clinical content, and blinding them blinds nothing.
+    if (
+        blind_treatment
+        and (domain_code(domain) or domain.upper()) != "CM"
+        and profile.n_unique <= 30
+        and _drug_values(profile.top_values)
+    ):
+        return Suggestion(
+            rule(
+                Treatment.LABEL_MAP,
+                entity="treatment_product",
+                prefix="DRUG",
+                keep_values=["Placebo", "PLACEBO", "placebo", "安慰剂"],
+                note="its values are drug names or development codes, so it "
+                "names the study product: relabelled DRUG A, DRUG B in the "
+                "same namespace as EXTRT and the protocol, placebo kept",
+            ),
+            "high",
+            "product name by its values (blinded)",
         )
 
     # --- study design and visit structure -----------------------------
@@ -1223,7 +1311,13 @@ def suggest(
         # above only finds behind a cue like "Dr".
         seen_all = profile.n_unique <= len(profile.top_values)
         named_like = _name_like(profile.top_values)
-        if seen_all and not named_like:
+        # Settled only on positive evidence: every value is a word a CRF
+        # answer is made of. "No name was found" is not that -- an unusual
+        # surname, a drug code or a hospital without 医院 in it all pass a
+        # name check and are none of them an answer.
+        if seen_all and not named_like and all(
+            _answer_like(v) for v in profile.top_values
+        ):
             return Suggestion(
                 rule(Treatment.RETAIN, note=f"{profile.n_unique} distinct short "
                      "values repeated across rows, every one checked and none "
@@ -1242,12 +1336,17 @@ def suggest(
                     if named_like
                     else "only the 60 most frequent were checked for names "
                     "and contacts"
+                    if not seen_all
+                    else "some are not ordinary CRF answers (yes/no, grades, "
+                    "outcomes, units)"
                 )
                 + ". Confirm it is a pick-list before it is published"
             )),
             "medium",
             f"categorical ({profile.n_unique} values)"
-            + (", name-like values" if named_like else ", partly checked"),
+            + (", name-like values" if named_like
+               else ", partly checked" if not seen_all
+               else ", not a standard answer list"),
         )
 
     if profile.unique_rate > 0.95 and profile.n_unique > 20:
@@ -1445,6 +1544,91 @@ _CRF_WORDS = frozenset(
 _LATIN_NAME_TOKEN = re.compile(r"^(?:[A-Z][a-z'\-]+|[A-Z]{2,}|[A-Z]\.?)$")
 
 
+#: Chinese CRF answers, whole. A value made only of these (and digits and
+#: punctuation) is an answer.
+_ZH_ANSWERS = (
+    "异常有临床意义", "异常无临床意义", "有临床意义", "无临床意义", "不适用", "未查",
+    "未做", "未知", "不详", "不清楚", "正常", "异常", "轻度", "中度", "重度", "危及生命",
+    "已恢复", "已痊愈", "已缓解", "恢复中", "缓解中", "未恢复", "未缓解", "后遗症",
+    "持续", "死亡", "致死", "好转", "加重", "稳定", "进展", "肯定有关", "很可能有关",
+    "可能有关", "可能无关", "肯定无关", "相关", "无关", "剂量不变", "减量", "增量",
+    "暂停", "中断", "永久停药", "停药", "阳性", "阴性", "可疑", "口服", "静脉", "皮下",
+    "肌肉", "外用", "吸入", "左侧", "右侧", "双侧", "左", "右", "筛选期", "筛选",
+    "基线", "访视", "计划外", "随访", "治疗期", "结束", "提前退出", "退出", "完成",
+    "每日", "每周", "一次", "两次", "三次", "早", "中", "晚", "空腹", "餐后", "餐前",
+    "男", "女", "是", "否", "有", "无", "其他", "汉族", "级", "期", "周", "天", "日",
+    "月", "年", "次", "第", "单位", "毫克", "毫升", "克",
+)
+_ZH_ANSWER = re.compile(
+    r"^(?:" + "|".join(sorted(map(re.escape, _ZH_ANSWERS), key=len, reverse=True))
+    + r"|[\d\s/、,，.。()（）\-:：%])+$"
+)
+_DOSE_TOKENS = frozenset(
+    "mg g kg ml l ug mcg iu u mmol tablet tablets tab capsule capsules cap "
+    "injection inj solution vial dose qd bid tid qw q2w q3w q4w po iv sc im".split()
+)
+
+
+def _answer_like(value: str) -> bool:
+    """Is this value an ordinary CRF answer -- a code, a number, or words
+    from the answer vocabulary?"""
+    v = str(value).strip()
+    if not v:
+        return True
+    if re.fullmatch(r"[A-Z0-9]{1,3}|[+-]?\d+(?:\.\d+)?", v):
+        return True
+    if re.search(r"[\u4e00-\u9fff]", v):
+        return bool(_ZH_ANSWER.match(v))
+    toks = [t.lower() for t in re.findall(r"[A-Za-z]+", v)]
+    if not toks:
+        return True  # digits and punctuation: a grade, a range, a version
+    from .freetext import CLINICAL_ALLOWLIST
+
+    return all(
+        t in _CRF_WORDS or t in _DOSE_TOKENS or (t in CLINICAL_ALLOWLIST
+                                                 and not _drug_token(t))
+        for t in toks
+    )
+
+
+_DEV_CODE = re.compile(r"^[A-Z]{2,5}[- ]?\d{3,6}[A-Z]?$")
+_ZH_DRUG = re.compile(
+    r"(单抗|替尼|列净|格列汀|沙坦|普利|他汀|西林|霉素|沙星|拉唑|洛尔|地平|胰岛素|"
+    r"帕林|昔布|铂|紫杉醇|曲肽|鲁肽|片|胶囊|注射液|注射剂|颗粒|口服液|冻干粉)"
+)
+_PLACEBO = re.compile(r"^(?:matching\s+)?(?:placebo|pbo|安慰剂)$", re.IGNORECASE)
+
+
+def _drug_token(token: str) -> bool:
+    from .freetext import _looks_like_drug_name
+
+    return _looks_like_drug_name(token)
+
+
+def _drug_values(values: list[str]) -> bool:
+    """Do these values name products -- every one a drug name, a development
+    code or placebo, and at least one not placebo?"""
+    seen_drug = False
+    for raw in values:
+        v = str(raw).strip()
+        if not v:
+            continue
+        if _PLACEBO.match(v):
+            continue
+        head = re.split(r"\s+\d", v, maxsplit=1)[0].strip()  # drop the dose
+        if (
+            _DEV_CODE.match(v)
+            or _DEV_CODE.match(head)
+            or _DEV_CODE.match(" ".join(v.split()[:2]))  # BI 10773 25 mg
+            or _ZH_DRUG.search(v)
+            or any(_drug_token(t) for t in re.findall(r"[A-Za-z]+", head))
+        ):
+            seen_drug = True
+            continue
+        return False
+    return seen_drug
+
+
 def _name_like(values: list[str]) -> int:
     """How many values read like a bare person's or institution's name.
 
@@ -1629,8 +1813,10 @@ def draft_contract(
     suggestions: dict[str, dict[str, Suggestion]] = {}
     domains: list[DomainContract] = []
 
+    all_profs = {name: profile_frame(frame) for name, frame in frames.items()}
+    _borrow_date_orders(all_profs)
     for name, frame in frames.items():
-        profs = profile_frame(frame)
+        profs = all_profs[name]
         siblings = frozenset(str(c).upper() for c in frame.columns)
         per_col = {
             col: suggest(

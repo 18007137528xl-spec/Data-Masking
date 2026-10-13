@@ -69,6 +69,7 @@ class Session:
     raw: bool = False
     reassign: bool = False
     dummy_text: bool = False
+    blind: bool = True
     frames: dict[str, pd.DataFrame] = field(default_factory=dict)
     checksums: dict[str, str] = field(default_factory=dict)
     draft: Contract | None = None
@@ -97,6 +98,7 @@ class Session:
             "raw": self.raw,
             "reassign": self.reassign,
             "dummy_text": self.dummy_text,
+            "blind": self.blind,
             "domains": {k: len(v) for k, v in self.frames.items()},
             "rules": 0 if sheet is None else len(sheet),
             "decided": filled,
@@ -162,6 +164,9 @@ def do_profile(s: Session, body: dict[str, Any]) -> dict[str, Any]:
     raw = bool(body.get("raw"))
     reassign = bool(body.get("reassign"))
     dummy_text = bool(body.get("dummy_text"))
+    # On unless switched off: a console that leaves the study drug's name in
+    # every row is not one anyone meant to run.
+    blind = bool(body.get("blind", True))
     draft, suggestions = prof.draft_contract(
         frames,
         source=body.get("source") or Path(directory).name,
@@ -171,11 +176,13 @@ def do_profile(s: Session, body: dict[str, Any]) -> dict[str, Any]:
         subject_id_template=body.get("id_template") or None,
         reassign=reassign,
         dummy_text=dummy_text,
+        blind_treatment=blind,
     )
     sheet = dec.build_sheet(draft, suggestions)
 
     s.directory, s.raw, s.reassign = directory, raw, reassign
     s.dummy_text = dummy_text
+    s.blind = blind
     s.frames, s.checksums = frames, checksums
     s.draft, s.sheet = draft, sheet
     s.approved = s.result = None
