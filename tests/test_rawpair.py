@@ -923,9 +923,13 @@ def test_a_cdash_date_found_only_by_name_says_so():
     _, sugg = draft_contract(frames, source="s", raw_edc=True)
     s = sugg[MH_FILE]["MHSTDAT"]
     assert s.rule.treatment is Treatment.DATE_SHIFT_RAW
-    assert s.rule.on_unparsed == "fail"  # nothing unshifted slips through
-    assert s.confidence != "high"
+    # Every value is parsed at run time and an unreadable one halts it, so
+    # the name is enough to settle this without a person: a wrong guess
+    # fails loudly rather than publishing a real date.
+    assert s.rule.on_unparsed == "fail"
+    assert s.confidence == "high"
     assert "CDASH" in s.rationale
+    assert "halts the run" in s.rule.note
 
 
 def test_a_cdash_date_outside_raw_mode_is_not_retained():

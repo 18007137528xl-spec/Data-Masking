@@ -77,6 +77,13 @@ class ColumnProfile:
     #: a column nobody named -- never written to the decision sheet, the
     #: review file or the manifest.
     top_values: list[str] = field(default_factory=list, repr=False)
+    #: What a numeric column's values look like, judged across every value:
+    #: "measure" (nothing ID-like), "long" (7+ digits before the point -- a
+    #: phone or ID number fits there, no lab value does), "year" (whole
+    #: numbers between 1900 and 2100) or "code" (whole numbers with leading
+    #: zeros, or all one width of 4+ digits -- how subject and record numbers
+    #: look). Empty for a column that is not numeric.
+    numeric_shape: str = ""
 
     @property
     def null_rate(self) -> float:
@@ -169,7 +176,36 @@ def profile_column(series: pd.Series, *, n_samples: int = 3) -> ColumnProfile:
             if len(text) else 0.0
         ),
         top_values=[str(v)[:120] for v in text.value_counts().head(60).index],
+        numeric_shape=_numeric_shape(text),
     )
+
+
+def _numeric_shape(text: pd.Series) -> str:
+    """Classify a mostly-numeric column by what every one of its values looks like."""
+    if not len(text):
+        return ""
+    vals = text.str.strip()
+    parsed = pd.to_numeric(vals, errors="coerce")
+    ok = parsed.notna()
+    if ok.mean() < 0.95:
+        return ""
+    vals, parsed = vals[ok], parsed[ok]
+    whole = vals.str.replace(r"^[+-]", "", regex=True).str.split(".").str[0]
+    if int(whole.str.len().max()) >= 7:
+        return "long"
+    integers = not vals.str.contains(r"[.eE]").any()
+    if integers and parsed.between(1900, 2100).all():
+        return "year"
+    if integers and (
+        vals.str.match(r"^0\d").any()
+        or (
+            vals.str.len().nunique() == 1
+            and int(vals.str.len().iloc[0]) >= 4
+            and vals.nunique() >= 10
+        )
+    ):
+        return "code"
+    return "measure"
 
 
 def _shape_space(value: str) -> int:
@@ -627,7 +663,7 @@ def suggest(
                 "re-identify. Keep it only if the audit trail is in scope, "
                 "and then shift it like any other date.",
             ),
-            "medium",
+            "high",
             "EDC audit timestamp",
         )
 
@@ -725,7 +761,7 @@ def suggest(
                     (
                         ""
                         if by_values
-                        else "REVIEW: named as a CDASH date, but only "
+                        else "named as a CDASH date, though only "
                         f"{profile.raw_date_rate:.0%} of its values read as one. "
                         "Any value the parser cannot read halts the run "
                         "(on_unparsed: fail) and is reported by format, so "
@@ -748,7 +784,11 @@ def suggest(
                     )
                 ),
             ),
-            "high" if settled and by_values else "medium" if settled else "low",
+            # Named as a CDASH date but read by name rather than values is
+            # still settled: every value is parsed at run time and any the
+            # parser cannot read halts the run, so a wrong guess fails loudly
+            # instead of publishing a real date.
+            "high" if settled else "low",
             "raw date, format-preserving shift"
             + ("" if by_values else " (recognised by its CDASH name)")
             if settled
@@ -979,7 +1019,7 @@ def suggest(
     if named({"AGEU", "AGEGR1"}):
         return Suggestion(
             rule(Treatment.RETAIN, is_quasi_identifier=up != "AGEU"),
-            "medium",
+            "high",
             "age unit / band",
         )
     if named({"SEX", "GENDER", "RACE", "ETHNIC", "ETHNICITY", "COUNTRY"}):
@@ -1005,7 +1045,8 @@ def suggest(
                 "an LDS, where the date is retained, the pair is a finer date "
                 "element than the date alone: check that is intended.",
             ),
-            "medium",
+            # Retaining it only sharpens a date that is itself retained.
+            "medium" if keep_dates else "high",
             "time of day",
         )
 
@@ -1019,7 +1060,7 @@ def suggest(
                 "is system bookkeeping -- keep it only if something "
                 "downstream joins on it.",
             ),
-            "medium",
+            "high",
             "EDC structural key",
         )
 
@@ -1060,7 +1101,9 @@ def suggest(
                     "text, same dummy, matched ignoring case). Nothing of the "
                     "original survives, so nothing is left to screen",
                 ),
-                "high" if any(up.endswith(s) for s in _VERBATIM_SUFFIXES) else "medium",
+                # Replacing is the safe direction: if this was not free text
+                # after all, the cost is a column of noise, never a leak.
+                "high",
                 "free text, replaced with dummy text",
             )
         return Suggestion(
@@ -1091,11 +1134,33 @@ def suggest(
     if profile.numeric_rate >= 0.95 and not (
         profile.unique_rate > 0.95 and profile.n_unique > 20
     ):
+        shape = profile.numeric_shape
+        if shape == "measure":
+            return Suggestion(
+                rule(Treatment.RETAIN, note="numbers, repeating across rows: a "
+                     "measurement or a coded value. Checked across every value: "
+                     "none is long enough to be a phone or ID number, and they "
+                     "are not all whole numbers a year could be"),
+                "high",
+                "numeric values",
+            )
+        why = {
+            "long": "some values have 7 or more digits before the point -- the "
+            "length of a phone, ID or record number, and of almost no "
+            "measurement",
+            "year": "every value is a whole number between 1900 and 2100, so "
+            "this may be a year (of birth, of diagnosis), which is a date "
+            "element",
+            "code": "whole numbers with leading zeros or all of one width -- "
+            "how subject, record and site numbers are written",
+        }.get(shape, "mixed numeric shapes")
         return Suggestion(
-            rule(Treatment.RETAIN, note="numbers, repeating across rows: a "
-                 "measurement or a coded value, not a key"),
+            rule(Treatment.RETAIN, note=f"REVIEW: numbers, retained, but {why}. "
+                 "Confirm it is a measurement or a code list before it is "
+                 "published"),
             "medium",
-            "numeric values",
+            {"long": "numeric, long digit runs", "year": "numeric, all year-like",
+             "code": "numeric, ID-like"}.get(shape, "numeric values"),
         )
     categorical = (
         (profile.n_unique <= 30 or profile.unique_rate <= 0.05)
@@ -1112,12 +1177,37 @@ def suggest(
                 "low",
                 "categorical, but names or contacts in it",
             )
+        # Settled only when the check saw every distinct value -- a column
+        # with 400 of them was judged on its 60 most frequent -- and none of
+        # them reads as a bare name or an institution, which the detector
+        # above only finds behind a cue like "Dr".
+        seen_all = profile.n_unique <= len(profile.top_values)
+        named_like = _name_like(profile.top_values)
+        if seen_all and not named_like:
+            return Suggestion(
+                rule(Treatment.RETAIN, note=f"{profile.n_unique} distinct short "
+                     "values repeated across rows, every one checked and none "
+                     "reading as a name, contact, address or institution: a "
+                     "pick-list or a coded answer"),
+                "high",
+                f"categorical ({profile.n_unique} values)",
+            )
         return Suggestion(
-            rule(Treatment.RETAIN, note=f"{profile.n_unique} distinct short "
-                 "values repeated across rows, none of them reading as a name, "
-                 "contact or address: a pick-list or a coded answer"),
+            rule(Treatment.RETAIN, note=(
+                f"REVIEW: {profile.n_unique} distinct short values repeated "
+                "across rows, retained, but "
+                + (
+                    f"{named_like} of them read like a person's or "
+                    "institution's name"
+                    if named_like
+                    else "only the 60 most frequent were checked for names "
+                    "and contacts"
+                )
+                + ". Confirm it is a pick-list before it is published"
+            )),
             "medium",
-            f"categorical ({profile.n_unique} values)",
+            f"categorical ({profile.n_unique} values)"
+            + (", name-like values" if named_like else ", partly checked"),
         )
 
     if profile.unique_rate > 0.95 and profile.n_unique > 20:
@@ -1233,6 +1323,80 @@ _DETECTOR: Any = None
 _IDENTIFIER_TYPES = {"PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER", "LOCATION",
                      "US_SSN", "IP_ADDRESS", "URL", "MEDICAL_LICENSE", "NRP",
                      "ORGANIZATION", "FACILITY"}
+
+
+#: The commonest Chinese surnames -- well over 80% of the population. A
+#: pick-list of investigators or coordinators is a list of these.
+_CN_SURNAMES = frozenset(
+    "王李张刘陈杨黄赵吴周徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾肖田董袁潘"
+    "于蒋蔡余杜叶程苏魏吕丁任沈姚卢姜崔钟谭陆汪范金石廖贾夏韦付方白邹孟熊秦邱"
+    "江尹薛闫段雷侯龙史陶黎贺顾毛郝龚邵万钱严覃武戴莫孔向汤常温康施文牛樊葛邢"
+)
+_CN_COMPOUND_SURNAMES = ("欧阳", "司马", "诸葛", "上官", "东方", "皇甫", "慕容", "司徒")
+_CN_INSTITUTION = re.compile(
+    r"(医院|诊所|卫生院|卫生服务中心|医疗中心|医学中心|研究所|研究院|大学|学院|"
+    r"有限公司|集团)"
+)
+#: Words a CRF answer is made of. A two-word value containing one of them is
+#: an answer ("Not Done", "Left Arm"), not somebody's name.
+_CRF_WORDS = frozenset(
+    """not done yes no unknown unk na applicable other none normal abnormal
+    clinically significant mild moderate severe left right both bilateral
+    upper lower arm leg ongoing recovered resolved recovering resolving
+    fatal death died continuing stopped withdrawn completed screen screening
+    failure baseline visit unscheduled scheduled week day month year end
+    early termination follow up oral iv intravenous subcutaneous topical
+    daily twice once weekly as needed prn tablet capsule injection solution
+    male female positive negative pending missing high low increased decreased
+    related unrelated possibly probably definitely unlikely drug study
+    treatment placebo dose reduced interrupted withdrawn changed same
+    present absent new worsened improved stable progressive partial complete
+    response disease grade cycle period phase arm cohort group site total
+    pre post first second third final initial repeat test result sample
+    blood urine serum plasma fasting non""".split()
+)
+_LATIN_NAME_TOKEN = re.compile(r"^(?:[A-Z][a-z'\-]+|[A-Z]{2,}|[A-Z]\.?)$")
+
+
+def _name_like(values: list[str]) -> int:
+    """How many values read like a bare person's or institution's name.
+
+    Deliberately eager. A false hit leaves the column for a person to look
+    at, which is where it was before this check existed; a miss publishes a
+    list of investigators as a pick-list.
+    """
+    from .freetext import CLINICAL_ALLOWLIST, _looks_like_drug_name
+
+    n = 0
+    for raw in values:
+        v = str(raw).strip()
+        if not v:
+            continue
+        compact = re.sub(r"\s+", "", v)
+        if re.fullmatch(r"[\u4e00-\u9fff·]{2,4}", compact) and (
+            compact[0] in _CN_SURNAMES or compact.startswith(_CN_COMPOUND_SURNAMES)
+        ):
+            n += 1
+            continue
+        if _CN_INSTITUTION.search(v):
+            n += 1
+            continue
+        if re.match(r"^[A-Z][A-Za-z'\-]+,\s*[A-Z]", v):  # "Smith, John"
+            n += 1
+            continue
+        toks = v.replace(",", " ").split()
+        if not 2 <= len(toks) <= 4 or not all(_LATIN_NAME_TOKEN.match(t) for t in toks):
+            continue
+        low = [t.lower().rstrip(".") for t in toks]
+        if any(t in _CRF_WORDS for t in low):
+            continue
+        if all(
+            t in CLINICAL_ALLOWLIST or _looks_like_drug_name(t) or len(t) == 1
+            for t in low
+        ):
+            continue
+        n += 1
+    return n
 
 
 def _identifier_hits(values: list[str]) -> set[str]:
