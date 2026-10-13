@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterable
 
 import pandas as pd
 
@@ -482,6 +482,7 @@ def suggest(
     """
     col = profile.column
     up = col.upper()
+    up_original = up
     rave_tag = None
     if raw_edc:
         # Medidata Rave exports each field several ways: AESEV (the label as
@@ -511,6 +512,23 @@ def suggest(
 
     # --- identifiers --------------------------------------------------
     if raw_edc and named(_RAW_SUBJECT_KEYS) and "USUBJID" not in sibling_columns:
+        # Two subject numbers in one file -- Rave's Subject beside subjectId.
+        # Surrogating both issues two unrelated surrogates for one person and
+        # fills the vault's subject table with database row ids posing as
+        # subjects. The file's key carries the identity; the other goes.
+        key = _raw_subject_key_of(sibling_columns | {up_original})
+        if key is not None and key != up_original:
+            return Suggestion(
+                rule(
+                    Treatment.DROP,
+                    redundant_with=key,
+                    note=f"a second subject number beside {key}, which is this "
+                    "file's subject key and carries the identity. Surrogating "
+                    "both would give one person two unrelated surrogates",
+                ),
+                "high",
+                "redundant subject identifier",
+            )
         # The raw side's subject column. It gets the SAME surrogate as the
         # SDTM side's USUBJID, because the contract's join_key_template makes
         # both look the vault up under one string -- without that, the two
@@ -560,6 +578,28 @@ def suggest(
             "subject identifier",
         )
     if named(_SITE_KEYS) or (raw_edc and named(_RAW_SITE_KEYS)):
+        # Rave writes one site three ways: SiteNumber (the protocol's),
+        # siteid (the database's) and Site (its name). Surrogated separately
+        # they become three unrelated site identifiers.
+        key = _raw_site_key_of(sibling_columns | {up_original}) if raw_edc else None
+        # Only another rendering of the site goes -- SITEGR1, a pooled group
+        # of sites, is a different thing and keeps its own rule.
+        if (
+            key is not None
+            and key != up_original
+            and set(_key_forms(up_original)) & set(_RAW_SITE_PREFERENCE)
+        ):
+            return Suggestion(
+                rule(
+                    Treatment.DROP,
+                    redundant_with=key,
+                    note=f"another rendering of the site beside {key}, which "
+                    "carries the site identity. Surrogating both would give "
+                    "one site two unrelated surrogates",
+                ),
+                "high",
+                "redundant site identifier",
+            )
         return Suggestion(
             rule(
                 Treatment.SURROGATE_ID,
@@ -1305,18 +1345,65 @@ _EDC_STRUCTURAL_EXACT = {"PROJECT", "FOLDER", "FORM", "PAGE", "INSTANCE",
 #: Subject-key names seen in raw EDC exports, in the order they are trusted.
 #: A raw extract has no USUBJID; without a subject key the domain has no
 #: offset to shift by, and every date in it would pass through unshifted.
+#: Names a subject number goes by, in order of preference: when a file has
+#: two, the earlier one is the key and the other is dropped as redundant.
+#: SUBJECT before SUBJECTID matters on Rave, where Subject is the protocol's
+#: subject number and subjectId is the database's own row id for it.
+#: Matched on the squeezed name (separators removed, one type tag stripped),
+#: the same form the column rules use -- so "Subject ID" and SUBJECT_NO are
+#: found here exactly when a column rule calls them the subject identifier.
 _RAW_SUBJECT_KEYS = (
-    "USUBJID", "SUBJID", "SUBJECT", "SUBJECTID", "SUBJECT_ID", "SUBJNO",
-    "PATIENTID", "PATIENT_ID", "PATID", "PT_ID", "SCRNO", "SCREENINGNO",
+    "USUBJID", "SUBJID", "SUBJECT", "SUBJECTNO", "SUBJECTNUMBER", "SUBJNO",
+    "SUBJNUM", "SUBNUM", "SUBJ", "SUBJECTID",
+    "PATIENTID", "PATIENTNO", "PATIENTNUMBER", "PATID", "PATNO", "PTID", "PTNO",
+    "SCRNO", "SCRNUM", "SCREENNO", "SCREENINGNO", "SCREENINGNUMBER",
+    "受试者编号", "受试者代码", "受试者号", "受试者筛选号", "患者编号", "筛选号",
+    "筛选编号",
 )
 
 
-def _raw_subject_key(frame: pd.DataFrame) -> str | None:
-    upper = {str(c).upper(): str(c) for c in frame.columns}
-    for cand in _RAW_SUBJECT_KEYS:
-        if cand in upper:
-            return upper[cand]
+def _key_forms(name: str) -> tuple[str, ...]:
+    """The forms a column name is matched in. A Rave copy (Subject_RAW) is a
+    second rendering of a column, never the key itself."""
+    up = str(name).upper()
+    if re.match(r"^.+?[_ ](RAW|INT|STD|DEC)$", up):
+        return ()
+    squeezed = re.sub(r"[ _\-.]", "", up)
+    return (up, squeezed, _stem(squeezed))
+
+
+def _raw_subject_key_of(columns: Iterable[str]) -> str | None:
+    forms = [(str(c), _key_forms(c)) for c in columns]
+    # Whole names before stemmed ones: stemmed, subjectId reads as SUBJECT,
+    # and in a Rave export it comes first -- it would win the key from the
+    # column that really is the subject number.
+    for depth in (2, 3):
+        for cand in _RAW_SUBJECT_KEYS:
+            for col, f in forms:
+                if cand in f[:depth]:
+                    return col
     return None
+
+
+#: Which of several site columns carries the site, best first.
+_RAW_SITE_PREFERENCE = (
+    "SITENUMBER", "SITENO", "SITENUM", "SITECODE", "STUDYENVSITENUMBER",
+    "SITEID", "CENTREID", "SITE", "CENTRE", "CENTER",
+)
+
+
+def _raw_site_key_of(columns: Iterable[str]) -> str | None:
+    forms = [(str(c), _key_forms(c)) for c in columns]
+    for depth in (2, 3):
+        for cand in _RAW_SITE_PREFERENCE:
+            for col, f in forms:
+                if cand in f[:depth]:
+                    return col
+    return None
+
+
+def _raw_subject_key(frame: pd.DataFrame) -> str | None:
+    return _raw_subject_key_of(frame.columns)
 
 
 _DETECTOR: Any = None
@@ -1587,6 +1674,18 @@ def draft_contract(
         # itself dropped (a --DAT outside raw mode), the claim is false and the
         # contract rightly refuses it, so the claim goes and the drop stays.
         by_col = {c.upper(): sg for c, sg in per_col.items()}
+        # Rules name their survivor in upper case (they only see upper-cased
+        # siblings); the contract matches column names exactly, so a Rave
+        # 'siteid' must be named as 'siteid'.
+        real = {c.upper(): c for c in per_col}
+        for col, sug in list(per_col.items()):
+            rw = sug.rule.redundant_with
+            if rw and rw not in per_col and rw.upper() in real:
+                per_col[col] = Suggestion(
+                    sug.rule.model_copy(update={"redundant_with": real[rw.upper()]}),
+                    sug.confidence,
+                    sug.rationale,
+                )
         for col, sug in per_col.items():
             survivor = by_col.get((sug.rule.redundant_with or "").upper())
             if survivor is not None and survivor.rule.treatment is Treatment.DROP:

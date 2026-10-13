@@ -692,7 +692,11 @@ def apply_sheet(
                 ) from exc
             changed += 1
 
-        new_domains.append(dom.model_copy(update={"fields": fields}))
+        new_domains.append(
+            dom.model_copy(
+                update={"fields": fields, "subject_key": _subject_key(dom, fields)}
+            )
+        )
 
     # Validators run here: the steward's changes face the same structural
     # checks as the draft did -- duplicate output columns, the tier/date
@@ -727,6 +731,25 @@ def apply_sheet(
     # too, rather than trusting the object we just built.
     stamped = Contract.model_validate(stamped.model_dump(mode="json"))
     return stamped, {"accepted": accepted, "changed": changed, "total": len(sheet)}
+
+
+def _subject_key(dom: Any, fields: list[FieldRule]) -> str | None:
+    """The domain's subject key, following what the reviewer decided.
+
+    The key was set by the profiler from the column names it recognised. A
+    reviewer who marks a column it did not recognise as the subject
+    (surrogate_id, entity=subject) has said which column that is, and the
+    date offset and the reassignment have to look subjects up by it -- or
+    they find no key at all, and the run stops with nothing on the page
+    connecting the stop to the decision that should have fixed it.
+    """
+    subject_cols = [
+        f.column for f in fields
+        if f.treatment is Treatment.SURROGATE_ID and f.entity == "subject"
+    ]
+    if dom.subject_key in subject_cols or len(subject_cols) != 1:
+        return dom.subject_key
+    return subject_cols[0]
 
 
 def _annotate(base: str | None, steward_note: str) -> str | None:

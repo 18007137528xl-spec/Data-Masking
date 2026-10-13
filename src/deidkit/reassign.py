@@ -89,6 +89,33 @@ def _keys(frame: pd.DataFrame, dom: DomainContract) -> pd.Series | None:
     return None
 
 
+def _no_key(dom: DomainContract, frame: pd.DataFrame) -> str:
+    """Say which column is missing and what fixes it, in the reviewer's terms."""
+    if dom.join_key_template:
+        import re
+
+        missing = sorted(
+            set(re.findall(r"{(\w+)}", dom.join_key_template))
+            - set(map(str, frame.columns))
+        )
+        return (
+            f"{dom.name}: records are matched to subjects by "
+            f"{dom.join_key_template!r}, but this file has no "
+            f"{', '.join(missing)} column."
+        )
+    if dom.subject_key:
+        return (
+            f"{dom.name}: the subject column is set to {dom.subject_key!r}, "
+            "which this file does not have."
+        )
+    return (
+        f"{dom.name}: no column was recognised as the subject number, so its "
+        "records cannot be dealt between subjects. In Review, set that column "
+        "to surrogate_id with entity=subject, sign again and rerun -- or "
+        "untick shuffling."
+    )
+
+
 def move_date(value: Any, days: int, order: str | None = None) -> Any:
     """Move one date by ``days`` in the form it was written. Partial dates
     move by the same rule every partial date uses; anything unreadable is
@@ -361,10 +388,7 @@ def apply(
         anchor = frames[spec.domain].reset_index(drop=True)
         akeys = _keys(anchor, anchor_dom)
         if akeys is None:
-            raise ReassignError(
-                f"{spec.domain}: no subject key to reassign by -- set its "
-                "subject_key or join_key_template"
-            )
+            raise ReassignError(_no_key(anchor_dom, frames[spec.domain]))
         row_of = {str(k): i for i, k in enumerate(akeys) if not pd.isna(k)}
 
         # Real reference dates, where the anchor domain has them.
@@ -386,10 +410,7 @@ def apply(
         if d.reassign_mode in ("rows", "values"):
             ks = _keys(frames[d.name], d)
             if ks is None:
-                raise ReassignError(
-                    f"{d.name}: no subject key to reassign by -- its "
-                    "subject_key or join_key_template must name columns it has"
-                )
+                raise ReassignError(_no_key(d, frames[d.name]))
             if shared is not None:
                 anchor_ctx = shared
                 local_spec = spec
