@@ -440,6 +440,20 @@ _RAW_FREETEXT_NAMES = re.compile(
 )
 
 #: Treatment and product names as raw EDC spells them.
+#: A MedDRA level or a WHODrug code, optionally behind a two-letter domain
+#: prefix and TERM, optionally followed by how it is rendered: AEPT, AELLT,
+#: AETERM_LLT, LLT_NAME, AELLTNM, AETERM_PT_CODE, SOC_NAME_ZH, CMATC2.
+_DICTIONARY_TERM = re.compile(
+    r"^(?:[A-Z]{2})?(?:TERM|DECOD)?"
+    r"(?:LLT|PT|HLT|HLGT|SOC|ATC\d?|PREFNAME|PREFTERM|DRECNO)"
+    r"(?:NAME|NAM|NM|TERM|TXT|TEXT|CODE|CD|C|DESC)?(?:ZH|CN|CHN|EN|ENG)?$"
+)
+_DICTIONARY_TERM_ZH = re.compile(
+    r"(低位语|低位术语|首选语|首选术语|高位语|高位组语|系统器官分类|MedDRA|WHODrug|"
+    r"(?:^|[^A-Z])(?:LLT|PT|HLT|HLGT|SOC)[ _]?(?:名称|术语|编码|代码|名))",
+    re.IGNORECASE,
+)
+
 #: A role followed by what was written down about the person in it.
 _ROLE_NAME = re.compile(
     r"(?:(?:INV|INVEST|SUBINV|PI|DR|DOCTOR|PHYS|NURSE|CRC|CRA|MONITOR|"
@@ -1198,6 +1212,24 @@ def suggest(
             rule(Treatment.RETAIN),
             "high",
             "record sequence key, not clinical content",
+        )
+
+    # --- dictionary coding ----------------------------------------------
+    # MedDRA and WHODrug terms come out of the dictionary, not the site's
+    # pen, and they are what AEDECOD/AEBODSYS are built from -- the answer
+    # the model is asked to produce. Coding exports spell them every way
+    # (AEPT, AETERM_LLT, LLT_NAME, PT_NAME, SOC_NAME, 低位语), and multi-word
+    # terms like "Alanine aminotransferase increased" read as prose by their
+    # values, so without this they went to dummy text and the target was
+    # destroyed. Checked before the free-text rules on purpose.
+    coded = re.sub(r"(RAW|INT|STD|DEC)$", "", re.sub(r"[ _\-.]", "", col.upper()))
+    if _DICTIONARY_TERM.match(coded) or _DICTIONARY_TERM_ZH.search(col):
+        return Suggestion(
+            rule(Treatment.RETAIN, note="a dictionary-coded term (MedDRA "
+                 "LLT/PT/HLT/HLGT/SOC or WHODrug): standard vocabulary, not "
+                 "text anyone at the site wrote"),
+            "high",
+            "dictionary-coded term",
         )
 
     # --- coded clinical content --------------------------------------

@@ -186,3 +186,23 @@ def test_an_ambiguous_date_column_alone_still_asks():
     frames = _study(AESTDAT=_cycle(["03/04/2025", "05/06/2025"]))
     _, sugg = draft_contract(frames, source="s", raw_edc=True)
     assert sugg[FILE]["AESTDAT"].confidence == "low"
+
+
+# --- dictionary coding is the answer, not free text --------------------------
+def test_meddra_columns_are_kept_however_they_are_spelled():
+    terms = _cycle(["Blood pressure increased", "Upper respiratory tract infection",
+                    "Alanine aminotransferase increased", "Headache", "Back pain"])
+    names = ["AELLT", "AETERM_LLT", "LLT_NAME", "AELLTNM", "AETERM_LLT_TERM",
+             "AEPT", "AETERM_PT", "PT_NAME", "SOC_NAME", "AEHLGT", "LLTNAME_ZH",
+             "低位语", "LLT名称", "首选术语"]
+    for raw in (True, False):
+        _, sugg = draft_contract(_study(**{n: terms for n in names}), source="s",
+                                 raw_edc=raw, dummy_text=True)
+        for n in names:
+            s = sugg[FILE][n]
+            assert s.rule.treatment.value == "retain", (n, raw, s.rationale)
+            assert s.confidence == "high", n
+        # the verbatim term beside them is still free text
+        _, sugg = draft_contract(_study(AETERM=terms), source="s", raw_edc=raw,
+                                 dummy_text=True)
+        assert sugg[FILE]["AETERM"].rule.treatment.value == "dummy_text"
