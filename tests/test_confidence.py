@@ -138,7 +138,7 @@ def _ex(**cols):
 
 def test_product_columns_are_blinded_by_their_values():
     for values in (["SHR-1210", "Placebo"], ["Empagliflozin 10 mg", "Placebo"],
-                   ["恩格列净片", "安慰剂"], ["BI 10773"]):
+                   ["恩格列净片", "安慰剂"], ["BI 10773", "Empagliflozin"]):
         _, sugg = draft_contract(_ex(IPX=_cycle(values)), source="s",
                                  raw_edc=True, blind_treatment=True)
         s = sugg["EDC_EX_RAWDATA"]["IPX"]
@@ -206,3 +206,35 @@ def test_meddra_columns_are_kept_however_they_are_spelled():
         _, sugg = draft_contract(_study(AETERM=terms), source="s", raw_edc=raw,
                                  dummy_text=True)
         assert sugg[FILE]["AETERM"].rule.treatment.value == "dummy_text"
+
+
+def test_codes_shaped_like_a_compound_are_not_a_drug_on_their_own():
+    # CN001 has exactly the shape of SHR-1210. Without a drug name or a
+    # placebo beside it, it is a site or a screening number, not a product.
+    for col in ("INVSITE", "ZQ"):
+        _, sugg = draft_contract(_ex(**{col: _cycle(["CN001", "CN002", "US003"])}),
+                                 source="s", raw_edc=True, blind_treatment=True)
+        assert sugg["EDC_EX_RAWDATA"][col].rule.treatment.value != "label_map", col
+
+
+def test_invsite_is_the_site():
+    _, sugg = draft_contract(_study(INVSITE=_cycle(["CN001", "CN002"])),
+                             source="s", raw_edc=True)
+    rule = sugg[FILE]["INVSITE"].rule
+    assert rule.treatment.value == "surrogate_id" and rule.entity == "site"
+    # beside the protocol's site number it is the redundant one
+    _, sugg = draft_contract(
+        _study(INVSITE=_cycle(["CN001"]), SiteNumber=_cycle(["101"])),
+        source="s", raw_edc=True)
+    assert sugg[FILE]["INVSITE"].rule.redundant_with == "SiteNumber"
+
+
+def test_placebo_is_kept_in_any_case(tmp_path):
+    from deidkit import Vault
+    from deidkit.transforms import label_map
+
+    v = Vault(tmp_path / "v.db", key=Vault.generate_key(), operator="t")
+    out = label_map(pd.Series(["SHR-1210", "PLACEBO", "placebo"]), v,
+                    entity="treatment_product", prefix="DRUG", keep_values=["Placebo"])
+    assert list(out)[1:] == ["PLACEBO", "placebo"]
+    v.close()

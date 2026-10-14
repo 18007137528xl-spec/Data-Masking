@@ -342,7 +342,7 @@ def domain_code(name: str) -> str | None:
     return found.pop() if len(found) == 1 else None
 
 _SUBJECT_KEYS = {"USUBJID", "SUBJID"}
-_SITE_KEYS = {"SITEID", "SITEGR1", "SITENUM"}
+_SITE_KEYS = {"SITEID", "SITEGR1", "SITENUM", "INVSITE"}
 
 #: Direct identifiers to remove outright -- no analytic value at any tier.
 _DROP_EXACT = {
@@ -474,7 +474,8 @@ _RAW_PRODUCT_NAMES = {"STUDYDRUG", "STUDYMED", "IMPNAME", "DRUG", "COMPOUND"}
 
 #: Site identifiers as raw EDC spells them.
 _RAW_SITE_KEYS = {"SITE", "SITECODE", "SITENO", "CENTRE", "CENTER", "CENTREID",
-                  "SITENUMBER", "STUDYENVSITENUMBER", "SITENUM"}
+                  "SITENUMBER", "STUDYENVSITENUMBER", "SITENUM", "INVSITE",
+                  "INVESTIGATORSITE", "STUDYSITE"}
 
 #: Type tags raw EDC hangs off the end of a column name: SEX_CD, RACE_TXT,
 #: VISIT_NO, DOSE_AMT. They carry no meaning of their own, and leaving them on
@@ -973,7 +974,7 @@ def suggest(
                 Treatment.LABEL_MAP,
                 entity="treatment_product" if is_product else "treatment",
                 prefix="DRUG" if is_product else "TRT",
-                keep_values=["Placebo", "PLACEBO", "placebo"],
+                keep_values=["Placebo"],
                 note="blinding and commercial confidentiality, NOT privacy -- a "
                 "treatment arm identifies nobody. Arm columns share one "
                 "namespace so their labels agree; product columns get their "
@@ -998,7 +999,7 @@ def suggest(
                 Treatment.LABEL_MAP,
                 entity="treatment_product",
                 prefix="DRUG",
-                keep_values=["Placebo", "PLACEBO", "placebo", "安慰剂"],
+                keep_values=["Placebo"],
                 note="its values are drug names or development codes, so it "
                 "names the study product: relabelled DRUG A, DRUG B in the "
                 "same namespace as EXTRT and the protocol, placebo kept",
@@ -1519,7 +1520,8 @@ def _raw_subject_key_of(columns: Iterable[str]) -> str | None:
 #: Which of several site columns carries the site, best first.
 _RAW_SITE_PREFERENCE = (
     "SITENUMBER", "SITENO", "SITENUM", "SITECODE", "STUDYENVSITENUMBER",
-    "SITEID", "CENTREID", "SITE", "CENTRE", "CENTER",
+    "SITEID", "CENTREID", "SITE", "CENTRE", "CENTER", "INVSITE",
+    "INVESTIGATORSITE", "STUDYSITE",
 )
 
 
@@ -1639,26 +1641,36 @@ def _drug_token(token: str) -> bool:
 
 def _drug_values(values: list[str]) -> bool:
     """Do these values name products -- every one a drug name, a development
-    code or placebo, and at least one not placebo?"""
-    seen_drug = False
+    code or placebo, and at least one not placebo?
+
+    A development code on its own proves nothing: CN001 is a site, SCR012 a
+    screening number, and both have exactly the shape of SHR-1210. Codes
+    count only beside a real drug name or a placebo arm, which is what a
+    product column looks like and a site column never does.
+    """
+    seen_drug = seen_name = seen_placebo = False
     for raw in values:
         v = str(raw).strip()
         if not v:
             continue
         if _PLACEBO.match(v):
+            seen_placebo = True
             continue
         head = re.split(r"\s+\d", v, maxsplit=1)[0].strip()  # drop the dose
+        if _ZH_DRUG.search(v) or any(
+            _drug_token(t) for t in re.findall(r"[A-Za-z]+", head)
+        ):
+            seen_drug = seen_name = True
+            continue
         if (
             _DEV_CODE.match(v)
             or _DEV_CODE.match(head)
             or _DEV_CODE.match(" ".join(v.split()[:2]))  # BI 10773 25 mg
-            or _ZH_DRUG.search(v)
-            or any(_drug_token(t) for t in re.findall(r"[A-Za-z]+", head))
         ):
             seen_drug = True
             continue
         return False
-    return seen_drug
+    return seen_drug and (seen_name or seen_placebo)
 
 
 def _name_like(values: list[str]) -> int:
