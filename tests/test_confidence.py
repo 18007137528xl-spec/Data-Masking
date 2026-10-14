@@ -277,3 +277,31 @@ def test_pt_name_alone_is_a_patient_not_a_preferred_term():
     _, sugg = draft_contract(_study(PT_NAME=_cycle(["John Smith", "Mary Lee"])),
                              source="s", raw_edc=True)
     assert sugg[FILE]["PT_NAME"].rule.treatment.value == "drop"
+
+
+def test_start_and_end_dates_in_pieces_are_dropped():
+    frames = _study(
+        ENDDY_RAW=_cycle(["3", "17", "28"]),
+        ENDMO_RAW=_cycle(["MAR", "APR"]),
+        STRMO_RAW=_cycle(["1", "12"]),
+        STRYY_RAW=_cycle(["2024", "2025"]),
+        STRYY_XX=_cycle(["2024", "2025"]),
+        ENDDY_XX=_cycle(["3", "17"]),
+        AESTRDY_C=_cycle(["5", "9"]),
+    )
+    for raw in (True, False):
+        _, sugg = draft_contract(frames, source="s", raw_edc=raw)
+        for col in ("ENDDY_RAW", "ENDMO_RAW", "STRMO_RAW", "STRYY_RAW",
+                    "STRYY_XX", "ENDDY_XX", "AESTRDY_C"):
+            s = sugg[FILE][col]
+            assert not s.rationale.startswith("unrecognised"), (col, raw)
+            assert s.rule.treatment.value != "retain", (col, raw, s.rationale)
+            if raw:
+                assert s.rule.treatment.value == "drop", (col, s.rationale)
+                assert s.confidence == "high", col
+
+
+def test_a_study_day_is_not_a_day_of_the_month():
+    _, sugg = draft_contract(_study(ENDDY_X=_cycle(["-3", "45", "112"])),
+                             source="s", raw_edc=True)
+    assert sugg[FILE]["ENDDY_X"].rule.treatment.value == "retain"

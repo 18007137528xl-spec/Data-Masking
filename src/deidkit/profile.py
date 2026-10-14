@@ -831,6 +831,24 @@ def suggest(
     # Ahead of every name-based branch below, because in a raw extract the
     # values are the stronger evidence: VISIT_DT is a date column whose name
     # reduces to VISIT, and a name-first reading of it retains real dates.
+    # A start/end date collected in pieces (STRYY, ENDMO, ENDDY) before the
+    # values get a say: a column of years reads as dates, and shifting a
+    # bare year beside its shifted whole date says nothing the whole does
+    # not, while publishing a date element.
+    piece = _DATE_PIECE.match(up) or next(
+        (m for t in _name_tokens(col) if (m := _DATE_PIECE.match(t))), None
+    )
+    if piece and not (
+        _piece_unit(piece) in ("DY", "DAY") and not _is_day_piece(up, profile)
+    ):
+        return Suggestion(
+            rule(Treatment.DROP, note="one piece of a start or end date (day, "
+                 "month or year) collected separately. The year alone is a date "
+                 "element; the whole date carries it, shifted"),
+            "high",
+            "part of a date",
+        )
+
     by_values = profile.looks_raw_date or profile.looks_date
     if raw_edc and (by_values or _is_cdash_date(up)):
         # The raw side of a training pair. Same per-subject offset as the SDTM
@@ -1020,7 +1038,10 @@ def suggest(
     # Real SDTM exports usually carry --DY alongside --DTC. A study day is an
     # interval, not a date element, so it is already in the form this pipeline
     # would have produced.
-    if up.endswith("DY") and not up.endswith("BODY") and len(up) > 2:
+    if (
+        up.endswith("DY") and not up.endswith("BODY") and len(up) > 2
+        and not _is_day_piece(up, profile)
+    ):
         note = "already a study day: an interval, not a date element"
         if sdtm_conformant:
             note += (
@@ -1453,6 +1474,28 @@ _TOKEN_DATE = frozenset(
     "ENDDATE STOPDT STOPDATE ONSETDT ONSETDATE RESDT RESOLDT VISITDT VISDT".split()
 )
 _TOKEN_DATE_PART = frozenset("DD MM MO MON YY YYYY YR DAY MONTH YEAR".split())
+def _is_day_piece(up: str, profile: "ColumnProfile") -> bool:
+    """ENDDY holding 3, 17, 28 is the day of an end date, not a study day:
+    a study day runs past 31 or below 1 somewhere in a real study."""
+    if not (_DATE_PIECE.match(up) or any(
+        _DATE_PIECE.match(t) for t in _name_tokens(profile.column)
+    )):
+        return False
+    nums = pd.to_numeric(pd.Series(profile.top_values), errors="coerce")
+    return bool(len(nums)) and nums.notna().all() and nums.between(1, 31).all()
+
+
+_DATE_PIECE = re.compile(
+    # STDY and ENDY are SDTM's study days (AESTDY, AEENDY) and never pieces,
+    # so ST and EN take every unit but DY.
+    r"^(?:[A-Z]{2})?(?:(ST|EN)(DD|DAY|MO|MM|MON|MONTH|YY|YYYY|YR|YEAR)"
+    r"|(STR|STRT|START|END|STOP|STP|ONSET|ONS|RES|RESOL|DIAG|DX)"
+    r"(DD|DY|DAY|MO|MM|MON|MONTH|YY|YYYY|YR|YEAR))$"
+)
+
+
+def _piece_unit(m: "re.Match[str]") -> str:
+    return m.group(2) or m.group(4)
 _TOKEN_TIME = frozenset("TM TIM TIME STTM STRTM ENTM ENDTM".split())
 _TOKEN_RETAIN = frozenset(
     list(_RETAIN_SUFFIXES)
@@ -1493,6 +1536,29 @@ def _suggest_by_tokens(
                  "WHODrug), found by the level named in the column"),
             "high",
             "dictionary-coded term",
+        )
+
+    # ENDDY, STRMO, ENDYY, ONSETYR: a start/end date collected in pieces.
+    part = next((m for t in toks if (m := _DATE_PIECE.match(t))), None)
+    if part:
+        unit = _piece_unit(part)
+        nums = pd.to_numeric(pd.Series(profile.top_values), errors="coerce")
+        if unit in ("DY", "DAY") and nums.notna().all() and len(nums) and (
+            nums.max() > 31 or nums.min() < 1
+        ):
+            # Past 31 or below 1 it is a study day, not a day of the month.
+            return Suggestion(
+                rule(Treatment.RETAIN, note="a study day: an interval, not a "
+                     "date element"),
+                "high",
+                "derived study day",
+            )
+        return Suggestion(
+            rule(Treatment.DROP, note="one piece of a start or end date (day, "
+                 "month or year) collected separately. The year alone is a date "
+                 "element; the whole date carries it, shifted"),
+            "high",
+            "part of a date",
         )
 
     is_date = bool(bare & _TOKEN_DATE) or any(
