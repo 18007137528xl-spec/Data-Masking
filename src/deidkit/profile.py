@@ -1224,6 +1224,20 @@ def suggest(
     # values, so without this they went to dummy text and the target was
     # destroyed. Checked before the free-text rules on purpose.
     coded = re.sub(r"(RAW|INT|STD|DEC)$", "", re.sub(r"[ _\-.]", "", col.upper()))
+    coding_block = any(
+        re.search(r"(LLT|HLGT|HLT|SOC)", c) for c in sibling_columns
+    )
+    if re.fullmatch(r"PT(?:NAME|NAM|NM)(?:ZH|CN|EN)?", coded) and not coding_block:
+        # PT_NAME is MedDRA's preferred term only inside a coding block
+        # (beside LLT, HLT, SOC). On its own it is far more often the
+        # patient's name, and retaining that is the worst mistake available.
+        return Suggestion(
+            rule(Treatment.DROP, note="PT_NAME with no MedDRA columns beside "
+                 "it: read as the patient's name. If it is the preferred term, "
+                 "change it to retain"),
+            "high",
+            "patient name",
+        )
     if _DICTIONARY_TERM.match(coded) or _DICTIONARY_TERM_ZH.search(col):
         return Suggestion(
             rule(Treatment.RETAIN, note="a dictionary-coded term (MedDRA "
@@ -1232,6 +1246,17 @@ def suggest(
             "high",
             "dictionary-coded term",
         )
+
+    # --- the same meanings, found inside a longer name -----------------
+    # Exports pad a meaningful name on both sides: ENDDT_RAW, STRDT,
+    # AE_HLGT_CD, AE_OUT_C, AEOutcome. The rules above read the end of the
+    # squeezed name and miss these; here the name is split into its words.
+    by_token = _suggest_by_tokens(
+        col, profile, rule, raw_edc=raw_edc, keep_dates=keep_dates,
+        siblings=sibling_columns,
+    )
+    if by_token is not None:
+        return by_token
 
     # --- coded clinical content --------------------------------------
     if any(up.endswith(s) for s in _RETAIN_SUFFIXES):
@@ -1410,6 +1435,132 @@ def suggest(
 #: The pieces a CDASH form collects a date in when it asks for day, month and
 #: year separately: MHSTDD / MHSTMO / MHSTYY beside MHSTDAT.
 _DATE_PART_SUFFIXES = ("YYYY", "MONTH", "YEAR", "MON", "DAY", "DD", "MO", "MM", "YY", "YR")
+
+
+# ----------------------------------------------------------------------
+# reading a name word by word
+# ----------------------------------------------------------------------
+#: Rendering tags: how a value is written, not what it means.
+_TOKEN_TAGS = frozenset(
+    "RAW INT STD DEC CD C CODE CODED TXT TEXT NAME NM LBL LABEL DESC DECODE "
+    "VAL VALUE N NUM X DISP".split()
+)
+_TOKEN_DICTIONARY = frozenset(
+    "LLT PT HLT HLGT SOC ATC ATC1 ATC2 ATC3 ATC4 PREFTERM MEDDRA WHODRUG".split()
+)
+_TOKEN_DATE = frozenset(
+    "DT DAT DATE DTM DTC STDT STRDT STARTDT STARTDATE STDAT ENDT ENDDT ENDDAT "
+    "ENDDATE STOPDT STOPDATE ONSETDT ONSETDATE RESDT RESOLDT VISITDT VISDT".split()
+)
+_TOKEN_DATE_PART = frozenset("DD MM MO MON YY YYYY YR DAY MONTH YEAR".split())
+_TOKEN_TIME = frozenset("TM TIM TIME STTM STRTM ENTM ENDTM".split())
+_TOKEN_RETAIN = frozenset(
+    list(_RETAIN_SUFFIXES)
+    + "OUTCOME SEVERITY SERIOUS SERIOUSNESS RELATION RELATIONSHIP CAUSALITY "
+    "ACTION GRADE ONGOING ROUTE FREQ FREQUENCY UNIT UNITS RESULT RESULTS "
+    "CATEGORY STATUS LOCATION LATERALITY POSITION INTENSITY TOXICITY "
+    "EXPECTED EXPECTEDNESS".split()
+)
+#: Words that make a coded field free text: AE_OUT_OTH is "other, specify".
+_TOKEN_FREETEXT = frozenset(
+    "OTH OTHER OTHSP SP SPECIFY SPEC COMMENT COMMENTS COMM CMNT NOTE NOTES "
+    "TERM VERBATIM REASON REMARK REMARKS".split()
+)
+
+
+def _name_tokens(col: str) -> list[str]:
+    """ENDDT_RAW -> [ENDDT]; AE_HLGT_CD -> [AE, HLGT]; AEOutcome -> [AE,
+    OUTCOME]. Split on separators and camel case, rendering tags removed."""
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", str(col))
+    toks = [t.upper() for t in re.split(r"[\s_\-.]+", spaced) if t]
+    return [t for t in toks if t not in _TOKEN_TAGS and not t.isdigit()]
+
+
+def _suggest_by_tokens(
+    col: str, profile: "ColumnProfile", rule: Any, *, raw_edc: bool,
+    keep_dates: bool, siblings: frozenset[str],
+) -> "Suggestion | None":
+    toks = _name_tokens(col)
+    if len(toks) < 1 or _AUDIT_DATE.search(str(col).upper()):
+        return None
+    tokset = set(toks)
+    # A token can also carry a domain prefix: AEOUT, MHSTDT, AEENDDT.
+    bare = tokset | {t[2:] for t in toks if len(t) > 4}
+
+    if bare & _TOKEN_DICTIONARY:
+        return Suggestion(
+            rule(Treatment.RETAIN, note="a dictionary-coded term (MedDRA or "
+                 "WHODrug), found by the level named in the column"),
+            "high",
+            "dictionary-coded term",
+        )
+
+    is_date = bool(bare & _TOKEN_DATE) or any(
+        t.endswith(("DT", "DAT", "DATE")) and len(t) >= 4 for t in toks
+    )
+    if is_date and tokset & _TOKEN_DATE_PART:
+        return Suggestion(
+            rule(Treatment.DROP, note="one piece of a date (day, month or "
+                 "year) collected separately. On its own the year is a date "
+                 "element; the whole date carries it, shifted"),
+            "high",
+            "part of a date",
+        )
+    if is_date:
+        if raw_edc:
+            order = profile.raw_date_order
+            settled = order in {"dmy", "mdy", "ymd", "unambiguous"}
+            return Suggestion(
+                rule(
+                    Treatment.DATE_SHIFT_RAW,
+                    entity="subject",
+                    is_date=True,
+                    date_order=None if order in {"unambiguous", "unknown"} else order,
+                    note="a date by its name. Shifted by the subject's offset "
+                    "in its written form; any value the parser cannot read "
+                    "halts the run, so nothing unshifted publishes",
+                ),
+                "high" if settled else "low",
+                "raw date, recognised by its name" if settled
+                else "raw date, day/month order UNRESOLVED",
+            )
+        if keep_dates:
+            return Suggestion(
+                rule(Treatment.RETAIN, note="retained as recorded (tier: lds)"),
+                "medium",
+                "date by name, retained (LDS)",
+            )
+        return Suggestion(
+            rule(Treatment.DROP, note="REVIEW: a date by its name whose values "
+                 "are not ISO, so no SDTM date treatment can read them. If this "
+                 "is a raw EDC extract, read it again with Raw EDC ticked"),
+            "low",
+            "date by name, not ISO -- raw extract?",
+        )
+
+    if bare & _TOKEN_TIME and not keep_dates:
+        return Suggestion(
+            rule(Treatment.RETAIN, note="a time of day; harmless once its date "
+                 "is shifted"),
+            "high",
+            "time of day",
+        )
+
+    if (
+        (bare & _TOKEN_RETAIN)
+        and not (tokset & _TOKEN_FREETEXT)
+        and not profile.looks_free_text
+        # A word in the name is weaker evidence than the values: HOSPITAL_LOC
+        # has LOC in it and a hospital in every row.
+        and not _name_like(profile.top_values)
+        and not _identifier_hits(profile.top_values)
+    ):
+        return Suggestion(
+            rule(Treatment.RETAIN),
+            "high",
+            "coded or graded clinical content -- the analytic payload",
+        )
+    return None
 
 
 def _is_cdash_date(up: str) -> bool:

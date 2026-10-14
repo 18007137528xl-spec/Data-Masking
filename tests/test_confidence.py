@@ -238,3 +238,42 @@ def test_placebo_is_kept_in_any_case(tmp_path):
                     entity="treatment_product", prefix="DRUG", keep_values=["Placebo"])
     assert list(out)[1:] == ["PLACEBO", "placebo"]
     v.close()
+
+
+# --- meanings padded inside longer names --------------------------------------
+def test_names_padded_on_both_sides_are_still_read():
+    frames = _study(
+        ENDDT_RAW=_cycle(["12/03/2025", "23/04/2025"]),
+        STRDT=_cycle(["12/03/2025", "23/04/2025"]),
+        AEStrDt=_cycle(["12/03/2025", "23/04/2025"]),
+        AE_HLGT_CD=_cycle(["10019231"]),
+        MEDDRA_HLGT_TERM=_cycle(["Headaches"]),
+        AE_OUT_C=_cycle(["1", "2"]),
+        AEOutcome=_cycle(["Recovered", "Fatal"]),
+        AE_ACTION_TAKEN=_cycle(["Dose not changed", "Drug withdrawn"]),
+    )
+    for raw in (True, False):
+        _, sugg = draft_contract(frames, source="s", raw_edc=raw)
+        got = {c: s for c, s in sugg[FILE].items()}
+        for col in ("AE_HLGT_CD", "MEDDRA_HLGT_TERM", "AE_OUT_C", "AEOutcome",
+                    "AE_ACTION_TAKEN"):
+            assert got[col].rule.treatment.value == "retain", (col, raw)
+            assert got[col].confidence == "high", (col, raw)
+        for col in ("ENDDT_RAW", "STRDT", "AEStrDt"):
+            assert not got[col].rationale.startswith("unrecognised"), (col, raw)
+            if raw:
+                assert got[col].rule.treatment.value == "date_shift_raw", col
+                assert got[col].confidence == "high", col
+
+
+def test_other_specify_beside_a_coded_field_is_still_free_text():
+    _, sugg = draft_contract(
+        _study(AE_OUT_OTH=[f"moved to another city {i}" for i in range(N)]),
+        source="s", raw_edc=True)
+    assert sugg[FILE]["AE_OUT_OTH"].rule.treatment.value != "retain"
+
+
+def test_pt_name_alone_is_a_patient_not_a_preferred_term():
+    _, sugg = draft_contract(_study(PT_NAME=_cycle(["John Smith", "Mary Lee"])),
+                             source="s", raw_edc=True)
+    assert sugg[FILE]["PT_NAME"].rule.treatment.value == "drop"
