@@ -1790,7 +1790,9 @@ _CRF_WORDS = frozenset(
     present absent new worsened improved stable progressive partial complete
     response disease grade cycle period phase arm cohort group site total
     pre post first second third final initial repeat test result sample
-    blood urine serum plasma fasting non""".split()
+    blood urine serum plasma fasting non
+    january february march april may june july august september october
+    november december jan feb mar apr jun jul aug sep sept oct nov dec""".split()
 )
 _LATIN_NAME_TOKEN = re.compile(r"^(?:[A-Z][a-z'\-]+|[A-Z]{2,}|[A-Z]\.?)$")
 
@@ -1931,6 +1933,15 @@ def _name_like(values: list[str]) -> int:
     return n
 
 
+_MONTHS = (
+    "JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|SEPT|OCT|NOV|DEC|JANUARY|FEBRUARY|"
+    "MARCH|APRIL|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER"
+)
+_CALENDAR_TOKEN = re.compile(
+    rf"(?i)(?:{_MONTHS}|UN|UNK|UNKNOWN|NA|N/A|ND|NK|Y|N|YES|NO|[+-]?\d+(?:\.\d+)?)"
+)
+
+
 def _identifier_hits(values: list[str]) -> set[str]:
     """What kinds of identifier the detector finds among these values."""
     global _DETECTOR
@@ -1940,6 +1951,10 @@ def _identifier_hits(values: list[str]) -> set[str]:
         _DETECTOR = freetext.build_detector()
     found: set[str] = set()
     for v in values:
+        # A name-finding model reads MAR, APR and JUN as people and places.
+        # A month, an unknown marker or a bare number is none of those.
+        if _CALENDAR_TOKEN.fullmatch(str(v).strip()):
+            continue
         for f in _DETECTOR.detect(str(v)):
             if f.entity_type in _IDENTIFIER_TYPES:
                 found.add(f.entity_type.lower().replace("_", " "))

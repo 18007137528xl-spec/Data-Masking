@@ -305,3 +305,20 @@ def test_a_study_day_is_not_a_day_of_the_month():
     _, sugg = draft_contract(_study(ENDDY_X=_cycle(["-3", "45", "112"])),
                              source="s", raw_edc=True)
     assert sugg[FILE]["ENDDY_X"].rule.treatment.value == "retain"
+
+
+def test_months_are_never_read_as_names(monkeypatch):
+    # Presidio's NER calls MAR and APR people or places. Stand in for it.
+    from deidkit import profile as prof
+
+    class Eager:
+        def detect(self, text):
+            from deidkit.freetext import Finding
+            return [Finding("PERSON", 0, len(text), text, 0.9, "fake")]
+
+    monkeypatch.setattr(prof, "_DETECTOR", Eager())
+    assert prof._identifier_hits(["MAR", "APR", "Jun", "UNK", "12"]) == set()
+    assert prof._identifier_hits(["John Smith"]) == {"person"}
+    _, sugg = draft_contract(_study(ZQMONTH=_cycle(["MAR", "APR", "March"])),
+                             source="s", raw_edc=True)
+    assert sugg[FILE]["ZQMONTH"].confidence != "low"
