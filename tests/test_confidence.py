@@ -322,3 +322,43 @@ def test_months_are_never_read_as_names(monkeypatch):
     _, sugg = draft_contract(_study(ZQMONTH=_cycle(["MAR", "APR", "March"])),
                              source="s", raw_edc=True)
     assert sugg[FILE]["ZQMONTH"].confidence != "low"
+
+
+# --- PT: the patient, or MedDRA's preferred term ------------------------------
+def test_a_bare_pt_column_is_the_patient():
+    frame = pd.DataFrame({"PT": [f"101-00{i % 8 + 1}" for i in range(N)],
+                          "AESEV": _cycle(["MILD", "SEVERE"])})
+    for raw in (True, False):
+        contract, sugg = draft_contract({FILE: frame}, source="s", raw_edc=raw)
+        s = sugg[FILE]["PT"]
+        assert s.rationale != "dictionary-coded term", raw
+        if raw:
+            assert s.rule.treatment.value == "surrogate_id" and s.rule.entity == "subject"
+            assert contract.domain(FILE).subject_key == "PT"
+
+
+def test_pt_beside_llt_and_soc_holding_terms_is_the_preferred_term():
+    frames = _study(LLT=_cycle(["Headache", "Back pain"]),
+                    PT=_cycle(["Headache", "Back pain"]),
+                    SOC=_cycle(["Nervous system disorders"]))
+    _, sugg = draft_contract(frames, source="s", raw_edc=True)
+    assert sugg[FILE]["PT"].rationale == "dictionary-coded term"
+    assert sugg[FILE]["PT"].rule.treatment.value == "retain"
+
+
+def test_pt_id_is_never_a_dictionary_term():
+    _, sugg = draft_contract(_study(PT_ID=_cycle(["1001", "1002"])), source="s",
+                             raw_edc=False)
+    assert sugg[FILE]["PT_ID"].rationale != "dictionary-coded term"
+
+
+def test_the_console_saves_before_it_signs():
+    from pathlib import Path
+    import deidkit
+
+    html = (Path(deidkit.__file__).parent / "console.html").read_text(encoding="utf-8")
+    approve = html.index("api('/api/approve'")
+    run = html.index("api('/api/run'")
+    assert "await flush();" in html[approve - 200:approve]
+    assert "await flush();" in html[run - 200:run]
+    assert "pending.add" in html  # queued rows are kept, not overwritten

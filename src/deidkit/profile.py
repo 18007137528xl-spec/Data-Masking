@@ -569,7 +569,10 @@ def suggest(
         return Suggestion(rule(Treatment.RETAIN), "high", "structural column")
 
     # --- identifiers --------------------------------------------------
-    if raw_edc and named(_RAW_SUBJECT_KEYS) and "USUBJID" not in sibling_columns:
+    if (
+        raw_edc and named(_RAW_SUBJECT_KEYS) and "USUBJID" not in sibling_columns
+        and not (up.startswith("PT") and _meddra_pt(col, profile, sibling_columns))
+    ):
         # Two subject numbers in one file -- Rave's Subject beside subjectId.
         # Surrogating both issues two unrelated surrogates for one person and
         # fills the vault's subject table with database row ids posing as
@@ -1259,7 +1262,10 @@ def suggest(
             "high",
             "patient name",
         )
-    if _DICTIONARY_TERM.match(coded) or _DICTIONARY_TERM_ZH.search(col):
+    bare_pt = coded.startswith("PT") and not coded.startswith("PTTERM")
+    if (
+        _DICTIONARY_TERM.match(coded) or _DICTIONARY_TERM_ZH.search(col)
+    ) and not (bare_pt and not _meddra_pt(col, profile, sibling_columns)):
         return Suggestion(
             rule(Treatment.RETAIN, note="a dictionary-coded term (MedDRA "
                  "LLT/PT/HLT/HLGT/SOC or WHODrug): standard vocabulary, not "
@@ -1530,7 +1536,14 @@ def _suggest_by_tokens(
     # A token can also carry a domain prefix: AEOUT, MHSTDT, AEENDDT.
     bare = tokset | {t[2:] for t in toks if len(t) > 4}
 
-    if bare & _TOKEN_DICTIONARY:
+    levels = bare & _TOKEN_DICTIONARY
+    if levels == {"PT"} and not (
+        tokset & {"TERM", "MEDDRA", "DECOD"}
+        or any(len(t) == 2 and t not in {"PT", "ID", "NO"} for t in toks)
+        or _meddra_pt(col, profile, siblings)
+    ):
+        levels = set()  # PT_ID, PT_NO: the patient
+    if levels:
         return Suggestion(
             rule(Treatment.RETAIN, note="a dictionary-coded term (MedDRA or "
                  "WHODrug), found by the level named in the column"),
@@ -1705,6 +1718,9 @@ _RAW_SUBJECT_KEYS = (
     "USUBJID", "SUBJID", "SUBJECT", "SUBJECTNO", "SUBJECTNUMBER", "SUBJNO",
     "SUBJNUM", "SUBNUM", "SUBJ", "SUBJECTID",
     "PATIENTID", "PATIENTNO", "PATIENTNUMBER", "PATID", "PATNO", "PTID", "PTNO",
+    # Bare PT is the patient in InForm and Oracle Clinical exports. Last, so
+    # any longer subject name in the same file wins.
+    "PT",
     "SCRNO", "SCRNUM", "SCREENNO", "SCREENINGNO", "SCREENINGNUMBER",
     "受试者编号", "受试者代码", "受试者号", "受试者筛选号", "患者编号", "筛选号",
     "筛选编号",
@@ -1719,6 +1735,20 @@ def _key_forms(name: str) -> tuple[str, ...]:
         return ()
     squeezed = re.sub(r"[ _\-.]", "", up)
     return (up, squeezed, _stem(squeezed))
+
+
+def _meddra_pt(col: str, profile: "ColumnProfile", siblings: frozenset[str]) -> bool:
+    """Is a column called PT (or PT_CD, PT_NAME...) MedDRA's preferred term
+    rather than the patient? Only inside a coding block -- LLT, HLT, SOC
+    beside it -- and only when it holds terms or MedDRA codes, not IDs."""
+    if not any(re.search(r"(LLT|HLGT|HLT|SOC)", c) for c in siblings):
+        return False
+    vals = [str(v).strip() for v in profile.top_values if str(v).strip()]
+    if not vals:
+        return False
+    terms = sum(bool(re.fullmatch(r"[A-Za-z][A-Za-z ,'()/-]{2,}", v)) for v in vals)
+    codes = sum(bool(re.fullmatch(r"1\d{7}", v)) for v in vals)  # MedDRA codes
+    return max(terms, codes) / len(vals) >= 0.8
 
 
 def _raw_subject_key_of(columns: Iterable[str]) -> str | None:

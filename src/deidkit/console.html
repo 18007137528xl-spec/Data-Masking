@@ -628,12 +628,26 @@ $('#rows').addEventListener('change', e => {
   save([i]);
 });
 
-let saveTimer = null;
+/* Decisions are saved in batches, a moment after the last edit. Two things
+   this has to get right. Edits to different rows inside that moment all go
+   -- a timer that restarts must not drop the rows queued before it. And
+   Approve and Run wait for anything still queued: typing a parameter and
+   clicking Approve at once used to sign the rules before the parameter
+   reached the server, and the signature then refused a rule nobody wrote. */
+let saveTimer = null, pending = new Set(), inflight = Promise.resolve();
 function save(idx){
+  idx.forEach(i => pending.add(i));
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(async () => {
+  saveTimer = setTimeout(flush, 120);
+}
+function flush(){
+  clearTimeout(saveTimer);
+  if (!pending.size) return inflight;
+  const rows = [...pending];
+  pending.clear();
+  inflight = inflight.then(async () => {
     try{
-      const j = await api('/api/decide', {rows: idx.map(i => ({index:i, ...ROWS[i]}))});
+      const j = await api('/api/decide', {rows: rows.map(i => ({index:i, ...ROWS[i]}))});
       STATE = j.state;
       if (j.approval_withdrawn){
         lockFrom(3);
@@ -645,7 +659,8 @@ function save(idx){
         if (b2) b2.hidden = true;
       }
     }catch(e){ showError(e.message); }
-  }, 120);
+  });
+  return inflight;
 }
 
 function tally(){
@@ -677,6 +692,7 @@ $('#btn-approve').addEventListener('click', async () => {
   const btn = $('#btn-approve');
   busy(btn, true, 'signing…');
   try{
+    await flush();
     const j = await api('/api/approve', {
       approved_by: $('#who').value,
       note: $('#cnote').value,
@@ -706,6 +722,7 @@ $('#btn-run').addEventListener('click', async () => {
   const btn = $('#btn-run');
   busy(btn, true, 'running…');
   try{
+    await flush();
     const j = await api('/api/run', {
       out: $('#out').value, vault: $('#vault').value,
       operator: $('#operator').value, format: $('#fmt').value,
