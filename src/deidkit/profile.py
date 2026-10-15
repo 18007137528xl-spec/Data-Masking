@@ -569,10 +569,27 @@ def suggest(
         return Suggestion(rule(Treatment.RETAIN), "high", "structural column")
 
     # --- identifiers --------------------------------------------------
-    if (
-        raw_edc and named(_RAW_SUBJECT_KEYS) and "USUBJID" not in sibling_columns
-        and not (up.startswith("PT") and _meddra_pt(col, profile, sibling_columns))
-    ):
+    if raw_edc and re.fullmatch(r"PT", up) and _pt_kind(profile) != "term":
+        # PT is MedDRA's preferred term far more often than the patient, so
+        # the values decide. Holding IDs it is the patient; mixed, it is
+        # surrogated (the safe reading) and a person confirms.
+        is_id = _pt_kind(profile) == "id"
+        return Suggestion(
+            rule(
+                Treatment.SURROGATE_ID,
+                entity="subject",
+                prefix="SUBJ",
+                preserve_format=profile.shapeable,
+                note="a column called PT holding "
+                + ("patient numbers, not MedDRA terms" if is_id
+                   else "neither clear MedDRA terms nor clear IDs. REVIEW: if "
+                   "it is the preferred term, change it to retain"),
+            ),
+            "high" if is_id else "medium",
+            "PT holding patient numbers" if is_id else "PT: patient or preferred term?",
+        )
+
+    if raw_edc and named(_RAW_SUBJECT_KEYS) and "USUBJID" not in sibling_columns:
         # Two subject numbers in one file -- Rave's Subject beside subjectId.
         # Surrogating both issues two unrelated surrogates for one person and
         # fills the vault's subject table with database row ids posing as
@@ -1265,7 +1282,7 @@ def suggest(
     bare_pt = coded.startswith("PT") and not coded.startswith("PTTERM")
     if (
         _DICTIONARY_TERM.match(coded) or _DICTIONARY_TERM_ZH.search(col)
-    ) and not (bare_pt and not _meddra_pt(col, profile, sibling_columns)):
+    ) and not (bare_pt and _pt_kind(profile) != "term"):
         return Suggestion(
             rule(Treatment.RETAIN, note="a dictionary-coded term (MedDRA "
                  "LLT/PT/HLT/HLGT/SOC or WHODrug): standard vocabulary, not "
@@ -1540,7 +1557,7 @@ def _suggest_by_tokens(
     if levels == {"PT"} and not (
         tokset & {"TERM", "MEDDRA", "DECOD"}
         or any(len(t) == 2 and t not in {"PT", "ID", "NO"} for t in toks)
-        or _meddra_pt(col, profile, siblings)
+        or _pt_kind(profile) == "term"
     ):
         levels = set()  # PT_ID, PT_NO: the patient
     if levels:
@@ -1718,9 +1735,6 @@ _RAW_SUBJECT_KEYS = (
     "USUBJID", "SUBJID", "SUBJECT", "SUBJECTNO", "SUBJECTNUMBER", "SUBJNO",
     "SUBJNUM", "SUBNUM", "SUBJ", "SUBJECTID",
     "PATIENTID", "PATIENTNO", "PATIENTNUMBER", "PATID", "PATNO", "PTID", "PTNO",
-    # Bare PT is the patient in InForm and Oracle Clinical exports. Last, so
-    # any longer subject name in the same file wins.
-    "PT",
     "SCRNO", "SCRNUM", "SCREENNO", "SCREENINGNO", "SCREENINGNUMBER",
     "受试者编号", "受试者代码", "受试者号", "受试者筛选号", "患者编号", "筛选号",
     "筛选编号",
@@ -1737,18 +1751,27 @@ def _key_forms(name: str) -> tuple[str, ...]:
     return (up, squeezed, _stem(squeezed))
 
 
-def _meddra_pt(col: str, profile: "ColumnProfile", siblings: frozenset[str]) -> bool:
-    """Is a column called PT (or PT_CD, PT_NAME...) MedDRA's preferred term
-    rather than the patient? Only inside a coding block -- LLT, HLT, SOC
-    beside it -- and only when it holds terms or MedDRA codes, not IDs."""
-    if not any(re.search(r"(LLT|HLGT|HLT|SOC)", c) for c in siblings):
-        return False
+def _pt_kind(profile: "ColumnProfile") -> str:
+    """What a column called PT holds: "term" (MedDRA preferred terms or
+    their 8-digit codes -- the usual case), "id" (the patient, as in some
+    InForm and Oracle Clinical exports) or "unclear". Decided by the values,
+    because the name is the same either way."""
     vals = [str(v).strip() for v in profile.top_values if str(v).strip()]
     if not vals:
-        return False
-    terms = sum(bool(re.fullmatch(r"[A-Za-z][A-Za-z ,'()/-]{2,}", v)) for v in vals)
-    codes = sum(bool(re.fullmatch(r"1\d{7}", v)) for v in vals)  # MedDRA codes
-    return max(terms, codes) / len(vals) >= 0.8
+        return "unclear"
+    meddra_code = re.compile(r"1\d{7}")
+    terms = sum(
+        bool(re.fullmatch(r"[A-Za-z][A-Za-z ,'()/\-]{2,}", v) or meddra_code.fullmatch(v))
+        for v in vals
+    )
+    ids = sum(
+        bool(re.search(r"\d", v)) and not meddra_code.fullmatch(v) for v in vals
+    )
+    if terms / len(vals) >= 0.8:
+        return "term"
+    if ids / len(vals) >= 0.8:
+        return "id"
+    return "unclear"
 
 
 def _raw_subject_key_of(columns: Iterable[str]) -> str | None:
@@ -1780,6 +1803,14 @@ def _raw_site_key_of(columns: Iterable[str]) -> str | None:
                 if cand in f[:depth]:
                     return col
     return None
+
+
+def _only_subject_column(per_col: dict[str, "Suggestion"]) -> str | None:
+    cols = [
+        c for c, sg in per_col.items()
+        if sg.rule.treatment is Treatment.SURROGATE_ID and sg.rule.entity == "subject"
+    ]
+    return cols[0] if len(cols) == 1 else None
 
 
 def _raw_subject_key(frame: pd.DataFrame) -> str | None:
@@ -2198,6 +2229,9 @@ def draft_contract(
                 # no anchor and no date offset -- every date treatment in
                 # it then does nothing, or nothing correct.
                 else _raw_subject_key(frame)
+                # PT and other names decided by their values: the column the
+                # profiler itself proposed as the subject, if exactly one.
+                or _only_subject_column(per_col)
             ),
             join_key_template=join_key_template,
             # DM, EX and DS are never in a group, so the anchor is never
