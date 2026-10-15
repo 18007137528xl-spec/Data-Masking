@@ -10,6 +10,7 @@ or a retain the values were checked for and passed.
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from deidkit.profile import _name_like, draft_contract
 
@@ -373,3 +374,36 @@ def test_the_console_saves_before_it_signs():
     assert "await flush();" in html[approve - 200:approve]
     assert "await flush();" in html[run - 200:run]
     assert "pending.add" in html  # queued rows are kept, not overwritten
+
+
+# --- dates written with no separator ------------------------------------------
+def test_yyyymmdd_dates_are_found_and_shifted_in_their_own_form(tmp_path):
+    from deidkit import DeidPipeline, Vault
+
+    dates = _cycle(["20170722", "20180402", "20170419", "20171114"])
+    frames = _study(STRDT=dates)
+    contract, sugg = draft_contract(frames, source="s", raw_edc=True)
+    s = sugg[FILE]["STRDT"]
+    assert s.rule.treatment.value == "date_shift_raw" and s.confidence == "high"
+
+    v = Vault(tmp_path / "v.db", key=Vault.generate_key(), operator="t")
+    out = DeidPipeline(contract, v, operator="t").run(frames, checksums={})
+    got = out.frames[FILE]["STRDT"]
+    assert got.str.fullmatch(r"(?:19|20)\d{6}").all()     # still YYYYMMDD
+    assert (got != pd.Series(dates)).any()                  # and moved
+    v.close()
+
+
+def test_an_unreadable_date_halts_without_printing_it(tmp_path):
+    from deidkit import DeidPipeline, Vault
+    from deidkit.pipeline import ContractMismatch
+
+    frames = _study(STRDT=_cycle(["12MAR2024", "2024-03-12"]))
+    contract, _ = draft_contract(frames, source="s", raw_edc=True)
+    frames[FILE]["STRDT"] = _cycle(["12MAR2024", "12/xx/2024"])
+    v = Vault(tmp_path / "v.db", key=Vault.generate_key(), operator="t")
+    with pytest.raises(ContractMismatch) as exc:
+        DeidPipeline(contract, v, operator="t").run(frames, checksums={})
+    msg = str(exc.value)
+    assert "12/xx/2024" not in msg and "99/AA/9999" in msg
+    v.close()

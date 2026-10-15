@@ -498,10 +498,17 @@ class DeidPipeline:
             shifted, report = rawshift.values, rawshift.report
             leaked = int(report["passed_through"])  # type: ignore[arg-type]
             if leaked and rule.on_unparsed == "fail":
-                samples = report["passed_through_samples"]
+                # Shapes, not values: this message goes to a browser and is
+                # screenshotted and pasted into tickets. 20170722 -> 99999999
+                # says what the parser could not read without the date.
+                shapes = sorted({
+                    re.sub(r"\d", "9", re.sub(r"[A-Za-z]", "A", str(v)))
+                    for v in report["passed_through_samples"]
+                })
                 raise ContractMismatch(
                     f"{dom.name}.{rule.column}: {leaked} value(s) were not "
-                    f"shifted and would be published as recorded: {samples}.\n"
+                    f"shifted and would be published as recorded. Written as: "
+                    f"{', '.join(shapes)} (9 = digit, A = letter).\n"
                     f"  formats seen : {report['formats']}\n"
                     f"  day/month order: {report['order']}\n"
                     "An unshifted value in a date column is a real date in the "

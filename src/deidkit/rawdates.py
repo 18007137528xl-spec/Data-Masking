@@ -155,6 +155,16 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     # Without that guard a column of four-digit lab values or subject numbers
     # sniffs as a date column, and gets "shifted".
     (re.compile(r"^(?P<y>(?:19|20)\d{2})$"), "{y}"),
+    # 20250319 -- SAS's yymmddn8., and how many EDC and lab exports write a
+    # date with no separator at all. Year, month and day are range-checked in
+    # the pattern itself, so an eight-digit MedDRA code (10019211) or a
+    # record number does not read as a date.
+    (
+        re.compile(
+            r"^(?P<y>(?:19|20)\d{2})(?P<m>0[1-9]|1[0-2])(?P<d>0[1-9]|[12]\d|3[01])$"
+        ),
+        "{y}{m}{d}",
+    ),
     # 2025/03/19
     (re.compile(r"^(?P<y>\d{4})/(?P<m>\d{2})/(?P<d>\d{2})$"), "{y}/{m}/{d}"),
     # 19-Mar-2025   19MAR2025   19 Mar 2025
