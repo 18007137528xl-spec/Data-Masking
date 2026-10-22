@@ -236,15 +236,18 @@ _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
     ("study_id", "high", re.compile(r"(?:方案编号|试验编号|研究编号)\s*[:：]?\s*([A-Za-z0-9_./-]{4,})")),
     # BDM-AI-2025-001, TIG-2026-001: letters then two or more hyphen groups
     ("study_id", "medium", re.compile(r"\b[A-Z]{2,}(?:-[A-Z0-9]+){2,5}\b")),
+    # Compound names and codes are high: in a protocol they are masked by
+    # default, and a person un-masks the few that should stay (a rescue
+    # medication, a probe substrate) rather than confirming each one.
     # compound codes: MK-3475, BMS-936558, ABBV951, and with a space,
     # BI 10773 -- but not a year (ICH 2016) or a short count (Day 120)
-    ("drug", "medium", re.compile(r"\b[A-Z]{1,5}-?\d{3,6}[A-Z]?\b")),
-    ("drug", "medium", re.compile(r"\b[A-Z]{2,5} (?!(?:19|20)\d\d\b)\d{4,6}[A-Z]?\b")),
+    ("drug", "high", re.compile(r"\b[A-Z]{1,5}-?\d{3,6}[A-Z]?\b")),
+    ("drug", "high", re.compile(r"\b[A-Z]{2,5} (?!(?:19|20)\d\d\b)\d{4,6}[A-Z]?\b")),
     # trade marks
     ("drug", "high", re.compile(r"\b([A-Z][A-Za-z0-9-]{2,})\s?[®™]")),
     # INN stems: zentolimab, osimertinib -- and their Chinese counterparts
-    ("drug", "medium", re.compile(rf"\b([A-Za-z]{{3,}}(?:{_INN}))\b", re.I)),
-    ("drug", "medium", re.compile(rf"{_ZH_START}({_ZH}{{1,8}}?(?:{_ZH_DRUG}))")),
+    ("drug", "high", re.compile(rf"\b([A-Za-z]{{3,}}(?:{_INN}))\b", re.I)),
+    ("drug", "high", re.compile(rf"{_ZH_START}({_ZH}{{1,8}}?(?:{_ZH_DRUG}))")),
     # companies
     ("sponsor", "medium", re.compile(
         rf"\b((?:(?:{_CAP}|&)\s+){{0,4}}{_CAP},?\s+{_CO_SUFFIX})(?![\w])")),
@@ -281,6 +284,15 @@ _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
         r"(?i:(?:tel|phone|telephone|fax|mobile|cell|电话|传真|手机)\.?\s*[:：]?\s*)"
         r"(\+?\d[\d\s().-]{6,}\d)")),
 ]
+
+#: Standards, regulations and scales written letters-then-number, which the
+#: compound-code patterns would otherwise take for MK-3475.
+_STANDARD = re.compile(
+    r"^(?:ISO|IEC|EN|ASTM|ANSI|CLSI|DIN|BS|JIS|USP|EP|JP|CFR|ICH|NMPA|FDA|EMA|"
+    r"WHO|ICD|SOP|ECOG|NYHA|VAS|NRS|RECIST|CTCAE|MEDDRA|SAS|GB|YY|WS|TABLE|"
+    r"FIGURE|SECTION|APPENDIX|PAGE|VERSION|ROOM|SUITE)[\s-]?\d",
+    re.IGNORECASE,
+)
 
 #: Words that end a name rather than continue it.
 _NAME_STOP = {
@@ -415,6 +427,8 @@ def scan(
                     ctx = line
                     if category == "person" and n + 1 < len(lines) and lines[n + 1]:
                         ctx = line + " " + lines[n + 1]
+                    if category == "drug" and _STANDARD.match(term):
+                        continue  # ISO 14155, IEC 62304: a standard, not a compound
                     add(term, category, conf, "pattern", ctx, m.start(g), m.end(g))
         if detector is not None and text.strip():
             for f in detector.detect(text):

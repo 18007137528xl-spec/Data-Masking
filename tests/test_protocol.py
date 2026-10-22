@@ -272,3 +272,18 @@ def test_a_name_wrapped_onto_the_next_pdf_line_is_still_redacted(tmp_path, vault
     assert res["manifest"]["residual_occurrences"] == 0, res["residual_terms"]
     text = "".join(pg.get_text() for pg in pm.open(str(tmp_path / "out" / "p.pdf")))
     assert "Example" not in text and "Biologics" not in text and "Xiaofeng" not in text
+
+
+def test_compound_names_and_codes_are_high_and_standards_are_not_compounds(tmp_path, vault):
+    d = docx.Document()
+    d.add_paragraph("Subjects receive Zentolimab (ACM-4417) or SHR-1210 and BI 10773.")
+    d.add_paragraph("Prohibited: ketoconazole. 本品为恒星替尼片。")
+    d.add_paragraph("Conducted per ISO 14155 and IEC 62304; see Table 1001.")
+    src = tmp_path / "p.docx"
+    d.save(src)
+    terms = _by_term(pr.scan([src], vault))
+    for t in ("Zentolimab", "ACM-4417", "SHR-1210", "BI 10773", "ketoconazole"):
+        assert terms[t].category == "drug" and terms[t].confidence == "high", t
+    assert any("替尼" in k and v.confidence == "high" for k, v in terms.items())
+    for t in ("ISO 14155", "IEC 62304"):
+        assert t not in terms, t
