@@ -238,11 +238,16 @@ _ROLE_EN = (
 )
 #: A person's name as protocols write it: Sarah Johnson, John A. Doe,
 #: Michael O'Neil, WANG Jianguo, Jianguo WANG, Anna Müller.
-_NAME_WORD = r"[A-Z][a-zà-ÿ]*(?:['’-][A-Za-zà-ÿ][a-zà-ÿ]*)*"
+# Ends at the end of a word: without that, "John SMITH" read as "John S".
+_NAME_WORD = r"[A-Z][a-zà-ÿ]*(?:['’-][A-Za-zà-ÿ][a-zà-ÿ]*)*(?![A-Za-zà-ÿ])"
+#: A surname in capitals, as many protocols and most CVs write it: SMITH,
+#: O'NEIL, SMITH-JONES, LI.
+_CAPS_SURNAME = r"(?:[A-Z]['’])?[A-Z]{2,}(?:['’-][A-Z]{2,})*(?![A-Za-z])"
 _PNAME = (
-    rf"{_NAME_WORD}(?:\s+[A-Z]\.)?(?:\s+{_NAME_WORD}){{1,2}}"
+    # John SMITH, John A. SMITH, Mary-Jane O'NEIL, Jean Paul SMITH-JONES
+    rf"{_NAME_WORD}(?:\s+(?:{_NAME_WORD}|[A-Z]\.))?\s+{_CAPS_SURNAME}"
+    rf"|{_NAME_WORD}(?:\s+[A-Z]\.)?(?:\s+{_NAME_WORD}){{1,2}}"
     r"|[A-Z]{2,}(?:\s+[A-Z][a-z]+(?:-[A-Za-z]+)?){1,2}"
-    r"|[A-Z][a-z]+(?:-[A-Za-z]+)?\s+[A-Z]{2,}"
     # JOHN SMITH, SMITH JOHN A.
     r"|[A-Z]{2,}(?:\s+[A-Z]\.)?(?:\s+[A-Z]{2,}){1,2}"
     # Smith, John  /  SMITH, John A.
@@ -297,13 +302,13 @@ _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
     # people
     ("person", "high", re.compile(r"(?<![\w.])@([A-Z][a-z'-]+(?:\s+[A-Z][a-z'-]+){0,2})")),
     ("person", "high", re.compile(
-        r"\b(?:Dr|Prof|Professor|Mr|Ms|Mrs)\.?\s+([A-Z][a-z'-]+(?:\s+[A-Z]\.)?(?:\s+[A-Z][a-z'-]+){0,2})")),
+        rf"\b(?:Dr|Prof|Professor|Mr|Ms|Mrs)\.?\s+({_PNAME}|{_NAME_WORD}|{_CAPS_SURNAME})")),
     ("person", "high", re.compile(
-        r"\b([A-Z][a-z'-]+(?:\s+[A-Z]\.)?(?:\s+[A-Z][a-z'-]+){1,2}),\s*"
+        rf"\b({_PNAME}),\s*"
         r"(?:MD|M\.D\.|PhD|Ph\.D\.|MBBS|MBChB|PharmD|DO|D\.O\.|RN|BSN|NP|PA-C|MSc|MS|"
         r"MPH|DrPH|FRCP|FRCPC|FACP|FACC|FRACP|MBA)\b")),
     ("person", "high", re.compile(  # John Smith MD, Jane Roe PhD
-        r"\b([A-Z][a-z'-]+(?:\s+[A-Z]\.)?(?:\s+[A-Z][a-z'-]+){1,2})\s+"
+        rf"\b({_PNAME})\s+"
         r"(?:MD|M\.D\.|PhD|Ph\.D\.|MBBS|PharmD)\b")),
     ("person", "high", re.compile(
         r"(?:研究者|主要研究者|协调研究者|分中心研究者|联系人|医学监查员|监查员|姓名|"
@@ -461,6 +466,54 @@ _LEAD_WORDS = {"contact", "questions", "please", "call", "email", "ask", "by",
 _INITIAL_STOP = {"food", "drug", "department", "government", "national", "army",
                  "navy", "patent", "pharmacopeia", "pharmacopoeia", "postal",
                  "state", "states", "district", "court", "census", "code"}
+
+
+#: Capitalised words a protocol puts in front of an acronym: "Phase III",
+#: "Visit EOT", "per RECIST", "Grade AE". None of them is a first name.
+_NOT_GIVEN = frozenset(
+    """phase visit day week cycle grade version section table figure appendix
+    per see using total serum plasma urine dose arm cohort part stage level
+    study protocol amendment sponsor site form module schedule annex chapter
+    and or the a an of in on at by for to with from via all each every any
+    no not if when where while after before during within between under over
+    patients patient subjects subject participants investigators investigator
+    adverse serious laboratory central local refer according based including
+    other new final draft revised original clinical medical global regional
+    page date time type class model method criteria report data rate risk""".split()
+)
+#: Capitals that are acronyms or numerals, never a surname.
+_NOT_SURNAME = frozenset(
+    """AE AES SAE SAES TEAE ECG EKG CT MRI PET PK PD ADA DLT MTD RP2D ORR OS
+    PFS DFS DOR CR PR SD PD BOR ITT PP FAS SAP CSR CRF ECRF EDC IRB IEC ICF
+    DSMB IDMC GCP ICH FDA EMA NMPA CDE WHO NCI CTCAE RECIST IRECIST MEDDRA
+    WHODRUG SOC PT LLT HLT HLGT ULN LLN ALT AST ALP GGT LDH BUN INR APTT HBV
+    HCV HIV COVID QTC QTCF BMI BP HR RR EOT EOS FU SOA IP IMP NIMP PI CRA CRO
+    USA UK EU PRC II III IV VI VII VIII IX XI XII ID NO NA ND UNK TBD TBC
+    MD PHD RN NP DO MS MBA MPH IV IM SC PO QD BID TID QW Q2W Q3W""".split()
+)
+
+
+def _caps_surname_names(text: str) -> Iterable[tuple[str, int, int]]:
+    """John SMITH, Mary-Jane O'NEIL, Wei ZHANG: a first name followed by a
+    surname in capitals, with no role or title needed -- the capitals are
+    the cue. A word that only ever stands before an acronym (Phase III,
+    Visit EOT) is not a first name, and an acronym is not a surname."""
+    pat = re.compile(
+        rf"(?<![A-Za-z])({_NAME_WORD}(?:\s+(?:{_NAME_WORD}|[A-Z]\.))?\s+{_CAPS_SURNAME})"
+    )
+    for m in pat.finditer(text):
+        words = m.group(1).split()
+        given, surname = words[0], words[-1]
+        if len(given) < 2 or given.lower() in _NOT_GIVEN | _HEADING_WORDS | _NAME_STOP:
+            continue
+        if any(w.lower() in _NOT_GIVEN | _HEADING_WORDS for w in words[1:-1]):
+            continue
+        parts = re.split(r"['’-]", surname)
+        if any(p in _NOT_SURNAME for p in parts) or surname in _NOT_SURNAME:
+            continue
+        if not re.search(r"[AEIOUY]", surname):
+            continue  # FDCB, CRP: an acronym has no vowel more often than not
+        yield m.group(1), m.start(1), m.end(1)
 
 
 def _initial_names(text: str) -> Iterable[tuple[str, int, int]]:
@@ -646,7 +699,11 @@ def scan(
         if category == "person" and not re.search(r"[\u4e00-\u9fa5]", term):
             # "Xiaofeng" found, "Xiaofeng Li" written: a surname after the
             # match belongs to it, or the masked line reads "PERSON B Li".
-            tail = re.match(r"(?:\s+[A-Z][a-z'-]{1,15}){1,2}\b", text[end:])
+            tail = re.match(
+                r"(?:\s+(?:[A-Z][a-z'-]{1,15}|(?!(?:MD|PHD|RN|NP|DO|MS|MBA|MPH|"
+                r"PI|CRA|CEO|CMO|VP|USA|UK|PRC)\b)[A-Z]{2,}(?:['’-][A-Z]{2,})*)){1,2}\b",
+                text[end:],
+            )
             if tail and not any(w.lower() in _NAME_STOP for w in tail.group(0).split()):
                 term += tail.group(0)
                 end += len(tail.group(0))
@@ -713,6 +770,8 @@ def scan(
             add(term, "person", "high", "pattern", text, start, end)
         for term, start, end in _initial_names(text):
             add(term, "person", "medium", "pattern", text, start, end)
+        for term, start, end in _caps_surname_names(text):
+            add(term, "person", "high", "pattern", text, start, end)
         if detector is not None and text.strip():
             for f in detector.detect(text):
                 cat = {"PERSON": "person", "EMAIL_ADDRESS": "contact",

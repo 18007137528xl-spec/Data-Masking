@@ -439,3 +439,24 @@ def test_a_pdf_replacement_keeps_the_size_style_and_colour_of_the_line(tmp_path)
     # far longer than "Li": narrowed, and it does not run into "now."
     now = out[0].search_for("now.")[0]
     assert c["bbox"][2] <= now.x0 + 1
+
+
+def test_first_name_and_surname_in_capitals(tmp_path, vault):
+    terms = _scan_lines(tmp_path, vault, [
+        "Principal Investigator: John SMITH",
+        "Medical Monitor: Dr. Mary-Jane O'NEIL, MD",
+        "The protocol was reviewed by Wei ZHANG and Anna-Lena SCHMIDT-WEBER.",
+        "Signed by Peter J. HOLLOWAY on behalf of the sponsor.",
+        "Steering committee: Luis GARCIA, Aiko TANAKA, Raj PATEL",
+        "Coordinating centre lead: Ming LI",
+        # none of these is a person
+        "This Phase III study uses RECIST and CTCAE grading; Visit EOT follows Cycle IV.",
+        "Refer to the SAP. Grade AE terms per MedDRA. Serum ALT and Plasma PK samples.",
+    ])
+    people = {k for k, t in terms.items() if t.category == "person"}
+    for name in ("John SMITH", "Mary-Jane O'NEIL", "Wei ZHANG",
+                 "Anna-Lena SCHMIDT-WEBER", "Peter J. HOLLOWAY", "Luis GARCIA",
+                 "Aiko TANAKA", "Raj PATEL", "Ming LI"):
+        assert name in people, (name, people)
+    assert all(not re.search(r"\b(III|RECIST|CTCAE|EOT|IV|SAP|AE|ALT|PK)\b", p)
+               for p in people), people
