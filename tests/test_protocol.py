@@ -422,23 +422,36 @@ def test_a_pdf_replacement_keeps_the_size_style_and_colour_of_the_line(tmp_path)
     page.insert_text((72, 100), "Signed: Wei Zhang", fontname="hebo", fontsize=14,
                      color=(0, 0, 0.6))
     page.insert_text((72, 130), "Ask Li now.", fontname="helv", fontsize=12)
+    # a short term before an underlined bold heading: "XYZ Medical Monitor"
+    page.insert_text((72, 160), "XYZ Medical Monitor", fontname="hebo", fontsize=12)
+    under = page.search_for("Medical Monitor")[0]
+    page.draw_line((under.x0, 162), (under.x1, 162), color=(0, 0, 0), width=0.8)
     src = tmp_path / "in.pdf"
     doc.save(src)
-    before = {sp["text"]: sp for b in doc[0].get_text("dict")["blocks"]
-              for ln in b["lines"] for sp in ln["spans"]}
     pr._write_pdf(src, tmp_path / "out.pdf", {
         "Acme Oncology Incorporated": "SPONSOR A", "Wei Zhang": "PERSON B",
-        "Li": "PERSON C"})
-    out = pm.open(tmp_path / "out.pdf")
-    spans = {sp["text"]: sp for b in out[0].get_text("dict")["blocks"]
-             for ln in b["lines"] for sp in ln["spans"]}
-    a, b, c = spans["SPONSOR A"], spans["PERSON B"], spans["PERSON C"]
+        "Li": "PERSON C", "XYZ": "SPONSOR L"})
+    out = pm.open(tmp_path / "out.pdf")[0]
+    spans = [sp for b in out.get_text("dict")["blocks"]
+             for ln in b["lines"] for sp in ln["spans"]]
+
+    def span_of(word):
+        sp = next(sp for sp in spans if word in sp["text"])
+        return {**sp, "bbox": tuple(out.search_for(word)[0])}
+
+    a, b, c, d = (span_of(k) for k in ("SPONSOR A", "PERSON B", "PERSON C", "SPONSOR L"))
     assert a["font"].startswith("Times") and a["size"] == pytest.approx(11, abs=0.1)
     assert "Bold" in b["font"] and b["color"] == 0x000099
-    assert b["size"] >= 14 * 0.9                    # nearly full size
-    # far longer than "Li": narrowed, and it does not run into "now."
-    now = out[0].search_for("now.")[0]
+    # longer than the word it replaced: full size, and the line moved over
+    for sp, size in ((b, 14), (c, 12), (d, 12)):
+        assert sp["size"] == pytest.approx(size, abs=0.2), sp["text"]
+    now = out.search_for("now.")[0]
     assert c["bbox"][2] <= now.x0 + 1
+    mm = out.search_for("Medical Monitor")[0]
+    assert d["bbox"][2] <= mm.x0 + 1
+    # the underline moved with the heading
+    lines = [dr["rect"] for dr in out.get_drawings() if dr["rect"].y0 > 155]
+    assert lines and abs(lines[0].x0 - mm.x0) < 2 and abs(lines[0].x1 - mm.x1) < 4
 
 
 def test_first_name_and_surname_in_capitals(tmp_path, vault):
@@ -460,3 +473,18 @@ def test_first_name_and_surname_in_capitals(tmp_path, vault):
         assert name in people, (name, people)
     assert all(not re.search(r"\b(III|RECIST|CTCAE|EOT|IV|SAP|AE|ALT|PK)\b", p)
                for p in people), people
+
+
+def test_names_with_capitals_inside_and_particles(tmp_path, vault):
+    terms = _scan_lines(tmp_path, vault, [
+        "Principal Investigator: DeAnn MacArthur",
+        "Medical Monitor: Sarah McDonald, MD",
+        "Approved by: LaToya DeVito",
+        "Steering committee: Ludwig van Beethoven, Maria de la Cruz, DeAnn SMITH",
+        "Coded with MedDRA and analysed in SAS by the CRO.",
+    ])
+    people = {k for k, t in terms.items() if t.category == "person"}
+    for name in ("DeAnn MacArthur", "Sarah McDonald", "LaToya DeVito",
+                 "Ludwig van Beethoven", "Maria de la Cruz", "DeAnn SMITH"):
+        assert name in people, (name, people)
+    assert not any("MedDRA" in p or "SAS" in p for p in people)

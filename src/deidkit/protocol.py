@@ -239,14 +239,22 @@ _ROLE_EN = (
 #: A person's name as protocols write it: Sarah Johnson, John A. Doe,
 #: Michael O'Neil, WANG Jianguo, Jianguo WANG, Anna Müller.
 # Ends at the end of a word: without that, "John SMITH" read as "John S".
-_NAME_WORD = r"[A-Z][a-zà-ÿ]*(?:['’-][A-Za-zà-ÿ][a-zà-ÿ]*)*(?![A-Za-zà-ÿ])"
+# Capitals inside a name are allowed where a lower-case letter follows each:
+# DeAnn, McDonald, MacArthur, LaToya, DeVito -- but not MedDRA or SAS.
+_NAME_WORD = (
+    r"[A-Z][a-zà-ÿ]*(?:[A-Z][a-zà-ÿ]+)*"
+    r"(?:['’-][A-Za-zà-ÿ][a-zà-ÿ]*(?:[A-Z][a-zà-ÿ]+)*)*(?![A-Za-zà-ÿ])"
+)
+#: Lower-case particles inside a name: Ludwig van Beethoven, Maria de la Cruz.
+_PARTICLE = r"(?:van|von|der|den|de|del|della|di|da|du|la|le|bin|binti|al|el|ten|ter|dos|das)"
+_NSEP = rf"\s+(?:{_PARTICLE}\s+){{0,2}}"
 #: A surname in capitals, as many protocols and most CVs write it: SMITH,
 #: O'NEIL, SMITH-JONES, LI.
 _CAPS_SURNAME = r"(?:[A-Z]['’])?[A-Z]{2,}(?:['’-][A-Z]{2,})*(?![A-Za-z])"
 _PNAME = (
-    # John SMITH, John A. SMITH, Mary-Jane O'NEIL, Jean Paul SMITH-JONES
-    rf"{_NAME_WORD}(?:\s+(?:{_NAME_WORD}|[A-Z]\.))?\s+{_CAPS_SURNAME}"
-    rf"|{_NAME_WORD}(?:\s+[A-Z]\.)?(?:\s+{_NAME_WORD}){{1,2}}"
+    # John SMITH, John A. SMITH, Mary-Jane O'NEIL, Ludwig van BEETHOVEN
+    rf"{_NAME_WORD}(?:\s+(?:{_NAME_WORD}|[A-Z]\.))?{_NSEP}{_CAPS_SURNAME}"
+    rf"|{_NAME_WORD}(?:\s+[A-Z]\.)?(?:{_NSEP}{_NAME_WORD}){{1,2}}"
     r"|[A-Z]{2,}(?:\s+[A-Z][a-z]+(?:-[A-Za-z]+)?){1,2}"
     # JOHN SMITH, SMITH JOHN A.
     r"|[A-Z]{2,}(?:\s+[A-Z]\.)?(?:\s+[A-Z]{2,}){1,2}"
@@ -520,7 +528,7 @@ def _initial_names(text: str) -> Iterable[tuple[str, int, int]]:
     """J. Smith, J.A. Smith, J. A. Smith: initials then a surname. Medium --
     "U.S. Food" has the same shape, and the obvious ones are filtered."""
     for m in re.finditer(
-        r"(?<![\w.])((?:[A-Z]\.\s?){1,2}[A-Z][a-z]{2,}(?:-[A-Z][a-z]+)?)\b", text
+        rf"(?<![\w.])((?:[A-Z]\.\s?){{1,2}}(?=[A-Z][a-z]{{2}}){_NAME_WORD})", text
     ):
         last = m.group(1).split()[-1].split(".")[-1].lower()
         if last in _INITIAL_STOP | _HEADING_WORDS | _NAME_STOP:
@@ -700,7 +708,7 @@ def scan(
             # "Xiaofeng" found, "Xiaofeng Li" written: a surname after the
             # match belongs to it, or the masked line reads "PERSON B Li".
             tail = re.match(
-                r"(?:\s+(?:[A-Z][a-z'-]{1,15}|(?!(?:MD|PHD|RN|NP|DO|MS|MBA|MPH|"
+                rf"(?:{_NSEP}(?:{_NAME_WORD}|(?!(?:MD|PHD|RN|NP|DO|MS|MBA|MPH|"
                 r"PI|CRA|CEO|CMO|VP|USA|UK|PRC)\b)[A-Z]{2,}(?:['’-][A-Z]{2,})*)){1,2}\b",
                 text[end:],
             )
@@ -1064,6 +1072,15 @@ def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
     everywhere else, over each block with its lines joined, so a term
     wrapped onto the next line is found and redacted on both. A word split
     by a hyphen at the line end is not; the read-back counts it.
+
+    A replacement is written in the size, colour and nearest standard font
+    of the text it replaces. When it is longer than the original ("ACME" ->
+    SPONSOR A) the rest of the line moves right to make room -- rewritten in
+    the nearest standard font, each run kept to its original width, and an
+    underline beneath it moved with it -- instead of the replacement being
+    squeezed into the old word's space at a fraction of the line's size.
+    Only when the line would then run past the page edge is the replacement
+    narrowed, and only after that does its size give way.
     """
     pm = _pymupdf()
     m = _matcher(mapping)
@@ -1071,70 +1088,99 @@ def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
     replaced = images = empty = 0
     for page in doc:
         images += len(page.get_images(full=True))
-        hits = []
-        raw = page.get_text("rawdict")
         if not page.get_text("text").strip():
             empty += 1
-        if m is not None:
-            pat, lookup = m
-            for block in raw.get("blocks", []):
-                # The block's lines joined with a newline that has no box, so
-                # a term wrapped onto the next line ("Example" / "Biologics,
-                # Inc") is still found -- and redacted on both lines.
-                chars: list[dict[str, Any]] = []
-                for line in block.get("lines", []):
-                    if chars:
-                        chars.append({"c": "\n", "bbox": None})
-                    chars += [{**ch, "span": span}
-                              for span in line["spans"] for ch in span["chars"]]
-                text = "".join(c["c"] for c in chars)
-                for x in pat.finditer(text):
-                    # one [box, baseline origin, size] per line the term is on
-                    pieces: list[list[Any]] = []
-                    new_line = True
-                    for c in chars[x.start():x.end()]:
-                        if c["bbox"] is None:
-                            new_line = True
-                        elif new_line:
-                            pieces.append([pm.Rect(c["bbox"]), c["origin"], c["span"]])
-                            new_line = False
-                        else:
-                            pieces[-1][0] |= pm.Rect(c["bbox"])
-                    hits.append((pieces, lookup[_key(x.group(0))]))
-        for pieces, _ in hits:
-            for box, _, _ in pieces:
+        if m is None:
+            continue
+        pat, lookup = m
+        line_hits: dict[tuple[int, int], list[tuple[int, int, str]]] = {}
+        lines_of: dict[tuple[int, int], list[dict[str, Any]]] = {}
+        wrapped: list[tuple[list[list[Any]], str]] = []
+        raw = page.get_text("rawdict")
+        for bi, block in enumerate(raw.get("blocks", [])):
+            # The block's lines joined with a newline that has no box, so a
+            # term wrapped onto the next line ("Example" / "Biologics, Inc")
+            # is still found -- and redacted on both lines.
+            chars: list[dict[str, Any]] = []
+            for li, line in enumerate(block.get("lines", [])):
+                if chars:
+                    chars.append({"c": "\n", "bbox": None})
+                own = [{**ch, "span": span, "line": (bi, li)}
+                       for span in line["spans"] for ch in span["chars"]]
+                for k, ch in enumerate(own):
+                    ch["k"] = k
+                lines_of[(bi, li)] = own
+                chars += own
+            text = "".join(c["c"] for c in chars)
+            for x in pat.finditer(text):
+                seg = [c for c in chars[x.start():x.end()] if c["bbox"] is not None]
+                new_text = lookup[_key(x.group(0))]
+                if not seg:
+                    continue
+                if len({c["line"] for c in seg}) == 1:
+                    line_hits.setdefault(seg[0]["line"], []).append(
+                        (seg[0]["k"], seg[-1]["k"] + 1, new_text))
+                    continue
+                pieces: list[list[Any]] = []
+                for c in seg:
+                    if pieces and pieces[-1][3] == c["line"]:
+                        pieces[-1][0] |= pm.Rect(c["bbox"])
+                    else:
+                        pieces.append([pm.Rect(c["bbox"]), c["origin"], c["span"], c["line"]])
+                wrapped.append((pieces, new_text))
+        if not line_hits and not wrapped:
+            continue
+
+        drawings = page.get_drawings()
+        plans, underlines = [], []
+        for key, hits in line_hits.items():
+            plan = _plan_line(pm, page, lines_of[key], sorted(hits), drawings)
+            plans.append(plan)
+            underlines += plan["underlines"]
+        for plan in plans:
+            for box in plan["redact"]:
                 page.add_redact_annot(box, fill=False, cross_out=False)
-        if hits:
-            page.apply_redactions(
-                images=pm.PDF_REDACT_IMAGE_NONE,
-                graphics=getattr(pm, "PDF_REDACT_LINE_ART_NONE", 0),
-            )
-            # Written on the original baseline, so the replacement sits in
-            # the line rather than floating at the top of the box.
-            # A wrapped term is written once, in the widest of its pieces --
-            # a fragment at the end of a line has no room for it.
-            # In the original's size, colour and style. The replacement used
-            # to be shrunk until it fitted the word it replaced -- PERSON A
-            # in place of "Li" came out at half the size of the line around
-            # it. Now the size stays and a longer replacement is narrowed
-            # instead, down to 60% of its width.
-            for pieces, new in hits:
-                box, origin, span = max(pieces, key=lambda p: p[0].width)
-                size = span["size"]
-                font = _base14(span, new)
-                need = pm.get_text_length(new, fontname=font, fontsize=size) or 1
-                squeeze = max(0.6, min(1.0, box.width / need))
-                if need * squeeze > box.width:
-                    # Narrowed as far as it reads and still too long ("Li" ->
-                    # PERSON A): only now does the size give way, rather than
-                    # the replacement running over the words after it.
-                    size = max(4.0, size * box.width / (need * squeeze))
-                page.insert_text(
-                    origin, new, fontname=font, fontsize=size,
-                    color=_rgb(span.get("color", 0)),
-                    morph=(pm.Point(origin), pm.Matrix(squeeze, 1)),
+        for pieces, _ in wrapped:
+            for box, *_ in pieces:
+                page.add_redact_annot(box, fill=False, cross_out=False)
+        page.apply_redactions(
+            images=pm.PDF_REDACT_IMAGE_NONE,
+            graphics=getattr(pm, "PDF_REDACT_LINE_ART_NONE", 0),
+        )
+        # An underline under text that moved is removed and drawn again
+        # under it. Needs a PyMuPDF that can redact line art alone; on an
+        # older one the underline stays where it was.
+        if underlines:
+            for u in underlines:
+                pad = max(1.0, float(u["width"]))
+                page.add_redact_annot(u["rect"] + (-pad, -pad, pad, pad),
+                                      fill=False, cross_out=False)
+            try:
+                page.apply_redactions(
+                    images=pm.PDF_REDACT_IMAGE_NONE,
+                    graphics=pm.PDF_REDACT_LINE_ART_REMOVE_IF_COVERED,
+                    text=pm.PDF_REDACT_TEXT_NONE,
                 )
-            replaced += len(hits)
+                moved = True
+            except (TypeError, AttributeError):
+                moved = False
+        for plan in plans:
+            for item in plan["draw"]:
+                _draw_run(pm, page, *item)
+        if underlines and moved:
+            for u in underlines:
+                r = u["rect"] + (u["shift"], 0, u["shift"] + u["grow"], 0)
+                if u["stroke"]:
+                    page.draw_line(r.bl, r.br, color=u["color"] or (0, 0, 0),
+                                   width=u["width"])
+                else:
+                    page.draw_rect(r, color=None, fill=u["color"] or (0, 0, 0), width=0)
+        # A wrapped term is written once, in the widest of its pieces -- a
+        # fragment at the end of a line has no room for it.
+        for pieces, new_text in wrapped:
+            box, origin, span, _ = max(pieces, key=lambda p: p[0].width)
+            _draw_run(pm, page, origin, new_text, span, box.width)
+        replaced += sum(len(h) for h in line_hits.values()) + len(wrapped)
     # Title, author, subject, keywords: the protocol's name is usually there.
     doc.set_metadata({})
     try:
@@ -1147,6 +1193,117 @@ def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
     if empty:
         out["pages_without_text"] = empty
     return out
+
+
+def _draw_run(pm, page, origin, text: str, span: dict[str, Any], width: float | None,
+              squeeze: float | None = None) -> None:
+    """Write ``text`` on a baseline in the span's size, colour and nearest
+    standard font. With ``width``: fitted to it -- stretched or narrowed to
+    within 15% for a run of the original line (so its words land where they
+    were), or narrowed to 60% and then shrunk for a replacement given no
+    more room than that."""
+    size = span["size"]
+    font = _base14(span, text)
+    need = pm.get_text_length(text, fontname=font, fontsize=size) or 1
+    if squeeze is None:
+        squeeze = 1.0 if width is None else max(0.6, min(1.0, width / need))
+        if width is not None and need * squeeze > width:
+            size = max(4.0, size * width / (need * squeeze))
+    page.insert_text(
+        origin, text, fontname=font, fontsize=size,
+        color=_rgb(span.get("color", 0)),
+        morph=(pm.Point(origin), pm.Matrix(squeeze, 1)),
+    )
+
+
+def _plan_line(pm, page, chars: list[dict[str, Any]], hits: list[tuple[int, int, str]],
+               drawings: list[dict[str, Any]]) -> dict[str, Any]:
+    """What to redact and what to write for one line with replacements."""
+    def box(a: int, b: int):
+        r = pm.Rect(chars[a]["bbox"])
+        for c in chars[a + 1:b]:
+            r |= pm.Rect(c["bbox"])
+        return r
+
+    def need(text: str, span: dict[str, Any]) -> float:
+        return pm.get_text_length(text, fontname=_base14(span, text), fontsize=span["size"])
+
+    grow = [max(0.0, need(t, chars[a]["span"]) - box(a, b).width) for a, b, t in hits]
+    total = sum(grow)
+    if total <= 0.5:
+        # Every replacement fits where its term was: write each in place.
+        return {
+            "redact": [box(a, b) for a, b, _ in hits],
+            "draw": [(chars[a]["origin"], t, chars[a]["span"], box(a, b).width)
+                     for a, b, t in hits],
+            "underlines": [],
+        }
+
+    # The rest of the line moves right by what the replacements need --
+    # as far as the page allows. Past that, every replacement is narrowed
+    # by the same factor (and _draw_run shrinks it only beyond 60%).
+    line_end = box(0, len(chars)).x1
+    room = max(0.0, page.rect.x1 - 18 - line_end)
+    factor = 1.0 if total <= room else room / total
+    first = hits[0][0]
+    tail = box(first, len(chars))
+    tail = pm.Rect(tail.x0, tail.y0 + tail.height * 0.15, tail.x1, tail.y1 - tail.height * 0.15)
+    draw: list[tuple[Any, ...]] = []
+    shift, i, hi = 0.0, first, 0
+    shifts: list[tuple[float, float]] = []  # (original x, shift from there on)
+    while i < len(chars):
+        if hi < len(hits) and i == hits[hi][0]:
+            a, b, t = hits[hi]
+            old = box(a, b)
+            span = chars[a]["span"]
+            want = old.width + grow[hi] * factor
+            o = chars[a]["origin"]
+            draw.append(((o[0] + shift, o[1]), t, span, want))
+            shift += want - old.width
+            shifts.append((old.x1, shift))
+            i, hi = b, hi + 1
+            continue
+        # a run of original characters in one span, up to the next hit
+        j = i
+        stop = hits[hi][0] if hi < len(hits) else len(chars)
+        while j < stop and chars[j]["span"] is chars[i]["span"]:
+            j += 1
+        run = "".join(c["c"] for c in chars[i:j])
+        if run.strip():
+            # skip leading spaces: the run starts where its first glyph was
+            lead = len(run) - len(run.lstrip())
+            k = i + lead
+            r = box(k, j)
+            span = chars[k]["span"]
+            text = run.strip()
+            fit = r.width / (need(text, span) or 1)
+            o = chars[k]["origin"]
+            draw.append(((o[0] + shift, o[1]), text, span, None,
+                         max(0.85, min(1.15, fit))))
+        i = j
+
+    # Underlines beneath the moved text move with it.
+    base = chars[first]["origin"][1]
+    size = chars[first]["span"]["size"]
+    underlines = []
+    for d in drawings:
+        r = d.get("rect")
+        if r is None or r.height > 2.5 or r.width < 3:
+            continue
+        if not (base - 1 <= r.y0 <= base + size * 0.4):
+            continue
+        if r.x1 <= tail.x0 or r.x0 >= line_end + 1:
+            continue
+        s = 0.0
+        for x, sh in shifts:
+            if r.x0 >= x - 0.5:
+                s = sh
+        grow_by = shift - s if r.x0 < tail.x0 else 0.0
+        underlines.append({"rect": pm.Rect(r), "shift": s, "grow": grow_by,
+                           "color": d.get("color") or d.get("fill"),
+                           "width": d.get("width") or 1.0,
+                           "stroke": d.get("type") in ("s", "fs") and r.height < 0.5})
+    return {"redact": [tail], "draw": draw, "underlines": underlines}
 
 
 def masked_name(src: Path, mapping: dict[str, str]) -> str:
