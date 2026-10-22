@@ -369,3 +369,28 @@ def test_the_name_model_queues_full_names_only(tmp_path, vault):
     people = {k for k, t in terms.items() if t.category == "person"}
     assert people == {"Harriet Vance"}, people
     assert terms["Harriet Vance"].confidence == "medium"
+
+
+def test_more_ways_a_protocol_writes_a_name(tmp_path, vault):
+    terms = _scan_lines(tmp_path, vault, [
+        "Investigator: Smith, John",
+        "Sponsor Representative: SMITH, Jane",
+        "Principal Investigator: JOHN DOE",
+        "Reviewed and signed by Peter Parker MD.",
+        "Cardiology input from Alan Grant, MD, FACC.",
+        "Laura Palmer", "Department of Oncology", "Twin Peaks General",
+        "Data reviewed by J. Watson and J.A. Holmes. Approved by U.S. Food and Drug Administration.",
+        "Hong Kong team: Chan Tai Man; Taiwan team: Hsu Chih-Wei; Korea: Kim Min-jun.",
+        "Contact Ellen Ripley (ellen.ripley@weyland.com) for safety questions.",
+        "主要研究者", "王小明", "北京协和医院 肿瘤科",
+        "赵丽", "联系电话：010-12345678",
+        "Tom Hardy", "tom.hardy@example.org",
+        "Questions: Lisa Wong.",
+        "Adverse Events", "The investigator will report all events on Park Avenue.",
+    ])
+    people = {k for k, t in terms.items() if t.category == "person"}
+    assert people == {
+        "Smith, John", "SMITH, Jane", "JOHN DOE", "Peter Parker", "Alan Grant",
+        "Laura Palmer", "J. Watson", "J.A. Holmes", "Chan Tai Man", "Hsu Chih-Wei",
+        "Kim Min-jun", "Ellen Ripley", "王小明", "赵丽", "Tom Hardy", "Lisa Wong",
+    }, people

@@ -243,6 +243,10 @@ _PNAME = (
     rf"{_NAME_WORD}(?:\s+[A-Z]\.)?(?:\s+{_NAME_WORD}){{1,2}}"
     r"|[A-Z]{2,}(?:\s+[A-Z][a-z]+(?:-[A-Za-z]+)?){1,2}"
     r"|[A-Z][a-z]+(?:-[A-Za-z]+)?\s+[A-Z]{2,}"
+    # JOHN SMITH, SMITH JOHN A.
+    r"|[A-Z]{2,}(?:\s+[A-Z]\.)?(?:\s+[A-Z]{2,}){1,2}"
+    # Smith, John  /  SMITH, John A.
+    rf"|(?:{_NAME_WORD}|[A-Z]{{2,}}),\s*{_NAME_WORD}(?:\s+[A-Z]\.)?"
 )
 
 _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
@@ -295,8 +299,12 @@ _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
     ("person", "high", re.compile(
         r"\b(?:Dr|Prof|Professor|Mr|Ms|Mrs)\.?\s+([A-Z][a-z'-]+(?:\s+[A-Z]\.)?(?:\s+[A-Z][a-z'-]+){0,2})")),
     ("person", "high", re.compile(
-        r"\b([A-Z][a-z'-]+(?:\s+[A-Z]\.)?\s+[A-Z][a-z'-]+),\s*"
-        r"(?:MD|M\.D\.|PhD|Ph\.D\.|MBBS|PharmD|DO|RN|MSc|MPH|FRCP)\b")),
+        r"\b([A-Z][a-z'-]+(?:\s+[A-Z]\.)?(?:\s+[A-Z][a-z'-]+){1,2}),\s*"
+        r"(?:MD|M\.D\.|PhD|Ph\.D\.|MBBS|MBChB|PharmD|DO|D\.O\.|RN|BSN|NP|PA-C|MSc|MS|"
+        r"MPH|DrPH|FRCP|FRCPC|FACP|FACC|FRACP|MBA)\b")),
+    ("person", "high", re.compile(  # John Smith MD, Jane Roe PhD
+        r"\b([A-Z][a-z'-]+(?:\s+[A-Z]\.)?(?:\s+[A-Z][a-z'-]+){1,2})\s+"
+        r"(?:MD|M\.D\.|PhD|Ph\.D\.|MBBS|PharmD)\b")),
     ("person", "high", re.compile(
         r"(?:研究者|主要研究者|协调研究者|分中心研究者|联系人|医学监查员|监查员|姓名|"
         r"负责人|签名|签字|申办方代表|项目经理|统计师|统计负责人|医学经理|撰写人|"
@@ -321,6 +329,9 @@ _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
         r"(?<![\d-])([48]00[\s-]?\d{3}[\s-]?\d{4})(?![\d-])")),
     ("contact", "high", re.compile(  # (617) 555-0142, 617.555.0142
         r"(?<![\d-])(\(\d{3}\)\s?\d{3}[\s.-]\d{4}|\d{3}[.-]\d{3}[.-]\d{4})(?![\d-])")),
+    # people, by the email written beside them: John Smith (j.smith@x.org)
+    ("person", "high", re.compile(
+        rf"({_PNAME})\s*[(<\[,:–-]?\s*(?:mailto:)?[\w.+-]+@[\w-]+\.")),
     # people, by the role written in front of them
     ("person", "high", re.compile(
         rf"(?i:\b{_ROLE_EN})\s*[:：]\s*(?:(?:Dr|Prof|Mr|Ms|Mrs)\.?\s+)?({_PNAME})")),
@@ -382,7 +393,14 @@ _HEADING_WORDS = frozenset(
 _ROLE_NEAR = re.compile(
     r"(?i)\b(?:investigator|monitor|physician|director|manager|statistician|"
     r"signature|signed|approved|reviewed|prepared|author|sponsor|M\.?D\.?|"
-    r"Ph\.?D\.?|MBBS|title|position|vice president|head of|lead)\b"
+    r"Ph\.?D\.?|MBBS|title|position|vice president|head of|lead|"
+    # an affiliation or a contact line under a name says the same
+    r"department|dept\.?|hospital|university|institute|clinic|cent(?:er|re)|"
+    r"school|college|faculty|division|affiliation|address|e-?mail|tel|phone|fax)\b"
+)
+_ROLE_NEAR_ZH = re.compile(
+    r"(研究者|医院|科室|主任|医师|医生|教授|签名|签字|日期|联系人|电话|职务|职称|单位|"
+    r"负责人|监查员|经理|统计师|邮箱)"
 )
 
 _PINYIN_SURNAMES = frozenset(
@@ -400,6 +418,8 @@ _PINYIN_SYLLABLE = (
 )
 _PINYIN_GIVEN = re.compile(rf"(?i)(?:{_PINYIN_SYLLABLE}){{1,3}}")
 #: Pairs of pinyin-looking words that are places, not people.
+_ADDRESS_WORDS = {"avenue", "road", "street", "building", "floor", "district",
+                  "province", "city", "county", "village", "town", "lane", "drive"}
 _PINYIN_PLACES = {"hong kong", "tai wan", "ma cau", "xi an", "he nan", "he bei"}
 
 
@@ -425,6 +445,36 @@ def _ner_person(frag: str) -> bool:
     )
 
 
+#: Romanised surnames that are not Mandarin pinyin: Cantonese (Chan, Wong),
+#: Wade-Giles (Hsu, Chang, Tsai) and Korean (Kim, Choi). Beside one of these
+#: any capitalised given name counts, hyphenated or not: Chan Tai Man,
+#: Hsu Chih-Wei, Kim Min-jun.
+_OTHER_SURNAMES = frozenset(
+    """chan wong cheung leung lam chow tsang kwok ng lee yeung ho tse lau
+    fong yip mak poon siu tam tong tsui yau yuen hui kwan law choy chu
+    hsu chang tsai chiang kuo hsieh tseng chou chao yeh hung kao chien
+    chuang hsiao hsueh kim choi jung kang cho yoon jang lim shin kwon hwang
+    seo""".split()
+)
+_LEAD_WORDS = {"contact", "questions", "please", "call", "email", "ask", "by",
+               "from", "dear", "attn", "attention", "cc", "to"}
+_INITIAL_STOP = {"food", "drug", "department", "government", "national", "army",
+                 "navy", "patent", "pharmacopeia", "pharmacopoeia", "postal",
+                 "state", "states", "district", "court", "census", "code"}
+
+
+def _initial_names(text: str) -> Iterable[tuple[str, int, int]]:
+    """J. Smith, J.A. Smith, J. A. Smith: initials then a surname. Medium --
+    "U.S. Food" has the same shape, and the obvious ones are filtered."""
+    for m in re.finditer(
+        r"(?<![\w.])((?:[A-Z]\.\s?){1,2}[A-Z][a-z]{2,}(?:-[A-Z][a-z]+)?)\b", text
+    ):
+        last = m.group(1).split()[-1].split(".")[-1].lower()
+        if last in _INITIAL_STOP | _HEADING_WORDS | _NAME_STOP:
+            continue
+        yield m.group(1), m.start(1), m.end(1)
+
+
 def _pinyin_names(text: str) -> Iterable[tuple[str, int, int]]:
     """Chinese names romanised: Zhang Wei, Wei Zhang, WANG Jianguo,
     Jian-Guo Wang -- a pinyin surname beside a given name made of pinyin
@@ -435,11 +485,17 @@ def _pinyin_names(text: str) -> Iterable[tuple[str, int, int]]:
         a, b = m.group(1), m.group(2)
         if f"{a} {b}".lower() in _PINYIN_PLACES:
             continue
+        if {a.lower(), b.lower()} & (_HEADING_WORDS | _NAME_STOP | _ADDRESS_WORDS):
+            continue
         for sur, given in ((a, b), (b, a)):
             g = given.replace("-", "")
+            if sur.isupper() and given.isupper():
+                continue
             if (sur.lower() in _PINYIN_SURNAMES and len(g) >= 2
-                    and _PINYIN_GIVEN.fullmatch(g)
-                    and not (sur.isupper() and given.isupper())):
+                    and (_PINYIN_GIVEN.fullmatch(g) or "-" in given)):
+                yield m.group(0), m.start(), m.end()
+                break
+            if sur.lower() in _OTHER_SURNAMES and 2 <= len(g) <= 12:
                 yield m.group(0), m.start(), m.end()
                 break
 
@@ -536,6 +592,16 @@ def scan(
             if tail and not any(w.lower() in _NAME_STOP for w in tail.group(0).split()):
                 term += tail.group(0)
                 end += len(tail.group(0))
+        if category == "person" and not re.search(r"[\u4e00-\u9fa5]", term):
+            # "Contact Ellen Ripley", "Questions: Lisa Wong": the word in
+            # front is the sentence, not the name.
+            words = term.split()
+            while len(words) > 2 and words[0].lower().strip(":,") in (
+                _NAME_STOP | _HEADING_WORDS | _LEAD_WORDS
+            ):
+                start += len(words[0]) + 1
+                words = words[1:]
+            term = " ".join(words)
         if len(term) < 2 or term.lower() in _NOT_A_NAME:
             return
         key = _key(term)
@@ -587,6 +653,8 @@ def scan(
             add(term, "person", "high", "pattern", text, start, end)
         for term, start, end in _zh_titled_names(text):
             add(term, "person", "high", "pattern", text, start, end)
+        for term, start, end in _initial_names(text):
+            add(term, "person", "medium", "pattern", text, start, end)
         if detector is not None and text.strip():
             for f in detector.detect(text):
                 cat = {"PERSON": "person", "EMAIL_ADDRESS": "contact",
@@ -596,6 +664,20 @@ def scan(
                     if cat == "person" and not _ner_person(frag):
                         continue
                     add(frag, cat, "medium", "ner", text, f.start, f.end)
+
+    # A Chinese name alone in its cell or line, beside a short role cell.
+    from .profile import _CN_COMPOUND_SURNAMES, _CN_SURNAMES
+
+    for i, text in enumerate(texts):
+        line = re.sub(r"\s+", "", text)
+        if not (re.fullmatch(r"[\u4e00-\u9fa5·]{2,4}", line)
+                and (line[0] in _CN_SURNAMES or line.startswith(_CN_COMPOUND_SURNAMES))):
+            continue
+        near = " ".join(t for t in texts[max(0, i - 2):i] + texts[i + 1:i + 3]
+                        if len(t.strip()) <= 40)
+        if _ROLE_NEAR_ZH.search(near) and not _ROLE_NEAR_ZH.search(line):
+            add(line, "person", "high", "signature block", near + " " + text,
+                len(near) + 1, len(near) + 1 + len(text))
 
     # A name alone on its line, beside a line that says what the person is:
     # a signature block, or a table row "Kevin Lee | Clinical Project Manager".
@@ -611,7 +693,7 @@ def scan(
         near_blocks = [t for t in texts[max(0, i - 2):i] + texts[i + 1:i + 3]
                        if len(t.strip()) <= 80]
         near = " ".join(near_blocks)
-        if _ROLE_NEAR.search(near):
+        if _ROLE_NEAR.search(near) or re.search(r"[\w.+-]+@[\w-]+\.", near):
             add(line, "person", "high", "signature block", near + " " + line,
                 len(near) + 1, len(near) + 1 + len(line))
 
