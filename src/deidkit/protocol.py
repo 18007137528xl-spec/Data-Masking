@@ -475,6 +475,64 @@ def _initial_names(text: str) -> Iterable[tuple[str, int, int]]:
         yield m.group(1), m.start(1), m.end(1)
 
 
+_LIST_SEP = re.compile(r"\s*(?:,|;|，|、|；|/|\band\b|&|和|及|与|以及)\s*")
+_CREDENTIAL = re.compile(
+    r"(?:MD|M\.D\.|PhD|Ph\.D\.|MBBS|MBChB|PharmD|DO|RN|BSN|NP|PA-C|MSc|MS|MPH|"
+    r"DrPH|FRCP|FRCPC|FACP|FACC|FRACP|MBA|博士|教授|主任医师|副主任医师|医师)\.?$"
+)
+_TITLE_PREFIX = re.compile(r"^(?:Dr|Prof|Professor|Mr|Ms|Mrs)\.?\s+")
+
+
+def _list_item_name(item: str) -> str | None:
+    """The name in one list item, if the item is nothing but a name (with a
+    title in front or a role in brackets after allowed)."""
+    from .profile import _CN_COMPOUND_SURNAMES, _CN_SURNAMES
+
+    item = re.sub(r"\s*[(（][^)）]{1,30}[)）]\s*$", "", item.strip()).strip(" .。")
+    item = _TITLE_PREFIX.sub("", item)
+    if re.fullmatch(r"[\u4e00-\u9fa5·]{2,4}", item):
+        if item[0] in _CN_SURNAMES or item.startswith(_CN_COMPOUND_SURNAMES):
+            return item
+        return None
+    if not re.fullmatch(_PNAME, item) or "," in item:
+        return None
+    if any(w.lower().strip(".'’") in _HEADING_WORDS | _NAME_STOP | _ADDRESS_WORDS
+           for w in item.split()):
+        return None
+    return item
+
+
+def _list_names(line: str, found: dict) -> Iterable[tuple[str, int, int, str]]:
+    """Every name in a list that already holds a found name -- or, with no
+    name found yet, a list of three or more items that are all names."""
+    parts, pos = [], 0
+    for m in _LIST_SEP.finditer(line):
+        parts.append((line[pos:m.start()], pos))
+        pos = m.end()
+    parts.append((line[pos:], pos))
+    if len(parts) < 2:
+        return
+    items = []
+    for raw, at in parts:
+        if not raw.strip() or _CREDENTIAL.fullmatch(raw.strip()):
+            continue  # "John Smith, MD, Mary Jones": the MD is not an item
+        # the first item carries the lead-in: "Investigators: John Smith"
+        lead = re.match(r"^.*[:：]\s*", raw)
+        if lead:
+            raw, at = raw[lead.end():], at + lead.end()
+        items.append((raw, at, _list_item_name(raw)))
+    names = [x for x in items if x[2]]
+    seeded = any(_key(n) in found and found[_key(n)].category == "person"
+                 for _, _, n in names)
+    if not names or (not seeded and (len(names) < 3 or len(names) < len(items))):
+        return
+    conf = "high" if seeded or all(
+        re.search(r"[\u4e00-\u9fa5]", n) for _, _, n in names) else "medium"
+    for raw, at, n in names:
+        off = raw.find(n)
+        yield n, at + off, at + off + len(n), conf
+
+
 def _pinyin_names(text: str) -> Iterable[tuple[str, int, int]]:
     """Chinese names romanised: Zhang Wei, Wei Zhang, WANG Jianguo,
     Jian-Guo Wang -- a pinyin surname beside a given name made of pinyin
@@ -696,6 +754,14 @@ def scan(
         if _ROLE_NEAR.search(near) or re.search(r"[\w.+-]+@[\w-]+\.", near):
             add(line, "person", "high", "signature block", near + " " + line,
                 len(near) + 1, len(near) + 1 + len(line))
+
+    # A list of people: "Investigators: John Smith, Mary Jones and Wei Zhang",
+    # "研究者：张伟、李娜、王芳". The patterns above find the name the cue sits
+    # next to and stop; every other item in the same list is a name too.
+    for text in texts:
+        for line in text.splitlines():
+            for term, start, end, conf in _list_names(line, found):
+                add(term, "person", conf, "list", line, start, end)
 
     # The company behind "Merck Sharp & Dohme LLC" is also written "Merck".
     # Its first word is offered as a term of its own, at low confidence:

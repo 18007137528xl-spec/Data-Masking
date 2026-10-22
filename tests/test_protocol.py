@@ -394,3 +394,20 @@ def test_more_ways_a_protocol_writes_a_name(tmp_path, vault):
         "Laura Palmer", "J. Watson", "J.A. Holmes", "Chan Tai Man", "Hsu Chih-Wei",
         "Kim Min-jun", "Ellen Ripley", "王小明", "赵丽", "Tom Hardy", "Lisa Wong",
     }, people
+
+
+def test_every_name_in_a_list_is_found(tmp_path, vault):
+    terms = _scan_lines(tmp_path, vault, [
+        "Investigators: John Smith, Mary Jones, Wei Zhang and Tom Brown.",
+        "Steering committee: Dr. Ann Lee, Dr. Raj Patel (Chair), Omar Haddad, MD, Karen Liu, PhD",
+        "研究者：张伟、李娜、王芳、欧阳明",
+        "Writing group: Hannah Fischer; Pierre Dubois; Sofia Rossi",
+        "Endpoints: Overall Survival, Progression Free Survival and Adverse Events.",
+    ])
+    people = {k for k, t in terms.items() if t.category == "person"}
+    for name in ("John Smith", "Mary Jones", "Wei Zhang", "Tom Brown", "Ann Lee",
+                 "Raj Patel", "Omar Haddad", "Karen Liu", "张伟", "李娜", "王芳",
+                 "欧阳明", "Hannah Fischer", "Pierre Dubois", "Sofia Rossi"):
+        assert name in people, (name, people)
+    assert not people & {"Overall Survival", "Progression Free Survival",
+                         "Adverse Events"}
