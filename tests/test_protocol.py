@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import zipfile
 from pathlib import Path
 
@@ -347,3 +348,24 @@ def test_phone_numbers_are_found_without_a_label(tmp_path, vault):
     contacts = {k for k, t in terms.items() if t.category == "contact"}
     assert contacts == {"+86 21 6123 4567", "138-1234-5678", "021-61234567",
                         "(617) 555-0142", "400-820-1234", "010 8765 4321"}, contacts
+
+
+def test_the_name_model_queues_full_names_only(tmp_path, vault):
+    class Eager:  # stands in for Presidio, which calls any capital a person
+        def detect(self, text):
+            from deidkit.freetext import Finding
+            out = []
+            for m in re.finditer(r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*", text):
+                out.append(Finding("PERSON", m.start(), m.end(), m.group(), 0.85, "fake"))
+            return out
+
+    d = docx.Document()
+    for line in ("When the Site reports Concomitant Medications, see Week 4.",
+                 "Questions go to Harriet Vance."):
+        d.add_paragraph(line)
+    src = tmp_path / "n.docx"
+    d.save(src)
+    terms = {t.term: t for t in pr.scan([src], vault, detector=Eager())}
+    people = {k for k, t in terms.items() if t.category == "person"}
+    assert people == {"Harriet Vance"}, people
+    assert terms["Harriet Vance"].confidence == "medium"

@@ -403,6 +403,28 @@ _PINYIN_GIVEN = re.compile(rf"(?i)(?:{_PINYIN_SYLLABLE}){{1,3}}")
 _PINYIN_PLACES = {"hong kong", "tai wan", "ma cau", "xi an", "he nan", "he bei"}
 
 
+def _ner_person(frag: str) -> bool:
+    """Keep a name the model found only when it reads as a full name.
+
+    The model calls a capitalised word at the start of a sentence a person
+    ("When", "Site", "Concomitant"), and a protocol is wall-to-wall
+    capitalised headings. A single word, a heading phrase ("Concomitant
+    Medications") or a drug name is dropped rather than queued: every one
+    of them was a row someone had to dismiss by hand.
+    """
+    from .freetext import CLINICAL_ALLOWLIST, _looks_like_drug_name
+
+    words = frag.strip().split()
+    if len(words) < 2 or not re.fullmatch(_PNAME, frag.strip()):
+        return False
+    low = [w.lower().strip(".,'’") for w in words]
+    return not any(
+        w in _HEADING_WORDS or w in _NAME_STOP or w in _NOT_A_NAME
+        or w in CLINICAL_ALLOWLIST or _looks_like_drug_name(w)
+        for w in low
+    )
+
+
 def _pinyin_names(text: str) -> Iterable[tuple[str, int, int]]:
     """Chinese names romanised: Zhang Wei, Wei Zhang, WANG Jianguo,
     Jian-Guo Wang -- a pinyin surname beside a given name made of pinyin
@@ -571,11 +593,9 @@ def scan(
                        "PHONE_NUMBER": "contact", "URL": "contact"}.get(f.entity_type)
                 if cat:
                     frag = text[f.start:f.end]
-                    # A full name the model found is worth a person's look;
-                    # a single capitalised word ("Week", "Baseline") is not.
-                    conf = ("medium" if cat != "person"
-                            or re.fullmatch(_PNAME, frag.strip()) else "low")
-                    add(frag, cat, conf, "ner", text, f.start, f.end)
+                    if cat == "person" and not _ner_person(frag):
+                        continue
+                    add(frag, cat, "medium", "ner", text, f.start, f.end)
 
     # A name alone on its line, beside a line that says what the person is:
     # a signature block, or a table row "Kevin Lee | Clinical Project Manager".
