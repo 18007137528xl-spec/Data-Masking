@@ -411,3 +411,31 @@ def test_every_name_in_a_list_is_found(tmp_path, vault):
         assert name in people, (name, people)
     assert not people & {"Overall Survival", "Progression Free Survival",
                          "Adverse Events"}
+
+
+def test_a_pdf_replacement_keeps_the_size_style_and_colour_of_the_line(tmp_path):
+    pm = pytest.importorskip("pymupdf")
+    doc = pm.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "Sponsor: Acme Oncology Incorporated today.",
+                     fontname="tiro", fontsize=11)
+    page.insert_text((72, 100), "Signed: Wei Zhang", fontname="hebo", fontsize=14,
+                     color=(0, 0, 0.6))
+    page.insert_text((72, 130), "Ask Li now.", fontname="helv", fontsize=12)
+    src = tmp_path / "in.pdf"
+    doc.save(src)
+    before = {sp["text"]: sp for b in doc[0].get_text("dict")["blocks"]
+              for ln in b["lines"] for sp in ln["spans"]}
+    pr._write_pdf(src, tmp_path / "out.pdf", {
+        "Acme Oncology Incorporated": "SPONSOR A", "Wei Zhang": "PERSON B",
+        "Li": "PERSON C"})
+    out = pm.open(tmp_path / "out.pdf")
+    spans = {sp["text"]: sp for b in out[0].get_text("dict")["blocks"]
+             for ln in b["lines"] for sp in ln["spans"]}
+    a, b, c = spans["SPONSOR A"], spans["PERSON B"], spans["PERSON C"]
+    assert a["font"].startswith("Times") and a["size"] == pytest.approx(11, abs=0.1)
+    assert "Bold" in b["font"] and b["color"] == 0x000099
+    assert b["size"] >= 14 * 0.9                    # nearly full size
+    # far longer than "Li": narrowed, and it does not run into "now."
+    now = out[0].search_for("now.")[0]
+    assert c["bbox"][2] <= now.x0 + 1

@@ -967,11 +967,32 @@ def output_name(src: Path) -> str:
     return src.stem + src.suffix.lower()
 
 
-def _fit(pm, text: str, width: float, size: float, font: str) -> float:
-    """The largest font size, up to the original, at which ``text`` fits."""
-    while size > 4 and pm.get_text_length(text, fontname=font, fontsize=size) > width:
-        size -= 0.5
-    return max(size, 4)
+def _base14(span: dict[str, Any], text: str) -> str:
+    """The standard PDF font closest to the one the replaced text was in.
+
+    The original font is usually embedded as a subset holding only the
+    glyphs the document used, so it cannot write new text; the nearest of
+    the fonts every PDF reader has is the honest substitute. Serif stays
+    serif, bold stays bold."""
+    name = (span.get("font") or "").lower()
+    flags = int(span.get("flags") or 0)
+    bold = bool(flags & 16) or any(w in name for w in ("bold", "black", "heavy", "semibold"))
+    italic = bool(flags & 2) or "italic" in name or "oblique" in name
+    if not text.isascii():
+        serif_cjk = any(w in name for w in ("song", "ming", "simsun", "serif", "kai", "fang"))
+        return "china-s" if serif_cjk else "china-ss"
+    if flags & 8 or any(w in name for w in ("courier", "mono", "consolas")):
+        family = ("cour", "cobo", "coit", "cobi")
+    elif flags & 4 or any(w in name for w in (
+            "times", "serif", "roman", "georgia", "garamond", "cambria", "book")):
+        family = ("tiro", "tibo", "tiit", "tibi")
+    else:
+        family = ("helv", "hebo", "heit", "hebi")
+    return family[(1 if bold else 0) + (2 if italic else 0)]
+
+
+def _rgb(color: int) -> tuple[float, float, float]:
+    return ((color >> 16 & 255) / 255, (color >> 8 & 255) / 255, (color & 255) / 255)
 
 
 def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
@@ -1005,7 +1026,7 @@ def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
                 for line in block.get("lines", []):
                     if chars:
                         chars.append({"c": "\n", "bbox": None})
-                    chars += [{**ch, "size": span["size"]}
+                    chars += [{**ch, "span": span}
                               for span in line["spans"] for ch in span["chars"]]
                 text = "".join(c["c"] for c in chars)
                 for x in pat.finditer(text):
@@ -1016,7 +1037,7 @@ def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
                         if c["bbox"] is None:
                             new_line = True
                         elif new_line:
-                            pieces.append([pm.Rect(c["bbox"]), c["origin"], c["size"]])
+                            pieces.append([pm.Rect(c["bbox"]), c["origin"], c["span"]])
                             new_line = False
                         else:
                             pieces[-1][0] |= pm.Rect(c["bbox"])
@@ -1033,11 +1054,27 @@ def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
             # the line rather than floating at the top of the box.
             # A wrapped term is written once, in the widest of its pieces --
             # a fragment at the end of a line has no room for it.
+            # In the original's size, colour and style. The replacement used
+            # to be shrunk until it fitted the word it replaced -- PERSON A
+            # in place of "Li" came out at half the size of the line around
+            # it. Now the size stays and a longer replacement is narrowed
+            # instead, down to 60% of its width.
             for pieces, new in hits:
-                box, origin, size = max(pieces, key=lambda p: p[0].width)
-                font = "helv" if new.isascii() else "china-s"
-                page.insert_text(origin, new, fontname=font,
-                                 fontsize=_fit(pm, new, box.width, size, font))
+                box, origin, span = max(pieces, key=lambda p: p[0].width)
+                size = span["size"]
+                font = _base14(span, new)
+                need = pm.get_text_length(new, fontname=font, fontsize=size) or 1
+                squeeze = max(0.6, min(1.0, box.width / need))
+                if need * squeeze > box.width:
+                    # Narrowed as far as it reads and still too long ("Li" ->
+                    # PERSON A): only now does the size give way, rather than
+                    # the replacement running over the words after it.
+                    size = max(4.0, size * box.width / (need * squeeze))
+                page.insert_text(
+                    origin, new, fontname=font, fontsize=size,
+                    color=_rgb(span.get("color", 0)),
+                    morph=(pm.Point(origin), pm.Matrix(squeeze, 1)),
+                )
             replaced += len(hits)
     # Title, author, subject, keywords: the protocol's name is usually there.
     doc.set_metadata({})
