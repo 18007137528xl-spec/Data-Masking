@@ -223,6 +223,28 @@ _PHARMA = (
 )
 _PHARMA_ZH = r"恒瑞医药|恒瑞|百济神州|信达生物|君实生物|豪森药业|石药集团|正大天晴|再鼎医药|康方生物|和黄医药|复星医药|勃林格殷格翰|礼来|辉瑞|默沙东|诺华|罗氏|阿斯利康|葛兰素史克|赛诺菲|拜耳|艾伯维|安进|百时美施贵宝|强生|杨森|武田|安斯泰来|第一三共|卫材|诺和诺德|吉利德"
 _ZH_DRUG = r"单抗|替尼|西尼|帕利|司他|他汀|沙坦|普利|洛尔|霉素|西林|铂|紫杉醇|比星|那肽|鲁肽|格列净|格列汀|韦"
+#: Roles a protocol writes a person's name after: "Medical Monitor: Jane
+#: Roe", "Approved by: Wei Zhang", "Printed Name: Sarah Johnson".
+_ROLE_EN = (
+    r"(?:Principal Investigator|Coordinating Investigator|Lead Investigator|"
+    r"Sub-?Investigator|Investigator|PI|Medical Monitor|Medical Expert|"
+    r"Medical Officer|Study Physician|Responsible Physician|Safety Physician|"
+    r"Sponsor(?:'s)?\s+(?:Representative|Signatory|Medical Officer|Contact)|"
+    r"Study Director|Clinical Project Manager|Project Manager|Project Lead|"
+    r"Study Manager|Clinical Research Associate|CRA|Biostatistician|"
+    r"(?:Study\s+)?Statistician|Data Manager|Pharmacovigilance Contact|"
+    r"Contact Person|Contact|Author|Prepared by|Written by|Reviewed by|"
+    r"Approved by|Signed by|Printed Name|Full Name|Name)"
+)
+#: A person's name as protocols write it: Sarah Johnson, John A. Doe,
+#: Michael O'Neil, WANG Jianguo, Jianguo WANG, Anna Müller.
+_NAME_WORD = r"[A-Z][a-zà-ÿ]*(?:['’-][A-Za-zà-ÿ][a-zà-ÿ]*)*"
+_PNAME = (
+    rf"{_NAME_WORD}(?:\s+[A-Z]\.)?(?:\s+{_NAME_WORD}){{1,2}}"
+    r"|[A-Z]{2,}(?:\s+[A-Z][a-z]+(?:-[A-Za-z]+)?){1,2}"
+    r"|[A-Z][a-z]+(?:-[A-Za-z]+)?\s+[A-Z]{2,}"
+)
+
 _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
     # registry and protocol numbers
     ("study_id", "high", re.compile(r"\bNCT\d{8}\b")),
@@ -276,13 +298,32 @@ _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
         r"\b([A-Z][a-z'-]+(?:\s+[A-Z]\.)?\s+[A-Z][a-z'-]+),\s*"
         r"(?:MD|M\.D\.|PhD|Ph\.D\.|MBBS|PharmD|DO|RN|MSc|MPH|FRCP)\b")),
     ("person", "high", re.compile(
-        r"(?:研究者|主要研究者|联系人|医学监查员|姓名|负责人)\s*[:：]\s*([\u4e00-\u9fa5·]{2,5})")),
+        r"(?:研究者|主要研究者|协调研究者|分中心研究者|联系人|医学监查员|监查员|姓名|"
+        r"负责人|签名|签字|申办方代表|项目经理|统计师|统计负责人|医学经理|撰写人|"
+        r"审核人|批准人|报告人|起草人|作者|数据管理员|药物警戒联系人)"
+        r"\s*[:：]\s*([\u4e00-\u9fa5·]{2,5})")),
     # contact details
     ("contact", "high", re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")),
     ("contact", "high", re.compile(r"\bhttps?://[^\s<>\"')]+|\bwww\.[^\s<>\"')]+")),
     ("contact", "high", re.compile(
-        r"(?i:(?:tel|phone|telephone|fax|mobile|cell|电话|传真|手机)\.?\s*[:：]?\s*)"
-        r"(\+?\d[\d\s().-]{6,}\d)")),
+        r"(?i:(?:tel|phone|telephone|fax|mobile|cell|mob|contact\s+number|电话|传真|手机)"
+        r"(?:\s*(?:no\.?|number|nr\.?|#|号码|号))?\.?\s*[:：]?\s*)"
+        r"(\+?\(?\d[\d\s().-]{6,}\d)")),
+    # Unlabelled, by shape alone. Each is specific enough that a date, a
+    # version or a protocol number does not fit it.
+    ("contact", "high", re.compile(  # +86 21 6123 4567, +1 (617) 555-0142
+        r"(?<![\w+])(\+\d{1,3}[\s.-]?(?:\(?\d{1,4}\)?[\s.-]?){2,5}\d{2,4})(?!\d)")),
+    ("contact", "high", re.compile(  # 138 1234 5678, 138-1234-5678
+        r"(?<![\d-])(1[3-9]\d[\s-]?\d{4}[\s-]?\d{4})(?![\d-])")),
+    ("contact", "high", re.compile(  # 021-61234567, (021) 6123-4567, 010 12345678
+        r"(?<![\d-])(\(?0\d{2,3}\)?[\s-]\d{3,4}[\s-]?\d{4})(?![\d-])")),
+    ("contact", "high", re.compile(  # 400-820-1234, 800 123 4567
+        r"(?<![\d-])([48]00[\s-]?\d{3}[\s-]?\d{4})(?![\d-])")),
+    ("contact", "high", re.compile(  # (617) 555-0142, 617.555.0142
+        r"(?<![\d-])(\(\d{3}\)\s?\d{3}[\s.-]\d{4}|\d{3}[.-]\d{3}[.-]\d{4})(?![\d-])")),
+    # people, by the role written in front of them
+    ("person", "high", re.compile(
+        rf"(?i:\b{_ROLE_EN})\s*[:：]\s*(?:(?:Dr|Prof|Mr|Ms|Mrs)\.?\s+)?({_PNAME})")),
 ]
 
 #: Standards, regulations and scales written letters-then-number, which the
@@ -301,6 +342,9 @@ _NAME_STOP = {
     "sponsor", "study", "protocol", "investigator", "monitor", "department",
     "page", "version", "date", "tel", "phone", "email", "fax",
     "title", "role", "signature", "name", "position", "affiliation",
+    "principal", "director", "manager", "statistician", "physician", "vice",
+    "president", "chief", "officer", "head", "lead", "coordinator",
+    "associate", "professor", "printed", "approved", "reviewed", "signed",
 }
 #: Words in front of "(drug)" that are not a brand.
 _NOT_A_BRAND = {
@@ -314,6 +358,91 @@ _NOT_A_NAME = {
     "the", "this", "study", "sponsor", "protocol", "clinical", "university",
     "hospital", "institute", "college", "clinic", "the university",
 }
+
+
+#: Words protocol headings are made of. A line of two capitalised words
+#: beside a role is a name -- unless it is "Adverse Events".
+_HEADING_WORDS = frozenset(
+    """adverse events event consent informed schedule assessments procedures
+    objectives objective endpoints endpoint safety efficacy statistical analysis
+    analyses inclusion exclusion criteria treatment treatments dosing dose visit
+    visits screening randomization randomisation background rationale
+    introduction synopsis appendix references contacts contact signatures
+    approval amendment summary design population data management quality ethics
+    records monitoring publication termination withdrawal discontinuation
+    pharmacokinetics laboratory vital signs physical examination history
+    concomitant medications medication prohibited contraception pregnancy
+    reporting serious unexpected investigational product accountability storage
+    labeling labelling blinding unblinding emergency overview table figure list
+    abbreviations sample size estimand hypothesis follow up end period phase
+    general administrative responsibilities committee board review approved
+    confidential confidentiality sponsor information clinical trial""".split()
+)
+
+_ROLE_NEAR = re.compile(
+    r"(?i)\b(?:investigator|monitor|physician|director|manager|statistician|"
+    r"signature|signed|approved|reviewed|prepared|author|sponsor|M\.?D\.?|"
+    r"Ph\.?D\.?|MBBS|title|position|vice president|head of|lead)\b"
+)
+
+_PINYIN_SURNAMES = frozenset(
+    """wang li zhang liu chen yang huang zhao wu zhou xu sun ma zhu hu guo he
+    gao lin luo zheng liang xie song tang han feng deng cao peng zeng xiao tian
+    dong pan yuan cai jiang yu du ye cheng wei su lu ding ren shen yao cui
+    zhong tan fan jin shi liao jia xia fu fang bai zou meng xiong qin qiu yin
+    xue yan duan lei hou long tao gu mao hao gong shao wan qian kong xiang wen
+    kang niu ge xing hong lai qi mo lv lyu ou yi""".split()
+)
+_PINYIN_SYLLABLE = (
+    r"(?:zh|ch|sh|[bpmfdtnlgkhjqxrzcsyw])?"
+    r"(?:iang|iong|uang|ang|eng|ing|ong|ian|iao|uai|uan|ai|ei|ao|ou|an|en|in|"
+    r"un|ia|ie|iu|ua|uo|ui|ue|er|a|o|e|i|u|v)"
+)
+_PINYIN_GIVEN = re.compile(rf"(?i)(?:{_PINYIN_SYLLABLE}){{1,3}}")
+#: Pairs of pinyin-looking words that are places, not people.
+_PINYIN_PLACES = {"hong kong", "tai wan", "ma cau", "xi an", "he nan", "he bei"}
+
+
+def _pinyin_names(text: str) -> Iterable[tuple[str, int, int]]:
+    """Chinese names romanised: Zhang Wei, Wei Zhang, WANG Jianguo,
+    Jian-Guo Wang -- a pinyin surname beside a given name made of pinyin
+    syllables, in either order. Without a title or a role in front of them,
+    which is how most protocols list their staff."""
+    word = r"[A-Z][a-z]+(?:-[A-Za-z][a-z]+)?|[A-Z]{2,}"
+    for m in re.finditer(rf"\b({word})\s+({word})\b", text):
+        a, b = m.group(1), m.group(2)
+        if f"{a} {b}".lower() in _PINYIN_PLACES:
+            continue
+        for sur, given in ((a, b), (b, a)):
+            g = given.replace("-", "")
+            if (sur.lower() in _PINYIN_SURNAMES and len(g) >= 2
+                    and _PINYIN_GIVEN.fullmatch(g)
+                    and not (sur.isupper() and given.isupper())):
+                yield m.group(0), m.start(), m.end()
+                break
+
+
+def _zh_titled_names(text: str) -> Iterable[tuple[str, int, int]]:
+    """王建国教授, 张伟 主任医师: a name followed by a title. Read backwards
+    from the title, three characters then two then four, and kept only when
+    it starts with a surname -- so 研究者应当 and 由北京 never become names."""
+    from .profile import _CN_COMPOUND_SURNAMES, _CN_SURNAMES
+
+    titles = re.compile(
+        r"(?:副主任医师|主任医师|主治医师|住院医师|副教授|教授|副研究员|研究员|"
+        r"博士|医生|医师|主任|经理|总监|老师)"
+    )
+    for m in titles.finditer(text):
+        end = m.start()
+        while end and text[end - 1] in " \t":
+            end -= 1
+        for n in (3, 2, 4):
+            name = text[max(0, end - n):end]
+            if (len(name) == n and re.fullmatch(r"[\u4e00-\u9fa5]+", name)
+                    and (name[0] in _CN_SURNAMES
+                         or name.startswith(_CN_COMPOUND_SURNAMES))):
+                yield name, end - n, end
+                break
 
 
 def _key(text: str) -> str:
@@ -370,7 +499,9 @@ def scan(
 
     def add(term: str, category: str, confidence: str, source: str,
             text: str, start: int, end: int) -> None:
-        term = re.sub(r"\s+", " ", term).strip(" \t,.;:：，。()（）")
+        term = re.sub(r"\s+", " ", term).strip(
+            " \t,.;:：，。" if category == "contact" else " \t,.;:：，。()（）"
+        )
         if re.search(r"[\u4e00-\u9fa5]", term) and category in ("site", "sponsor", "drug"):
             cut = _ZH_CUT.match(term)
             if cut and 0 < cut.end() and len(term) - cut.end() >= 3:
@@ -430,12 +561,39 @@ def scan(
                     if category == "drug" and _STANDARD.match(term):
                         continue  # ISO 14155, IEC 62304: a standard, not a compound
                     add(term, category, conf, "pattern", ctx, m.start(g), m.end(g))
+        for term, start, end in _pinyin_names(text):
+            add(term, "person", "high", "pattern", text, start, end)
+        for term, start, end in _zh_titled_names(text):
+            add(term, "person", "high", "pattern", text, start, end)
         if detector is not None and text.strip():
             for f in detector.detect(text):
                 cat = {"PERSON": "person", "EMAIL_ADDRESS": "contact",
                        "PHONE_NUMBER": "contact", "URL": "contact"}.get(f.entity_type)
                 if cat:
-                    add(text[f.start:f.end], cat, "low", "ner", text, f.start, f.end)
+                    frag = text[f.start:f.end]
+                    # A full name the model found is worth a person's look;
+                    # a single capitalised word ("Week", "Baseline") is not.
+                    conf = ("medium" if cat != "person"
+                            or re.fullmatch(_PNAME, frag.strip()) else "low")
+                    add(frag, cat, conf, "ner", text, f.start, f.end)
+
+    # A name alone on its line, beside a line that says what the person is:
+    # a signature block, or a table row "Kevin Lee | Clinical Project Manager".
+    for i, text in enumerate(texts):
+        line = text.strip()
+        if (not re.fullmatch(_PNAME, line) or line.lower() in _NOT_A_NAME
+                or _ROLE_NEAR.search(line)
+                or any(w.lower().strip("'’") in _HEADING_WORDS | _NAME_STOP
+                       for w in line.split())):
+            continue  # "Clinical Project Manager", "Adverse Events": not people
+        # Only short neighbours count: a signature block or a table row, not
+        # a heading followed by a paragraph that mentions the investigator.
+        near_blocks = [t for t in texts[max(0, i - 2):i] + texts[i + 1:i + 3]
+                       if len(t.strip()) <= 80]
+        near = " ".join(near_blocks)
+        if _ROLE_NEAR.search(near):
+            add(line, "person", "high", "signature block", near + " " + line,
+                len(near) + 1, len(near) + 1 + len(line))
 
     # The company behind "Merck Sharp & Dohme LLC" is also written "Merck".
     # Its first word is offered as a term of its own, at low confidence:

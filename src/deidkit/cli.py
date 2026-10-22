@@ -1204,7 +1204,7 @@ def cmd_protocol(args: argparse.Namespace) -> int:
         return _err(str(exc))
     with vault:
         if args.action == "scan":
-            terms = pr.scan(paths, vault)
+            terms = pr.scan(paths, vault, detector=_name_detector())
             pr.save_terms(terms, args.out)
             print(f"{len(terms)} term(s) proposed from {len(paths)} file(s) -> {args.out}")
             print(
@@ -1247,3 +1247,18 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def _name_detector():
+    """The name model (Presidio, when installed) for the protocol scan: the
+    patterns find names behind a role, a title or in pinyin, the model finds
+    the rest. Built once -- loading it takes seconds."""
+    global _NAME_DETECTOR
+    if _NAME_DETECTOR is None:
+        from . import freetext
+
+        _NAME_DETECTOR = freetext.build_detector()
+    return _NAME_DETECTOR
+
+
+_NAME_DETECTOR = None

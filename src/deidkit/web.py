@@ -479,7 +479,7 @@ def do_p_scan(s: Session, body: dict[str, Any]) -> dict[str, Any]:
         raise ApiError(str(exc)) from exc
     with _p_vault(s, body.get("vault")) as vault:
         try:
-            terms = pr.scan(paths, vault)
+            terms = pr.scan(paths, vault, detector=_name_detector())
         except ImportError as exc:
             raise ApiError(
                 f"{exc}. Install the protocol extra on this server: "
@@ -738,3 +738,18 @@ def serve(host: str = "127.0.0.1", port: int = 8765, *, open_browser: bool = Fal
     finally:
         httpd.server_close()
     return 0
+
+
+def _name_detector():
+    """The name model (Presidio, when installed) for the protocol scan: the
+    patterns find names behind a role, a title or in pinyin, the model finds
+    the rest. Built once -- loading it takes seconds."""
+    global _NAME_DETECTOR
+    if _NAME_DETECTOR is None:
+        from . import freetext
+
+        _NAME_DETECTOR = freetext.build_detector()
+    return _NAME_DETECTOR
+
+
+_NAME_DETECTOR = None

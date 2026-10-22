@@ -287,3 +287,63 @@ def test_compound_names_and_codes_are_high_and_standards_are_not_compounds(tmp_p
     assert any("替尼" in k and v.confidence == "high" for k, v in terms.items())
     for t in ("ISO 14155", "IEC 62304"):
         assert t not in terms, t
+
+
+def _scan_lines(tmp_path, vault, lines):
+    d = docx.Document()
+    for line in lines:
+        d.add_paragraph(line)
+    src = tmp_path / "names.docx"
+    d.save(src)
+    return {t.term: t for t in pr.scan([src], vault)}
+
+
+def test_names_are_found_however_a_protocol_writes_them(tmp_path, vault):
+    terms = _scan_lines(tmp_path, vault, [
+        "Principal Investigator: John Smith",
+        "Prepared by: Wei Zhang",
+        "Approved by: Zhang Wei",
+        "Sponsor Signatory", "Robert Brown", "Vice President, Clinical Development",
+        "The team includes WANG Jianguo and Li Xiaofeng.",
+        "Please contact Xiaofeng Li or Jian-Guo Chen.",
+        "本研究由北京协和医院张伟主任医师牵头，李娜教授参与。",
+        "联系人：刘洋；签字：陈静",
+        "Study Statistician: Anna Müller",
+        "Printed Name: Sarah Johnson",
+        "Investigator: John A. Doe",
+        "Kevin Lee", "Clinical Project Manager",
+        "Name: Michael O'Neil",
+        "Data Manager: HUANG Lei",
+    ])
+    for name in ("John Smith", "Wei Zhang", "Zhang Wei", "Robert Brown",
+                 "WANG Jianguo", "Li Xiaofeng", "Xiaofeng Li", "Jian-Guo Chen",
+                 "张伟", "李娜", "刘洋", "陈静", "Anna Müller", "Sarah Johnson",
+                 "John A. Doe", "Kevin Lee", "Michael O'Neil", "HUANG Lei"):
+        assert name in terms and terms[name].category == "person", name
+        assert terms[name].confidence == "high", name
+    for role in ("Sponsor Signatory", "Clinical Project Manager"):
+        assert role not in terms, role
+
+
+def test_headings_and_places_are_not_people(tmp_path, vault):
+    terms = _scan_lines(tmp_path, vault, [
+        "Adverse Events",
+        "The investigator will record every adverse event.",
+        "Informed Consent", "Investigator responsibilities",
+        "Sites in Hong Kong and Long Term Follow-up visits.",
+        "研究者应当在签署知情同意书后开始治疗。",
+    ])
+    people = {k for k, t in terms.items() if t.category == "person"}
+    assert not people, people
+
+
+def test_phone_numbers_are_found_without_a_label(tmp_path, vault):
+    terms = _scan_lines(tmp_path, vault, [
+        "Call +86 21 6123 4567 or 138-1234-5678 or 021-61234567.",
+        "US (617) 555-0142, hotline 400-820-1234.",
+        "Phone Number: 010 8765 4321",
+        "Visit 2024-03-12, version 1.0.2, EudraCT 2024-512345-12-00, Day 120.",
+    ])
+    contacts = {k for k, t in terms.items() if t.category == "contact"}
+    assert contacts == {"+86 21 6123 4567", "138-1234-5678", "021-61234567",
+                        "(617) 555-0142", "400-820-1234", "010 8765 4321"}, contacts
