@@ -237,7 +237,16 @@ _INN = (
     r"previr|asvir|buvir|vir|glutide|tide|gliflozin|gliptin|platin|taxel|"
     r"rubicin|mustine|sartan|pril|olol|conazole|prazole|mycin|cillin|"
     r"relin|relix|lukast|dronate|parin|xaban|gatran|sentan|fungin|"
-    r"floxacin|oxacin|cycline|vastatin|statin|setron|tegravir|kinra|leukin"
+    r"floxacin|oxacin|cycline|vastatin|statin|setron|tegravir|kinra|leukin|"
+    # the ones a concomitant-medication list is made of: verapamil, diltiazem,
+    # amlodipine, carbamazepine, rifampin, midazolam, dexamethasone ... --
+    # each checked against an English word list: not histidine, turpentine
+    # or triazole
+    r"pamil|tiazem|dipine|azepine|apine|azodone|azolam|azepam|triptan|oxetine|"
+    r"pramine|triptyline|profen|fenac|coxib|[aeio]tidine|barbital|ampin|ampicin|"
+    r"butin|apentine|cistat|nidazole|bendazole|olone|sone|semide|"
+    r"thiazide|afil|oquine|otecan|trexate|fosfamide|phosphamide|citabine|"
+    r"uracil|poetin|grastim|limus|sporin|sporine|vudine|darone|cainide|ytoin"
 )
 _PHARMA = (
     r"Boehringer[ -]Ingelheim|Eli Lilly(?: and Company)?|Lilly|Pfizer|Merck(?: Sharp & Dohme)?|"
@@ -621,6 +630,68 @@ def _list_names(line: str, found: dict) -> Iterable[tuple[str, int, int, str]]:
         yield n, at + off, at + off + len(n), conf
 
 
+_DRUG_SEP = re.compile(r"\s*(?:,|;|，|、|；|/|\band\b|\bor\b|&|和|及|与|或)\s*")
+_DRUG_LEAD = re.compile(
+    r"^.*?(?:[(:：]|\b(?:such as|e\.\s?g\.?,?|eg,|i\.\s?e\.?,?|including|includes?|"
+    r"for example|for instance|like)\s+)", re.I)
+#: Words that make a list item a description, not a drug: "other strong
+#: inhibitors", "herbal supplements", "calcium channel blockers".
+_NOT_A_DRUG_WORD = frozenset({
+    "other", "others", "drug", "drugs", "medication", "medications", "medicine",
+    "medicines", "inhibitor", "inhibitors", "inducer", "inducers", "substrate",
+    "substrates", "strong", "moderate", "potent", "weak", "agent", "agents",
+    "product", "products", "herbal", "supplement", "supplements", "the", "a", "an",
+    "etc", "all", "any", "these", "those", "certain", "some", "combination",
+    "treatment", "therapy", "therapies", "patient", "patients", "subject", "subjects",
+    "blocker", "blockers", "antifungal", "antifungals", "antibiotic", "antibiotics",
+    "antiretroviral", "antiretrovirals", "anticonvulsant", "anticonvulsants",
+    "antidepressant", "antidepressants", "antiepileptic", "antiepileptics", "class",
+    "classes", "use", "used", "not", "limited", "to", "with", "without", "is", "are",
+    "be", "may", "should", "must", "within", "days", "weeks", "prior", "before",
+    "after", "during", "study", "dose", "doses", "known", "listed", "below", "above",
+    "table", "appendix", "section", "see", "refer", "list", "following", "include",
+})
+
+
+def _drug_item(item: str) -> str | None:
+    """The drug in one list item, if the item is nothing but a name: one to
+    three words of letters (St. John's wort, grapefruit juice)."""
+    item = _DRUG_LEAD.sub("", item.strip())
+    item = item.strip(" \t.。;:()（）[]\"'“”")
+    words = item.split()
+    if not 1 <= len(words) <= 3 or len(item) < 4:
+        return None
+    if not all(re.fullmatch(r"[A-Za-z][A-Za-z'’.-]*", w) for w in words):
+        return None
+    if any(w.lower().strip(".'’") in _NOT_A_DRUG_WORD for w in words):
+        return None
+    return item
+
+
+def _list_drugs(line: str, found: dict) -> Iterable[tuple[str, int, int, str]]:
+    """Every drug in a list that already holds two found drugs: "strong
+    CYP3A4 inhibitors (e.g., ketoconazole, itraconazole, clarithromycin,
+    nefazodone, verapamil or St. John's wort)". The stems find some of them;
+    a list masked halfway is worse than either choice made fully."""
+    parts, pos = [], 0
+    for m in _DRUG_SEP.finditer(line):
+        parts.append((line[pos:m.start()], pos))
+        pos = m.end()
+    parts.append((line[pos:], pos))
+    if len(parts) < 3:
+        return
+    items = [(raw, at, _drug_item(raw)) for raw, at in parts]
+    known = [n for _, _, n in items
+             if n and _key(n) in found and found[_key(n)].category == "drug"]
+    if len(known) < 2:
+        return
+    for raw, at, n in items:
+        if not n or _key(n) in found:
+            continue
+        off = raw.find(n)
+        yield n, at + off, at + off + len(n), "high" if " " not in n else "medium"
+
+
 def _pinyin_names(text: str) -> Iterable[tuple[str, int, int]]:
     """Chinese names romanised: Zhang Wei, Wei Zhang, WANG Jianguo,
     Jian-Guo Wang -- a pinyin surname beside a given name made of pinyin
@@ -856,6 +927,27 @@ def scan(
         for line in text.splitlines():
             for term, start, end, conf in _list_names(line, found):
                 add(term, "person", conf, "list", line, start, end)
+
+    # A list of drugs, in a sentence or one per bullet or table cell.
+    for text in texts:
+        for line in text.splitlines():
+            for term, start, end, conf in _list_drugs(line, found):
+                add(term, "drug", conf, "list", line, start, end)
+    run: list[str] = []
+    for text in texts + [""]:
+        item = _drug_item(text) if len(text) <= 60 else None
+        if item and "\n" not in text:
+            run.append(item)
+            continue
+        if len(run) >= 3 and sum(
+                1 for x in run if _key(x) in found and found[_key(x)].category == "drug") >= 2:
+            joined_run = ", ".join(run)
+            for x in run:
+                if _key(x) not in found:
+                    i = joined_run.find(x)
+                    add(x, "drug", "high" if " " not in x else "medium", "list",
+                        joined_run, i, i + len(x))
+        run = []
 
     # The company behind "Merck Sharp & Dohme LLC" is also written "Merck".
     # Its first word is offered as a term of its own, at low confidence:

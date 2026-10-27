@@ -624,3 +624,29 @@ def test_pdf_pictures_and_attachments_are_removed(tmp_path, vault):
         assert "Text printed over a background" in text
         assert pr.REMOVED_LABEL in text          # the label in the first frame
         assert pg.get_drawings()                 # the grey box
+
+
+def test_every_drug_in_an_inhibitor_list_is_masked(tmp_path, vault):
+    d = docx.Document()
+    d.add_paragraph(
+        "Prohibited: strong CYP3A4 inhibitors (e.g., ketoconazole, itraconazole, "
+        "clarithromycin, ritonavir, cobicistat, nefazodone, telithromycin, "
+        "verapamil, diltiazem or St. John's wort) and inducers such as rifampin, "
+        "carbamazepine, phenytoin, phenobarbital and enzalutamide.")
+    d.add_paragraph("Moderate inhibitors:")
+    for x in ("fluconazole", "erythromycin", "aprepitant", "grapefruit juice", "imatinib"):
+        d.add_paragraph(x)
+    d.add_paragraph("Patients should avoid other herbal supplements.")
+    src = tmp_path / "p.docx"
+    d.save(src)
+    found = {t.term.lower(): t for t in pr.scan([src], vault)}
+    for drug in ("ketoconazole", "itraconazole", "clarithromycin", "ritonavir",
+                 "cobicistat", "nefazodone", "telithromycin", "verapamil", "diltiazem",
+                 "rifampin", "carbamazepine", "phenytoin", "phenobarbital",
+                 "enzalutamide", "fluconazole", "erythromycin", "aprepitant", "imatinib"):
+        assert drug in found and found[drug].category == "drug", drug
+        assert found[drug].confidence == "high", drug
+    assert found["st. john's wort"].confidence == "medium"
+    assert found["grapefruit juice"].confidence == "medium"
+    assert not {"inducers", "herbal supplements", "other herbal supplements",
+                "moderate inhibitors", "prohibited"} & set(found)
