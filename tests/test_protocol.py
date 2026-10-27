@@ -488,3 +488,139 @@ def test_names_with_capitals_inside_and_particles(tmp_path, vault):
                  "Ludwig van Beethoven", "Maria de la Cruz", "DeAnn SMITH"):
         assert name in people, (name, people)
     assert not any("MedDRA" in p or "SAS" in p for p in people)
+
+
+# ----------------------------------------------------------------------
+# pictures, embedded objects and hidden text
+# ----------------------------------------------------------------------
+def _png(w: int = 4, h: int = 3) -> bytes:
+    return pr._placeholder_png(w, h)
+
+
+def _protocol_with_pictures(path: Path) -> Path:
+    """A Word protocol with a picture in the body and the header, alt text
+    that names the sponsor, a tracked deletion, a mailto field and link, an
+    embedded workbook and a first-page thumbnail."""
+    import io
+
+    d = docx.Document()
+    d.sections[0].header.paragraphs[0].add_run().add_picture(io.BytesIO(_png()))
+    d.add_paragraph("Sponsor: Acme Oncology Inc.")
+    d.add_paragraph().add_run().add_picture(io.BytesIO(_png(6, 2)))
+    d.save(path)
+
+    W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    with zipfile.ZipFile(path) as z:
+        parts = {n: z.read(n) for n in z.namelist()}
+    doc = parts["word/document.xml"].decode("utf-8")
+    doc = re.sub(r'(<wp:docPr [^>]*?)(/?>)', r'\1 descr="Acme Oncology logo" title="Acme"\2',
+                 doc, count=1)
+    extra = (
+        f'<w:p><w:del w:id="91" w:author="x" w:date="2025-01-01T00:00:00Z">'
+        f'<w:r><w:delText>Zentolimab was deleted here</w:delText></w:r></w:del></w:p>'
+        f'<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        f'<w:r><w:instrText xml:space="preserve"> HYPERLINK "mailto:jane.roe@acme-onc.com" </w:instrText></w:r>'
+        f'<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>jane.roe@acme-onc.com</w:t></w:r>'
+        f'<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>'
+        f'<w:p><w:r><w:object>'
+        f'<v:shape xmlns:v="urn:schemas-microsoft-com:vml" id="ole1" alt="Acme budget" style="width:50pt;height:30pt">'
+        f'<v:imagedata xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
+        f'xmlns:o="urn:schemas-microsoft-com:office:office" r:id="rIdOlePic" o:title="budget"/></v:shape>'
+        f'<o:OLEObject xmlns:o="urn:schemas-microsoft-com:office:office" '
+        f'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
+        f'Type="Embed" ProgID="Excel.Sheet.12" ShapeID="ole1" r:id="rIdOle"/>'
+        f'</w:object></w:r></w:p>'
+    )
+    doc = doc.replace("<w:sectPr", extra + "<w:sectPr", 1)
+    parts["word/document.xml"] = doc.encode("utf-8")
+    rels = parts["word/_rels/document.xml.rels"].decode("utf-8")
+    R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    rels = rels.replace("</Relationships>",
+        f'<Relationship Id="rIdOle" Type="{R}/oleObject" Target="embeddings/oleObject1.bin"/>'
+        f'<Relationship Id="rIdOlePic" Type="{R}/image" Target="media/olepreview.png"/>'
+        f'<Relationship Id="rIdLink" Type="{R}/hyperlink" Target="mailto:jane.roe@acme-onc.com" '
+        f'TargetMode="External"/></Relationships>')
+    parts["word/_rels/document.xml.rels"] = rels.encode("utf-8")
+    parts["word/embeddings/oleObject1.bin"] = b"Acme Oncology budget workbook"
+    parts["word/media/olepreview.png"] = _png(5, 5)
+    parts["docProps/thumbnail.png"] = _png(8, 8)
+    root_rels = parts["_rels/.rels"].decode("utf-8").replace("</Relationships>",
+        '<Relationship Id="rIdThumb" Type="http://schemas.openxmlformats.org/package/2006/'
+        'relationships/metadata/thumbnail" Target="docProps/thumbnail.png"/></Relationships>')
+    parts["_rels/.rels"] = root_rels.encode("utf-8")
+    ct = parts["[Content_Types].xml"].decode("utf-8")
+    if 'Extension="bin"' not in ct:
+        ct = ct.replace("</Types>", '<Default Extension="bin" '
+                        'ContentType="application/vnd.openxmlformats-officedocument.oleObject"/></Types>')
+    parts["[Content_Types].xml"] = ct.encode("utf-8")
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for n, b in parts.items():
+            z.writestr(n, b)
+    assert W  # namespace used above
+    return path
+
+
+def test_word_pictures_objects_and_hidden_text_are_removed(tmp_path, vault):
+    src = _protocol_with_pictures(tmp_path / "p.docx")
+    terms = pr.scan([src], vault)
+    terms = [t for t in terms if t.term != "Zentolimab"]
+    terms.append(pr.Term(term="Zentolimab", category="drug", count=1,
+                         proposed="DRUG A", decision="OK"))
+    for t in terms:
+        t.decision = t.decision or "OK"
+    res = pr.apply([src], terms, vault, tmp_path / "out", approved_by="tester")
+    out = tmp_path / "out" / "p.docx"
+    f = res["files"][0]
+    with zipfile.ZipFile(src) as z:     # python-docx's template brings a thumbnail too
+        thumbs = sum(1 for n in z.namelist() if n.startswith("docProps/thumbnail"))
+    assert f["images_removed"] == 3 + thumbs  # body, header, OLE preview, thumbnails
+    assert f["objects_removed"] == 1
+    assert f["images_left"] == 0 and res["manifest"]["images_left"] == 0
+
+    with zipfile.ZipFile(out) as z:
+        names = z.namelist()
+        assert not [n for n in names if "media/" in n and n != pr._PLACEHOLDER]
+        assert not [n for n in names if "embeddings/" in n or "thumbnail" in n]
+        body = z.read("word/document.xml").decode("utf-8")
+        rels = z.read("word/_rels/document.xml.rels").decode("utf-8")
+        assert "Acme" not in body and "budget" not in body
+        assert "Zentolimab" not in body          # the tracked deletion too
+        assert "jane.roe" not in body and "jane.roe" not in rels
+        assert pr.REMOVED_LABEL in body
+        assert "OLEObject" not in body and "oleObject" not in rels
+    docx.Document(str(out))                      # still opens
+    assert res["manifest"]["residual_occurrences"] == 0
+
+
+def test_a_deleted_revision_is_read_by_the_scan(tmp_path):
+    src = _protocol_with_pictures(tmp_path / "p.docx")
+    assert any("Zentolimab was deleted here" in b for b in pr.read_text(src))
+
+
+def test_pdf_pictures_and_attachments_are_removed(tmp_path, vault):
+    pm = pytest.importorskip("pymupdf")
+    src = tmp_path / "p.pdf"
+    doc = pm.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "Sponsor: Acme Oncology Inc.", fontsize=11)
+    page.insert_image(pm.Rect(72, 100, 272, 200), stream=_png(20, 10))
+    # A letterhead picture behind text: the picture goes, the text stays.
+    page.insert_image(pm.Rect(72, 400, 400, 460), stream=_png(30, 6))
+    page.insert_text((80, 430), "Text printed over a background", fontsize=11)
+    doc.embfile_add("budget.xlsx", b"Acme budget")
+    doc.save(str(src))
+
+    terms = pr.scan([src], vault)
+    for t in terms:
+        t.decision = "OK"
+    res = pr.apply([src], terms, vault, tmp_path / "out", approved_by="tester")
+    f = res["files"][0]
+    assert f["images_removed"] == 2 and f["objects_removed"] == 1
+    assert f["images_left"] == 0
+    with pm.open(str(tmp_path / "out" / "p.pdf")) as masked:
+        pg = masked[0]
+        assert not pg.get_images(full=True) and not masked.embfile_names()
+        text = pg.get_text()
+        assert "Text printed over a background" in text
+        assert pr.REMOVED_LABEL in text          # the label in the first frame
+        assert pg.get_drawings()                 # the grey box

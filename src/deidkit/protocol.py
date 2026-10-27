@@ -23,11 +23,19 @@ file meets it first.
 
 Word documents are rewritten in place, keeping every table, heading, style
 and number: body, tables, text boxes, headers, footers, footnotes, endnotes
-and comments, plus the document properties. A PDF can only be read as text,
-so with PyMuPDF installed it is redacted in place -- the text removed from
-the file, the replacement drawn where it stood, pages and layout kept --
-and without it the masked copy is a text file. Images are not read at all
--- a sponsor logo survives -- and the report says how many there were.
+and comments, plus the document properties, tracked deletions, field codes
+and link targets. A PDF can only be read as text, so with PyMuPDF installed
+it is redacted in place -- the text removed from the file, the replacement
+drawn where it stood, pages and layout kept -- and without it the masked copy
+is a text file.
+
+Pictures are not read, so none is kept: a logo, a scanned signature, a
+chemical structure or a study schema can carry exactly what the text masking
+took out. Every picture is removed from the file and a grey box with a cross
+drawn in its frame, so the layout and the figure numbering stay. Embedded
+objects (a workbook or drawing inside a Word file, an attachment inside a
+PDF) and Word's first-page thumbnail go the same way. The read-back counts
+whatever picture is left; the answer has to be none.
 """
 
 from __future__ import annotations
@@ -35,8 +43,11 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import posixpath
 import re
+import struct
 import zipfile
+import zlib
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -117,16 +128,25 @@ def documents(path: str | Path) -> list[Path]:
     raise ValueError(f"{p} does not exist on this server")
 
 
+#: Where a paragraph keeps text: what is shown, what a tracked change
+#: deleted (still in the file, and back on screen with one click on Reject),
+#: and field codes -- HYPERLINK "mailto:..." is one.
+_TEXT_TAGS = ("t", "delText", "instrText")
+
+
 def _docx_paragraphs(root) -> Iterable[list[Any]]:
     """Each paragraph's text nodes, in order -- and only its own: a text box
-    inside a paragraph is a paragraph of its own and is yielded separately."""
+    inside a paragraph is a paragraph of its own and is yielded separately.
+    Shown text, deleted text and field codes come as three separate runs of
+    nodes, so a term is never matched across two of them."""
     for p in root.iter(_W + "p"):
-        nodes = [
-            t for t in p.iter(_W + "t")
-            if next(t.iterancestors(_W + "p"), None) is p
-        ]
-        if nodes:
-            yield nodes
+        for tag in _TEXT_TAGS:
+            nodes = [
+                t for t in p.iter(_W + tag)
+                if next(t.iterancestors(_W + "p"), None) is p
+            ]
+            if nodes:
+                yield nodes
 
 
 def _pdf_blocks(page) -> list[str]:
@@ -167,6 +187,13 @@ def read_text(path: Path) -> list[str]:
                     root = etree.fromstring(z.read(name))
                     blocks += ["".join(t.text or "" for t in ns)
                                for ns in _docx_paragraphs(root)]
+                elif name.endswith(".rels"):
+                    blocks += [
+                        rel.get("Target") or ""
+                        for rel in etree.fromstring(z.read(name))
+                        if rel.get("TargetMode") == "External"
+                        and (rel.get("Type") or "").endswith("/hyperlink")
+                    ]
             if "docProps/core.xml" in z.namelist():
                 core = etree.fromstring(z.read("docProps/core.xml"))
                 blocks += [e.text for e in core.iter() if e.text and e.text.strip()]
@@ -981,42 +1008,274 @@ def _rewrite_paragraph(nodes: list[Any], pat, lookup) -> int:
     return len(matches)
 
 
+# ----------------------------------------------------------------------
+# pictures and embedded objects
+# ----------------------------------------------------------------------
+#: What a removed picture says, as its alt text and, in a PDF, in its frame.
+REMOVED_LABEL = "Figure removed"
+
+_PLACEHOLDER = "word/media/deidkit_figure_removed.png"
+_A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+_V = "{urn:schemas-microsoft-com:vml}"
+_O = "{urn:schemas-microsoft-com:office:office}"
+_R_ID = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+_CT = "{http://schemas.openxmlformats.org/package/2006/content-types}"
+
+
+def _placeholder_png(w: int = 160, h: int = 120) -> bytes:
+    """A light grey box with a border and a cross -- the drawing convention
+    for "no picture here". Word stretches it to the picture's frame."""
+    fill, line = b"\xe8\xe8\xe8", b"\x96\x96\x96"
+    rows = []
+    for y in range(h):
+        row = bytearray(b"\x00")
+        for x in range(w):
+            edge = x < 2 or y < 2 or x >= w - 2 or y >= h - 2
+            cross = abs(x * h - y * w) <= w or abs((w - 1 - x) * h - y * w) <= w
+            row += line if edge or cross else fill
+        rows.append(bytes(row))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data)) + kind + data
+                + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
+
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(b"".join(rows), 9))
+            + chunk(b"IEND", b""))
+
+
+def _scrub_pictures(root, ole_ids: set[str], mapping: dict[str, str]) -> tuple[int, int]:
+    """Alt text and names of pictures say what the picture was ("Acme logo",
+    "signature_jsmith.png"): a picture's become REMOVED_LABEL; any other
+    shape's are masked like text. An embedded object whose part is going is
+    taken out of the document, leaving its preview picture -- which is
+    itself replaced. Returns (terms replaced, objects removed)."""
+    replaced = 0
+    for e in root.iter():
+        if not isinstance(e.tag, str):
+            continue
+        local = e.tag.rsplit("}", 1)[-1]
+        if local in ("docPr", "cNvPr"):
+            holder = e.getparent()
+            if local == "docPr":
+                picture = holder is not None and next(holder.iter(_A + "blip"), None) is not None
+            else:
+                picture = holder is not None and holder.tag.endswith("}nvPicPr")
+            if picture:
+                e.set("name", f"Figure {e.get('id', '')}".strip())
+                e.set("descr", REMOVED_LABEL)
+                e.attrib.pop("title", None)
+                continue
+            for a in ("name", "descr", "title"):
+                if e.get(a):
+                    new, k = replace_text(e.get(a), mapping)
+                    if k:
+                        e.set(a, new)
+                        replaced += k
+        elif e.tag == _V + "imagedata":
+            e.attrib.pop(_O + "title", None)
+            shape = e.getparent()
+            if shape is not None and shape.get("alt") is not None:
+                shape.set("alt", REMOVED_LABEL)
+    gone = 0
+    for e in list(root.iter(_O + "OLEObject")):
+        if e.get(_R_ID) in ole_ids:
+            e.getparent().remove(e)
+            gone += 1
+    return replaced, gone
+
+
 def _write_docx(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
     from lxml import etree
 
+    def xml(root) -> bytes:
+        return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+
     m = _matcher(mapping)
-    replaced = images = 0
-    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
-        for item in zin.infolist():
-            data = zin.read(item.filename)
-            if item.filename.startswith("word/media/"):
-                images += 1
-            if m is not None and _TEXT_PARTS.match(item.filename):
-                root = etree.fromstring(data)
+    with zipfile.ZipFile(src) as zin:
+        items = [(i, zin.read(i.filename)) for i in zin.infolist()]
+    names = {i.filename for i, _ in items}
+    out: dict[str, bytes] = {}
+    replaced = 0
+
+    # 1. Relationships. Every picture is pointed at the placeholder, so the
+    # original is left unreferenced and dropped; an embedded object and the
+    # first-page thumbnail lose their relationship and their part.
+    pictures: set[str] = set()
+    linked = objects = 0
+    ole_ids: dict[str, set[str]] = {}
+    referenced: set[str] = set()
+    for item, data in items:
+        name = item.filename
+        if not name.endswith(".rels"):
+            continue
+        root = etree.fromstring(data)
+        base = posixpath.dirname(posixpath.dirname(name))
+        source = posixpath.join(base, posixpath.basename(name)[: -len(".rels")])
+        for rel in list(root):
+            kind = (rel.get("Type") or "").rsplit("/", 1)[-1]
+            target = rel.get("Target") or ""
+            external = rel.get("TargetMode") == "External"
+            resolved = None if external else (
+                target.lstrip("/") if target.startswith("/")
+                else posixpath.normpath(posixpath.join(base, target)))
+            if kind in ("image", "hdphoto"):
+                if external:
+                    linked += 1
+                    rel.attrib.pop("TargetMode")
+                else:
+                    pictures.add(resolved)
+                rel.set("Target", posixpath.relpath(_PLACEHOLDER, base or "."))
+            elif kind in ("oleObject", "package", "thumbnail"):
+                if kind == "thumbnail":
+                    pictures.add(resolved or target)
+                else:
+                    objects += 1
+                ole_ids.setdefault(source, set()).add(rel.get("Id"))
+                root.remove(rel)
+            else:
+                if kind == "hyperlink" and external and m is not None:
+                    new, k = replace_text(target, mapping)
+                    if k:
+                        rel.set("Target", new)
+                        replaced += k
+                if resolved:
+                    referenced.add(resolved)
+        out[name] = xml(root)
+    # Anything under media/ or embeddings/ nothing points at any more goes:
+    # the originals just unhooked, and orphans an editor left behind.
+    drop = {n for n in names
+            if re.search(r"(^|/)(media|embeddings)/", n) and n not in referenced
+            and n != _PLACEHOLDER}
+    drop |= {p for p in pictures if p in names}
+
+    # 2. The parts with text: mask it, and scrub the pictures' alt text.
+    for item, data in items:
+        name = item.filename
+        if _TEXT_PARTS.match(name):
+            root = etree.fromstring(data)
+            if m is not None:
                 for nodes in _docx_paragraphs(root):
                     replaced += _rewrite_paragraph(nodes, *m)
-                data = etree.tostring(root, xml_declaration=True,
-                                      encoding="UTF-8", standalone=True)
-            elif item.filename == "docProps/core.xml":
-                root = etree.fromstring(data)
-                for e in root.iter():
-                    tag = etree.QName(e).localname
-                    if tag in ("creator", "lastModifiedBy"):
-                        e.text = ""
-                    elif e.text and m is not None:
-                        e.text, k = replace_text(e.text, mapping)
-                        replaced += k
-                data = etree.tostring(root, xml_declaration=True,
-                                      encoding="UTF-8", standalone=True)
-            elif item.filename == "docProps/app.xml":
-                root = etree.fromstring(data)
-                for e in root.iter():
-                    if etree.QName(e).localname in ("Company", "Manager"):
-                        e.text = ""
-                data = etree.tostring(root, xml_declaration=True,
-                                      encoding="UTF-8", standalone=True)
-            zout.writestr(item, data)
-    return {"replaced": replaced, "images_not_read": images}
+            k, _ = _scrub_pictures(root, ole_ids.get(name, set()), mapping)
+            replaced += k
+            out[name] = xml(root)
+        elif name in ole_ids:
+            root = etree.fromstring(data)
+            _scrub_pictures(root, ole_ids[name], mapping)
+            out[name] = xml(root)
+        elif name == "docProps/core.xml":
+            root = etree.fromstring(data)
+            for e in root.iter():
+                tag = etree.QName(e).localname
+                if tag in ("creator", "lastModifiedBy"):
+                    e.text = ""
+                elif e.text and m is not None:
+                    e.text, k = replace_text(e.text, mapping)
+                    replaced += k
+            out[name] = xml(root)
+        elif name == "docProps/app.xml":
+            root = etree.fromstring(data)
+            for e in root.iter():
+                if etree.QName(e).localname in ("Company", "Manager"):
+                    e.text = ""
+            out[name] = xml(root)
+        elif name == "[Content_Types].xml":
+            root = etree.fromstring(data)
+            for e in list(root):
+                if e.tag == _CT + "Override" and (e.get("PartName") or "").lstrip("/") in drop:
+                    root.remove(e)
+            if not any(e.tag == _CT + "Default" and (e.get("Extension") or "").lower() == "png"
+                       for e in root):
+                d = etree.SubElement(root, _CT + "Default")
+                d.set("Extension", "png")
+                d.set("ContentType", "image/png")
+            out[name] = xml(root)
+
+    with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item, data in items:
+            if item.filename in drop or item.filename == _PLACEHOLDER:
+                continue
+            zout.writestr(item, out.get(item.filename, data))
+        zout.writestr(_PLACEHOLDER, _placeholder_png())
+    return {"replaced": replaced,
+            "images_removed": len(pictures) + linked,
+            "objects_removed": objects}
+
+
+def images_left(path: Path) -> int:
+    """Pictures and embedded objects still in a written file. The answer has
+    to be 0; the read-back reports anything else."""
+    suffix = path.suffix.lower()
+    if suffix == ".docx":
+        with zipfile.ZipFile(path) as z:
+            return sum(
+                1 for n in z.namelist()
+                if n != _PLACEHOLDER and (
+                    re.search(r"(^|/)(media|embeddings)/", n)
+                    or n.startswith("docProps/thumbnail"))
+            )
+    if suffix == ".pdf":
+        pm = _pymupdf()
+        if pm is None:
+            return 0
+        with pm.open(str(path)) as doc:
+            return (sum(len(page.get_images(full=True)) for page in doc)
+                    + len(doc.embfile_names()))
+    return 0
+
+
+def _draw_placeholder(pm, page, box) -> None:
+    """The grey box with a cross where a picture was. Not where text sits
+    on top of the picture (a background, a letterhead): the text stays
+    readable and the box is left out."""
+    box = pm.Rect(box) & page.rect
+    if box.is_empty or box.width < 2 or box.height < 2:
+        return
+    if any(b[6] == 0 and pm.Rect(b[:4]).intersects(box) for b in page.get_text("blocks")):
+        return
+    grey, fill = (0.59, 0.59, 0.59), (0.91, 0.91, 0.91)
+    shape = page.new_shape()
+    shape.draw_rect(box)
+    shape.finish(color=grey, fill=fill, width=0.5)
+    shape.draw_line(box.tl, box.br)
+    shape.draw_line(box.tr, box.bl)
+    shape.finish(color=grey, width=0.5)
+    shape.commit()
+    if box.width >= 80 and box.height >= 20:
+        mid = (box.y0 + box.y1) / 2
+        label = pm.Rect(box.x0, mid - 7, box.x1, mid + 7)
+        page.draw_rect(pm.Rect(box.x0 + box.width / 2 - 40, mid - 7,
+                               box.x0 + box.width / 2 + 40, mid + 7),
+                       color=None, fill=fill, width=0)
+        page.insert_textbox(label, REMOVED_LABEL, fontname="helv", fontsize=8,
+                            color=(0.3, 0.3, 0.3), align=1)
+
+
+def _remove_pdf_pictures(pm, page) -> int:
+    """Take every picture off the page -- out of the file, not covered --
+    and draw the placeholder in its frame. Text over a picture stays."""
+    infos = [i for i in page.get_image_info(xrefs=True)
+             if not pm.Rect(i["bbox"]).is_empty]
+    if not infos:
+        return 0
+    boxes = [pm.Rect(i["bbox"]) for i in infos]
+    if hasattr(pm, "PDF_REDACT_TEXT_NONE"):
+        for b in boxes:
+            page.add_redact_annot(b, fill=False, cross_out=False)
+        page.apply_redactions(
+            images=pm.PDF_REDACT_IMAGE_REMOVE,
+            graphics=getattr(pm, "PDF_REDACT_LINE_ART_NONE", 0),
+            text=pm.PDF_REDACT_TEXT_NONE,
+        )
+    else:
+        # An older PyMuPDF would take the text over a picture with it.
+        for xref in {i["xref"] for i in infos if i.get("xref")}:
+            page.delete_image(xref)
+    for b in boxes:
+        _draw_placeholder(pm, page, b)
+    return len(infos)
 
 
 def _pymupdf():
@@ -1085,11 +1344,14 @@ def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
     pm = _pymupdf()
     m = _matcher(mapping)
     doc = pm.open(str(src))
-    replaced = images = empty = 0
+    replaced = images = empty = objects = 0
     for page in doc:
-        images += len(page.get_images(full=True))
         if not page.get_text("text").strip():
             empty += 1
+        images += _remove_pdf_pictures(pm, page)
+        for a in list(page.annots(types=[pm.PDF_ANNOT_FILE_ATTACHMENT]) or []):
+            page.delete_annot(a)
+            objects += 1
         if m is None:
             continue
         pat, lookup = m
@@ -1181,6 +1443,9 @@ def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
             box, origin, span, _ = max(pieces, key=lambda p: p[0].width)
             _draw_run(pm, page, origin, new_text, span, box.width)
         replaced += sum(len(h) for h in line_hits.values()) + len(wrapped)
+    for name in doc.embfile_names():
+        doc.embfile_del(name)
+        objects += 1
     # Title, author, subject, keywords: the protocol's name is usually there.
     doc.set_metadata({})
     try:
@@ -1189,7 +1454,7 @@ def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
         pass
     doc.save(str(dst), garbage=4, deflate=True, clean=True)
     doc.close()
-    out = {"replaced": replaced, "images_not_read": images}
+    out = {"replaced": replaced, "images_removed": images, "objects_removed": objects}
     if empty:
         out["pages_without_text"] = empty
     return out
@@ -1388,6 +1653,8 @@ def apply(
     out = Path(out_dir)
     files = [write(p, out, mapping) for p in paths]
     outs = [out / f["output"] for f in files]
+    for f, o in zip(files, outs):
+        f["images_left"] = images_left(o)
     left_terms = residual_terms(outs, mapping)
     left = sum(left_terms.values())
     # Anything the scan would still flag in the masked copy, ignoring what was
@@ -1415,10 +1682,14 @@ def apply(
         "terms_replaced_by_category": by_cat,
         "terms_kept": len(kept),
         "residual_occurrences": left,
+        "images_left": sum(f["images_left"] for f in files),
         "still_flagged_after_masking": len(again),
         "notes": [
-            "Images are not read: a logo or a scanned signature in the document "
-            "survives masking. images_not_read counts them per file.",
+            "Pictures are not read, so every one is removed: images_removed "
+            "counts them per file, objects_removed the embedded objects, and "
+            "images_left the ones the read-back still found (it must be 0).",
+            "Text drawn as vector graphics (a logo made of shapes, text "
+            "turned into outlines) is not text and not a picture: it survives.",
             "A PDF is redacted in place: the text is removed from the file and "
             "the replacement drawn where it stood. A term broken across two "
             "lines is not matched there and shows up as residual.",
