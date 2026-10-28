@@ -650,3 +650,26 @@ def test_every_drug_in_an_inhibitor_list_is_masked(tmp_path, vault):
     assert found["grapefruit juice"].confidence == "medium"
     assert not {"inducers", "herbal supplements", "other herbal supplements",
                 "moderate inhibitors", "prohibited"} & set(found)
+
+
+def test_lab_tests_are_not_people(tmp_path, vault):
+    d = docx.Document()
+    d.add_paragraph("Medical Monitor: John Smith")
+    d.add_paragraph("Absolute Neutrophil Count")
+    d.add_paragraph("Hematology: Hemoglobin, Absolute Neutrophil Count, Platelet Count")
+    d.add_paragraph("Avoid P-gp inhibitors (e.g., ketoconazole, itraconazole, Test Compound)")
+    src = tmp_path / "p.docx"
+    d.save(src)
+    found = {t.term for t in pr.scan([src], vault)}
+    assert "John Smith" in found
+    assert not {"Absolute Neutrophil Count", "Platelet Count", "Test Compound"} & found
+
+
+def test_a_flag_the_replacements_raised_is_not_a_leak():
+    labels = {"drug ai", "drug ag", "drug bd", "sponsor a"}
+    assert pr._made_by_masking("DRUG AI DRUG AG", labels)
+    assert pr._made_by_masking("P-gp DRUG BD", labels)
+    assert pr._made_by_masking("DRUG A", labels | {"drug a"})
+    assert not pr._made_by_masking("Acme Oncology", labels)
+    assert not pr._made_by_masking("DRUG AIX", labels)
+    assert not pr._made_by_masking("SPONSOR A Acme Oncology Inc.", labels)

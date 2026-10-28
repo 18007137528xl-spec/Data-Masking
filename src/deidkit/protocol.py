@@ -436,7 +436,19 @@ _HEADING_WORDS = frozenset(
     labeling labelling blinding unblinding emergency overview table figure list
     abbreviations sample size estimand hypothesis follow up end period phase
     general administrative responsibilities committee board review approved
-    confidential confidentiality sponsor information clinical trial""".split()
+    confidential confidentiality sponsor information clinical trial"""
+    # laboratory and clinical measures: "Absolute Neutrophil Count" beside
+    # a Medical Monitor line, or "Platelet Count" in the same list, is a
+    # lab test, not a person
+    """count counts absolute neutrophil neutrophils platelet platelets
+    hemoglobin haemoglobin hematocrit haematocrit lymphocyte lymphocytes
+    leukocyte leukocytes creatinine clearance bilirubin albumin glucose sodium
+    potassium calcium magnesium protein alkaline phosphatase alanine aspartate
+    aminotransferase transaminase serum plasma urine urinalysis ratio pressure
+    blood cell cells body mass index temperature test compound score grade
+    function level levels normal limit upper chemistry hematology haematology
+    coagulation prothrombin thromboplastin partial normalized antigen
+    testosterone prostate specific heart electrocardiogram""".split()
 )
 
 _ROLE_NEAR = re.compile(
@@ -650,6 +662,8 @@ _NOT_A_DRUG_WORD = frozenset({
     "be", "may", "should", "must", "within", "days", "weeks", "prior", "before",
     "after", "during", "study", "dose", "doses", "known", "listed", "below", "above",
     "table", "appendix", "section", "see", "refer", "list", "following", "include",
+    # the study's own product is not one of the drugs in a list of others
+    "test", "compound", "investigational", "placebo", "matching", "vehicle",
 })
 
 
@@ -1727,6 +1741,22 @@ def residual(out_paths: Iterable[Path], terms: Iterable[str]) -> int:
     return sum(residual_terms(out_paths, terms).values())
 
 
+def _made_by_masking(term: str, replacements: set[str]) -> bool:
+    """A flag the replacements themselves raised: a label ("DRUG A"), part
+    of one, or text with a label in it -- "DRUG AI DRUG AG" reads like a
+    company ending in AG, "P-gp DRUG BD" like a name. With the labels taken
+    out, nothing that could name anything may be left: "DRUG A Acme
+    Oncology Inc." is still flagged."""
+    low = term.lower()
+    if low in replacements or any(low in r for r in replacements):
+        return True
+    rest, hit = low, False
+    for r in sorted((r for r in replacements if r), key=len, reverse=True):
+        rest, n = re.subn(_boundary(r), " ", rest)
+        hit = hit or n > 0
+    return hit and not re.search(r"[a-z\u4e00-\u9fa5]{3,}", rest)
+
+
 def apply(
     paths: list[Path], terms: list[Term], vault: Vault, out_dir: str | Path,
     *, approved_by: str, detector: Any = None,
@@ -1755,8 +1785,7 @@ def apply(
     replacements = {r.lower() for r in mapping.values()}
     again = [
         asdict(t) for t in scan(outs, vault, detector, propose_replacements=False)
-        if t.term.lower() not in kept and t.term.lower() not in replacements
-        and not any(t.term.lower() in r for r in replacements)
+        if t.term.lower() not in kept and not _made_by_masking(t.term, replacements)
     ]
 
     by_cat: dict[str, int] = {}
