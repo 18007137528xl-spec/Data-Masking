@@ -1053,14 +1053,19 @@ def scan(
             if d.term.upper().startswith(tok) and tok != d.term.upper():
                 add(tok, "drug", "high", "abbreviation", joined, x.start(), x.end())
                 aliases[tok.lower()] = d.term.lower()
-        name = _boundary(d.term)
+        # The drug name in any case, the brand with its capital: under one
+        # case-blind flag "inhibitors (boceprevir" made "inhibitors" a brand
+        # of boceprevir, and every "inhibitors (" in the protocol DRUG A.
+        name = f"(?i:{_boundary(d.term)})"
         for pat in (
             rf"\b([A-Z][A-Za-z]{{3,}})\s*[®™]?\s*\(\s*{name}",
             rf"{name}\s*\(\s*([A-Z][A-Za-z]{{3,}}|[A-Z]{{1,5}}[- ]?\d{{3,6}}[A-Z]?)\s*[®™]?\s*\)",
         ):
-            for x in re.finditer(pat, joined, flags=re.I):
+            for x in re.finditer(pat, joined):
                 brand = x.group(1)
-                if brand.lower() in _NOT_A_BRAND or brand.lower() == d.term.lower():
+                low = brand.lower()
+                if (low in _NOT_A_BRAND or low == d.term.lower()
+                        or low in _NOT_A_DRUG_WORD or low in _HEADING_WORDS):
                     continue
                 add(brand, "drug", "high", "brand", joined, x.start(1), x.end(1))
                 aliases[brand.lower()] = d.term.lower()
@@ -1563,13 +1568,17 @@ def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
                     line_hits.setdefault(seg[0]["line"], []).append(
                         (seg[0]["k"], seg[-1]["k"] + 1, new_text))
                     continue
-                pieces: list[list[Any]] = []
+                # A term wrapped over lines is a hit on each of them -- or the
+                # line's own rewrite puts the piece back as it was
+                # ("schisandra" / "sphenanthera"). The replacement is written
+                # once, in the widest piece; the others are emptied.
+                by_line: dict[Any, list[dict[str, Any]]] = {}
                 for c in seg:
-                    if pieces and pieces[-1][3] == c["line"]:
-                        pieces[-1][0] |= pm.Rect(c["bbox"])
-                    else:
-                        pieces.append([pm.Rect(c["bbox"]), c["origin"], c["span"], c["line"]])
-                wrapped.append((pieces, new_text))
+                    by_line.setdefault(c["line"], []).append(c)
+                widest = max(by_line, key=lambda k: by_line[k][-1]["bbox"][2] - by_line[k][0]["bbox"][0])
+                for key, cs in by_line.items():
+                    line_hits.setdefault(key, []).append(
+                        (cs[0]["k"], cs[-1]["k"] + 1, new_text if key == widest else ""))
         if not line_hits and not wrapped:
             continue
 
@@ -1622,7 +1631,7 @@ def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
         for pieces, new_text in wrapped:
             box, origin, span, _ = max(pieces, key=lambda p: p[0].width)
             _draw_run(pm, page, origin, new_text, span, box.width)
-        replaced += sum(len(h) for h in line_hits.values()) + len(wrapped)
+        replaced += sum(1 for h in line_hits.values() for *_, t in h if t) + len(wrapped)
     for name in doc.embfile_names():
         doc.embfile_del(name)
         objects += 1
@@ -1647,6 +1656,8 @@ def _draw_run(pm, page, origin, text: str, span: dict[str, Any], width: float | 
     within 15% for a run of the original line (so its words land where they
     were), or narrowed to 60% and then shrunk for a replacement given no
     more room than that."""
+    if not text.strip():
+        return  # the emptied piece of a wrapped term
     size = span["size"]
     font = _base14(span, text)
     need = pm.get_text_length(text, fontname=font, fontsize=size) or 1
