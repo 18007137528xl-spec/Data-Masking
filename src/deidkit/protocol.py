@@ -790,7 +790,7 @@ _US_STATES = (
     # Canadian provinces
     r"AB|BC|MB|NB|NL|NS|NT|NU|ON|PE|QC|SK|YT"
 )
-_POSTCODE = r"\d{5}(?:-\d{4})?|[A-Z]\d[A-Z]\s?\d[A-Z]\d"
+_POSTCODE = r"\d{5}(?:-\d{4})?|[A-Z]\d[A-Z][ \t]?\d[A-Z]\d"
 _STREET_SUFFIX = (
     r"(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Drive|Dr\.?|"
     r"Lane|Ln\.?|Way|Parkway|Pkwy\.?|Place|Pl\.?|Court|Ct\.?|Square|Sq\.?|"
@@ -799,37 +799,37 @@ _STREET_SUFFIX = (
 _CITY = r"[A-Z][a-z]+(?:[ -](?:[A-Z][a-z]+|am|an|der|de|la|le|sur|upon)){0,3}"
 #: 525 Market Street, Suite 2800, San Francisco, CA 94105, USA
 _ADDRESS = re.compile(
-    rf"\b(?P<street>\d{{1,6}}[A-Za-z]?(?:-\d{{1,6}})?\s+(?:[A-Z][A-Za-z.'’-]*\s+){{1,4}}{_STREET_SUFFIX}"
-    rf"|(?:\d{{1,6}}\s*[–-]\s*)?\d{{1,4}}(?:st|nd|rd|th)\s+{_STREET_SUFFIX})"
-    r"(?:\s+(?:NW|NE|SW|SE|N|S|E|W)(?![A-Za-z]))?"
-    r"(?:,?\s+(?:Suite|Ste\.?|Floor|Fl\.?|Unit|Building|Bldg\.?|Room|Rm\.?)\s*[\w-]+)?"
-    rf"(?:,\s*(?P<city>{_CITY}))?"
-    rf"(?:,?\s*(?:{_US_STATES})(?![A-Za-z]))?"
-    rf"(?:,?\s*(?:{_POSTCODE}))?"
+    rf"\b(?P<street>\d{{1,6}}[A-Za-z]?(?:-\d{{1,6}})?[ \t]+(?:[A-Z][A-Za-z.'’-]*[ \t]+){{1,4}}{_STREET_SUFFIX}"
+    rf"|(?:\d{{1,6}}[ \t]*[–-][ \t]*)?\d{{1,4}}(?:st|nd|rd|th)[ \t]+{_STREET_SUFFIX})"
+    r"(?:[ \t]+(?:NW|NE|SW|SE|N|S|E|W)(?![A-Za-z]))?"
+    r"(?:,?[ \t]+(?:Suite|Ste\.?|Floor|Fl\.?|Unit|Building|Bldg\.?|Room|Rm\.?)[ \t]*[\w-]+)?"
+    rf"(?:,[ \t]*(?P<city>{_CITY}))?"
+    rf"(?:,?[ \t]*(?:{_US_STATES})(?![A-Za-z]))?"
+    rf"(?:,?[ \t]*(?:{_POSTCODE}))?"
 )
 #: San Francisco, CA 94105 -- without the street
 _CITY_STATE_ZIP = re.compile(
-    rf"\b(?P<city>{_CITY}),\s*(?:{_US_STATES})\s+(?:{_POSTCODE})\b"
+    rf"\b(?P<city>{_CITY}),[ \t]*(?:{_US_STATES})[ \t]+(?:{_POSTCODE})\b"
 )
 #: 11 rue Watt 75013 Paris, 12 avenue de la République, 69002 Lyon
 _FR_ADDRESS = re.compile(
-    r"\b\d{1,4}(?:\s?(?:bis|ter))?,?\s+(?:rue|avenue|av\.|boulevard|bd|place|quai|allée|"
-    r"chemin|impasse|cours|route)\s+(?:(?:de|du|des|la|le|l['’]|d['’])\s*)*"
-    r"[A-ZÉÈ][\w'’-]*(?:\s+(?:de|du|des|la|le|[A-ZÉÈ][\w'’-]*)){0,3},?\s+(?:F-)?\d{5}"
-    rf"\s+(?P<city>{_CITY})"
+    r"\b\d{1,4}(?:[ \t]?(?:bis|ter))?,?[ \t]+(?:rue|avenue|av\.|boulevard|bd|place|quai|allée|"
+    r"chemin|impasse|cours|route)[ \t]+(?:(?:de|du|des|la|le|l['’]|d['’])[ \t]*)*"
+    r"[A-ZÉÈ][\w'’-]*(?:[ \t]+(?:de|du|des|la|le|[A-ZÉÈ][\w'’-]*)){0,3},?[ \t]+(?:F-)?\d{5}"
+    rf"[ \t]+(?P<city>{_CITY})"
 )
 #: Luis A. de Herrera 1248/1806, 11300 Montevideo -- the number after the
 #: street, then a postcode and the city
 _NUMBER_AFTER = re.compile(
     r"\b(?:[A-Z][\w'’.-]*|de|del|la|los|las|da|do|di|van|von)"
-    r"(?:\s+(?:[A-Z][\w'’.-]*|de|del|la|los|las|da|do|di|van|von)){0,4}"
-    r"\s+\d{1,5}(?:/\d{1,5})?,\s*(?:[A-Z]{1,2}-)?\d{4,5}"
-    rf"\s+(?P<city>{_CITY})"
+    r"(?:[ \t]+(?:[A-Z][\w'’.-]*|de|del|la|los|las|da|do|di|van|von)){0,4}"
+    r"[ \t]+\d{1,5}(?:/\d{1,5})?,[ \t]*(?:[A-Z]{1,2}-)?\d{4,5}"
+    rf"[ \t]+(?P<city>{_CITY})"
 )
 #: Binger Straße 173, 55216 Ingelheim am Rhein
 _STRASSE = re.compile(
     r"\b[A-ZÄÖÜ][a-zäöüß]+(?:-[A-ZÄÖÜ][a-zäöüß]+)*[ -]?(?:[Ss]traße|[Ss]trasse|weg|platz|allee|gasse|ring|damm)"
-    rf"\s+\d{{1,4}}[a-z]?(?:,\s*(?:D-)?\d{{4,5}}\s+(?P<city>{_CITY}))?"
+    rf"[ \t]+\d{{1,4}}[a-z]?(?:,[ \t]*(?:D-)?\d{{4,5}}[ \t]+(?P<city>{_CITY}))?"
 )
 #: 北京市朝阳区建国路88号, 上海市浦东新区张江路100号
 _ZH_ADDRESS = re.compile(
@@ -1682,28 +1682,16 @@ def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
         lines_of: dict[tuple[int, int], list[dict[str, Any]]] = {}
         wrapped: list[tuple[list[list[Any]], str]] = []
         raw = page.get_text("rawdict")
-        drawings = page.get_drawings()
-        rules = _rules(drawings)
         for bi, block in enumerate(raw.get("blocks", [])):
             # The block's lines joined with a newline that has no box, so a
             # term wrapped onto the next line ("Example" / "Biologics, Inc")
             # is still found -- and redacted on both lines.
             chars: list[dict[str, Any]] = []
-            for li, segs in enumerate(_visual_lines(block.get("lines", []), rules)):
+            for li, line in enumerate(block.get("lines", [])):
                 if chars:
                     chars.append({"c": "\n", "bbox": None})
-                own: list[dict[str, Any]] = []
-                for line in segs:
-                    seg = [{**ch, "span": span, "line": (bi, li)}
-                           for span in line["spans"] for ch in span["chars"]]
-                    if own and seg and not own[-1]["c"].isspace() and not seg[0]["c"].isspace():
-                        # the gap between two pieces of one line is a space
-                        a, b = own[-1], seg[0]
-                        own.append({"c": " ", "span": a["span"], "line": (bi, li),
-                                    "origin": (a["bbox"][2], a["origin"][1]),
-                                    "bbox": (a["bbox"][2], a["bbox"][1],
-                                             max(a["bbox"][2], b["bbox"][0]), a["bbox"][3])})
-                    own += seg
+                own = [{**ch, "span": span, "line": (bi, li)}
+                       for span in line["spans"] for ch in span["chars"]]
                 for k, ch in enumerate(own):
                     ch["k"] = k
                 lines_of[(bi, li)] = own
@@ -1718,20 +1706,17 @@ def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
                     line_hits.setdefault(seg[0]["line"], []).append(
                         (seg[0]["k"], seg[-1]["k"] + 1, new_text))
                     continue
-                # A term wrapped over lines is a hit on each of them -- or the
-                # line's own rewrite puts the piece back as it was
-                # ("schisandra" / "sphenanthera"). The replacement is written
-                # once, in the widest piece; the others are emptied.
-                by_line: dict[Any, list[dict[str, Any]]] = {}
+                pieces: list[list[Any]] = []
                 for c in seg:
-                    by_line.setdefault(c["line"], []).append(c)
-                widest = max(by_line, key=lambda k: by_line[k][-1]["bbox"][2] - by_line[k][0]["bbox"][0])
-                for key, cs in by_line.items():
-                    line_hits.setdefault(key, []).append(
-                        (cs[0]["k"], cs[-1]["k"] + 1, new_text if key == widest else ""))
+                    if pieces and pieces[-1][3] == c["line"]:
+                        pieces[-1][0] |= pm.Rect(c["bbox"])
+                    else:
+                        pieces.append([pm.Rect(c["bbox"]), c["origin"], c["span"], c["line"]])
+                wrapped.append((pieces, new_text))
         if not line_hits and not wrapped:
             continue
 
+        drawings = page.get_drawings()
         plans, underlines = [], []
         for key, hits in line_hits.items():
             plan = _plan_line(pm, page, lines_of[key], sorted(hits), drawings)
@@ -1780,7 +1765,7 @@ def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
         for pieces, new_text in wrapped:
             box, origin, span, _ = max(pieces, key=lambda p: p[0].width)
             _draw_run(pm, page, origin, new_text, span, box.width)
-        replaced += sum(1 for h in line_hits.values() for *_, t in h if t) + len(wrapped)
+        replaced += sum(len(h) for h in line_hits.values()) + len(wrapped)
     for name in doc.embfile_names():
         doc.embfile_del(name)
         objects += 1
@@ -1805,8 +1790,6 @@ def _draw_run(pm, page, origin, text: str, span: dict[str, Any], width: float | 
     within 15% for a run of the original line (so its words land where they
     were), or narrowed to 60% and then shrunk for a replacement given no
     more room than that."""
-    if not text.strip():
-        return  # the emptied piece of a wrapped term
     size = span["size"]
     font = _base14(span, text)
     need = pm.get_text_length(text, fontname=font, fontsize=size) or 1
@@ -1819,57 +1802,6 @@ def _draw_run(pm, page, origin, text: str, span: dict[str, Any], width: float | 
         color=_rgb(span.get("color", 0)),
         morph=(pm.Point(origin), pm.Matrix(squeeze, 1)),
     )
-
-
-def _rules(drawings: list[dict[str, Any]]) -> list[tuple[float, float, float]]:
-    """The vertical lines on a page -- table borders -- as (x, top, bottom)."""
-    out = []
-    for d in drawings:
-        for item in d.get("items", []):
-            if item[0] == "l":
-                a, b = item[1], item[2]
-                if abs(a.x - b.x) < 1 and abs(a.y - b.y) > 3:
-                    out.append((a.x, min(a.y, b.y), max(a.y, b.y)))
-            elif item[0] == "re":
-                r = item[1]
-                if r.width < 2 and r.height > 3:
-                    out.append(((r.x0 + r.x1) / 2, r.y0, r.y1))
-                elif d.get("color") is not None and r.height > 3:
-                    out += [(r.x0, r.y0, r.y1), (r.x1, r.y0, r.y1)]
-    return out
-
-
-def _inner(pm, r):
-    """A text box without the top and bottom of its line height: a glyph box
-    reaches into the lines above and below in tight leading, and redaction
-    takes every character its box touches -- "roject" was "Project"."""
-    return pm.Rect(r.x0, r.y0 + r.height * 0.2, r.x1, r.y1 - r.height * 0.2)
-
-
-def _visual_lines(lines: list[dict[str, Any]],
-                  rules: list[tuple[float, float, float]] = ()) -> list[list[dict[str, Any]]]:
-    """A block's lines, with the pieces of one printed line put back
-    together. Justified text often comes out as a line per word or phrase,
-    each with its own position; planned one piece at a time, a replacement
-    longer than its term pushed its piece into the next one ("DRUG BE,or",
-    "ofDRUG BJ"), which did not move."""
-    out: list[list[dict[str, Any]]] = []
-    for line in lines:
-        if not line.get("spans"):
-            continue
-        if out:
-            prev = out[-1][-1]
-            pb, lb = prev["bbox"], line["bbox"]
-            same_row = abs(pb[3] - lb[3]) <= 0.35 * max(1.0, pb[3] - pb[1])
-            # ...but two table cells are two lines: a border between them
-            border = any(pb[2] - 0.5 <= x <= lb[0] + 0.5 and top < lb[3] and bottom > lb[1]
-                         for x, top, bottom in rules)
-            if (same_row and not border and lb[0] >= pb[2] - 1
-                    and prev.get("dir", (1, 0)) == line.get("dir", (1, 0))):
-                out[-1].append(line)
-                continue
-        out.append([line])
-    return out
 
 
 def _plan_line(pm, page, chars: list[dict[str, Any]], hits: list[tuple[int, int, str]],
@@ -1889,7 +1821,7 @@ def _plan_line(pm, page, chars: list[dict[str, Any]], hits: list[tuple[int, int,
     if total <= 0.5:
         # Every replacement fits where its term was: write each in place.
         return {
-            "redact": [_inner(pm, box(a, b)) for a, b, _ in hits],
+            "redact": [box(a, b) for a, b, _ in hits],
             "draw": [(chars[a]["origin"], t, chars[a]["span"], box(a, b).width)
                      for a, b, t in hits],
             "underlines": [],
@@ -1902,7 +1834,8 @@ def _plan_line(pm, page, chars: list[dict[str, Any]], hits: list[tuple[int, int,
     room = max(0.0, page.rect.x1 - 18 - line_end)
     factor = 1.0 if total <= room else room / total
     first = hits[0][0]
-    tail = _inner(pm, box(first, len(chars)))
+    tail = box(first, len(chars))
+    tail = pm.Rect(tail.x0, tail.y0 + tail.height * 0.15, tail.x1, tail.y1 - tail.height * 0.15)
     draw: list[tuple[Any, ...]] = []
     shift, i, hi = 0.0, first, 0
     shifts: list[tuple[float, float]] = []  # (original x, shift from there on)
@@ -1925,11 +1858,10 @@ def _plan_line(pm, page, chars: list[dict[str, Any]], hits: list[tuple[int, int,
             j += 1
         run = "".join(c["c"] for c in chars[i:j])
         if run.strip():
-            # skip leading spaces: the run starts where its first glyph was,
-            # and is as wide as its glyphs, not the gap after them
+            # skip leading spaces: the run starts where its first glyph was
             lead = len(run) - len(run.lstrip())
             k = i + lead
-            r = box(k, j - (len(run) - len(run.rstrip())))
+            r = box(k, j)
             span = chars[k]["span"]
             text = run.strip()
             fit = r.width / (need(text, span) or 1)
