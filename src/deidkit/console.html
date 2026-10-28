@@ -351,7 +351,7 @@ tr.kept td{opacity:.62}
         <h1>Read the protocol</h1>
         <p>Point this at a protocol on this server, or a folder of them: Word (.docx), PDF,
            or text; a PDF comes back as a PDF, redacted in place. The tool proposes what to mask — sponsor, drug and compound names,
-           protocol and registry numbers, people, contact details, hospitals and CROs — and
+           protocol and registry numbers, people, contact details, addresses and places, hospitals and CROs — and
            you decide every term before anything is written.</p>
       </div>
       <div class="card">
@@ -405,6 +405,7 @@ tr.kept td{opacity:.62}
               <option value="person">person</option>
               <option value="contact">e-mail, phone, web address</option>
               <option value="site">hospital, university, CRO</option>
+              <option value="place">address or place name</option>
             </select>
           </div>
           <button class="ghost" id="btn-padd">Add</button>
@@ -816,7 +817,7 @@ async function showQueue(){
 /* ---- protocol ------------------------------------------------------- */
 let PROWS = [];
 const CAT = {drug:'drug', sponsor:'sponsor', study_id:'study number', person:'person',
-             contact:'contact', site:'institution'};
+             contact:'contact', site:'institution', place:'place'};
 
 function setMode(m){
   const prot = m === 'protocol';

@@ -65,6 +65,7 @@ CATEGORIES = {
     "study_id": "protocol / registry number",
     "person": "person",
     "contact": "e-mail, phone, web address",
+    "place": "address or place name",
     "site": "hospital, university, CRO",
 }
 
@@ -762,6 +763,79 @@ def _labelled_ids(lines: list[str]) -> Iterable[tuple[str, str]]:
             yield value, f"{label} {value}"
 
 
+# ----------------------------------------------------------------------
+# addresses and places
+# ----------------------------------------------------------------------
+_US_STATES = (
+    r"A[LKZR]|C[AOT]|D[EC]|FL|GA|HI|I[DLNA]|K[SY]|LA|M[EDAINSOT]|N[EVHJMYCD]|"
+    r"O[HKR]|PA|RI|S[CD]|T[NX]|UT|V[TA]|W[AVIY]|PR"
+)
+_STREET_SUFFIX = (
+    r"(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Drive|Dr\.?|"
+    r"Lane|Ln\.?|Way|Parkway|Pkwy\.?|Place|Pl\.?|Court|Ct\.?|Square|Sq\.?|"
+    r"Terrace|Highway|Hwy\.?|Circle|Plaza|Row|Crescent|Close)(?![A-Za-z])"
+)
+_CITY = r"[A-Z][a-z]+(?:[ -](?:[A-Z][a-z]+|am|an|der|de|la|le|sur|upon)){0,3}"
+#: 525 Market Street, Suite 2800, San Francisco, CA 94105, USA
+_ADDRESS = re.compile(
+    rf"\b(?P<street>\d{{1,6}}[A-Za-z]?(?:-\d{{1,6}})?\s+(?:[A-Z][A-Za-z.'’-]*\s+){{1,4}}{_STREET_SUFFIX})"
+    r"(?:,?\s+(?:Suite|Ste\.?|Floor|Fl\.?|Unit|Building|Bldg\.?|Room|Rm\.?)\s*[\w-]+)?"
+    rf"(?:,\s*(?P<city>{_CITY}))?"
+    rf"(?:,?\s*(?:{_US_STATES})(?![A-Za-z]))?"
+    r"(?:,?\s*\d{5}(?:-\d{4})?)?"
+)
+#: San Francisco, CA 94105 -- without the street
+_CITY_STATE_ZIP = re.compile(
+    rf"\b(?P<city>{_CITY}),\s*(?:{_US_STATES})\s+\d{{5}}(?:-\d{{4}})?\b"
+)
+#: Binger Straße 173, 55216 Ingelheim am Rhein
+_STRASSE = re.compile(
+    r"\b[A-ZÄÖÜ][a-zäöüß]+(?:-[A-ZÄÖÜ][a-zäöüß]+)*[ -]?(?:[Ss]traße|[Ss]trasse|weg|platz|allee|gasse|ring|damm)"
+    rf"\s+\d{{1,4}}[a-z]?(?:,\s*(?:D-)?\d{{4,5}}\s+(?P<city>{_CITY}))?"
+)
+#: 北京市朝阳区建国路88号, 上海市浦东新区张江路100号
+_ZH_ADDRESS = re.compile(
+    r"[\u4e00-\u9fa5]{2,8}?(?:省|市|自治区)[\u4e00-\u9fa5]{0,12}?(?:市|区|县)?"
+    r"[\u4e00-\u9fa5\d]{1,16}?(?:路|街|大道|道|巷)[\d\-]+号(?:[\u4e00-\u9fa5\d]{0,10}(?:楼|室|层|座))?"
+)
+#: Places the name model finds that are not worth masking: a country or a
+#: region says nothing about who ran the study.
+_NOT_A_PLACE = frozenset(x.strip() for x in """
+    united states, usa, us, u.s., u.s.a., america, north america, south america,
+    latin america, europe, european union, eu, asia, asia-pacific, africa,
+    middle east, oceania, china, japan, korea, south korea, canada, mexico,
+    brazil, argentina, chile, australia, new zealand, india, uk, united kingdom,
+    great britain, britain, england, scotland, wales, germany, france, italy,
+    spain, portugal, poland, russia, ukraine, netherlands, belgium, switzerland,
+    austria, sweden, norway, denmark, finland, ireland, israel, turkey, greece,
+    hungary, czech republic, czechia, romania, bulgaria, taiwan, singapore,
+    thailand, vietnam, malaysia, philippines, indonesia, south africa, egypt,
+    saudi arabia, west, east, north, south""".split(","))
+
+
+def _places(text: str) -> Iterable[tuple[str, int, int]]:
+    """Addresses, and the city in each: the address is replaced as a whole,
+    the city on its own wherever else it is written."""
+    for pat in (_ADDRESS, _CITY_STATE_ZIP, _STRASSE, _ZH_ADDRESS):
+        for m in pat.finditer(text):
+            whole = m.group(0).rstrip(" ,")
+            yield whole, m.start(), m.start() + len(whole)
+            city = m.groupdict().get("city")
+            if city and city.lower() not in _NOT_A_PLACE and city.lower() not in _HEADING_WORDS:
+                yield city, m.start("city"), m.end("city")
+
+
+def _ner_place(frag: str) -> bool:
+    """A place the name model found: a city, a street, a state -- not a
+    country, a region, or a capitalised protocol word."""
+    frag = frag.strip()
+    low = frag.lower()
+    if len(frag) < 3 or not frag[0].isupper() or low in _NOT_A_PLACE:
+        return False
+    return not any(w in _HEADING_WORDS or w in _NAME_STOP or w in _NOT_A_NAME
+                   for w in low.split())
+
+
 def _pinyin_names(text: str) -> Iterable[tuple[str, int, int]]:
     """Chinese names romanised: Zhang Wei, Wei Zhang, WANG Jianguo,
     Jian-Guo Wang -- a pinyin surname beside a given name made of pinyin
@@ -867,6 +941,13 @@ def scan(
         term = re.sub(r"\s+", " ", term).strip(
             " \t,.;:：，。" if category == "contact" else " \t,.;:：，。()（）"
         )
+        if category in ("sponsor", "site"):
+            # "Sponsor: Medivation, Inc., 525 Market Street, San Francisco":
+            # the company, then its address -- a place of its own
+            for pat in (_ADDRESS, _CITY_STATE_ZIP, _STRASSE, _ZH_ADDRESS):
+                cut = pat.search(term)
+                if cut and cut.start() > 0:
+                    term = term[:cut.start()].rstrip(" \t,;:：，")
         if re.search(r"[\u4e00-\u9fa5]", term) and category in ("site", "sponsor", "drug"):
             cut = _ZH_CUT.match(term)
             if cut and 0 < cut.end() and len(term) - cut.end() >= 3:
@@ -948,13 +1029,18 @@ def scan(
             add(term, "person", "medium", "pattern", text, start, end)
         for term, start, end in _caps_surname_names(text):
             add(term, "person", "high", "pattern", text, start, end)
+        for term, start, end in _places(text):
+            add(term, "place", "high", "pattern", text, start, end)
         if detector is not None and text.strip():
             for f in detector.detect(text):
                 cat = {"PERSON": "person", "EMAIL_ADDRESS": "contact",
-                       "PHONE_NUMBER": "contact", "URL": "contact"}.get(f.entity_type)
+                       "PHONE_NUMBER": "contact", "URL": "contact",
+                       "LOCATION": "place", "GPE": "place"}.get(f.entity_type)
                 if cat:
                     frag = text[f.start:f.end]
                     if cat == "person" and not _ner_person(frag):
+                        continue
+                    if cat == "place" and not _ner_place(frag):
                         continue
                     add(frag, cat, "medium", "ner", text, f.start, f.end)
 
@@ -1120,6 +1206,8 @@ def propose(t: Term, vault: Vault, labels: dict[str, str] | None = None) -> str:
         return vault.label_map("person", [key.upper()], prefix="PERSON")[key.upper()]
     if t.category == "study_id":
         return vault.surrogate_for("studyid", key, preserve_format=True)
+    if t.category == "place":
+        return vault.label_map("place", [key.upper()], prefix="PLACE")[key.upper()]
     return dummy_value(key, vault)  # contact details: same shape, no content
 
 

@@ -781,3 +781,30 @@ def test_a_two_word_drug_wrapped_over_lines_is_replaced_on_both(tmp_path, vault)
     assert "schisandra" not in text and "sphenanthera" not in text
     assert "CYP3A inhibitors (" in text
     assert not res["still_flagged"]
+
+
+def test_addresses_and_their_cities_are_masked(tmp_path, vault):
+    d = docx.Document()
+    d.add_paragraph("Sponsor: Medivation, Inc., 525 Market Street, San Francisco, CA 94105")
+    d.add_paragraph("Central laboratory: 1 Main St., Suite 200, Boston, MA 02110-1234")
+    d.add_paragraph("The sponsor's office in San Francisco will receive the forms.")
+    d.add_paragraph("Boehringer Ingelheim, Binger Straße 173, 55216 Ingelheim am Rhein")
+    d.add_paragraph("申办方地址：上海市浦东新区张江路100号")
+    d.add_paragraph("Sites in the United States, Canada and Europe; Day 1 Visit at 8 am.")
+    src = tmp_path / "p.docx"
+    d.save(src)
+    terms = pr.scan([src], vault)
+    got = {t.term: t for t in terms}
+    for term in ("525 Market Street, San Francisco, CA 94105",
+                 "1 Main St., Suite 200, Boston, MA 02110-1234", "San Francisco",
+                 "Binger Straße 173, 55216 Ingelheim am Rhein", "上海市浦东新区张江路100号"):
+        assert term in got and got[term].category == "place", term
+    assert got["Medivation, Inc."].category == "sponsor"   # the company, not its address
+    assert not {"United States", "Canada", "Europe", "Day 1 Visit"} & set(got)
+    for t in terms:
+        t.decision = "OK"
+    res = pr.apply([src], terms, vault, tmp_path / "out", approved_by="tester")
+    text = " ".join(pr.read_text(tmp_path / "out" / res["files"][0]["output"]))
+    for gone in ("Market Street", "San Francisco", "94105", "Boston", "Binger", "张江路"):
+        assert gone not in text, gone
+    assert "PLACE" in text and "United States" in text
