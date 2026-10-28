@@ -524,6 +524,15 @@ _LEAD_WORDS = {"contact", "questions", "please", "call", "email", "ask", "by",
 _INITIAL_STOP = {"food", "drug", "department", "government", "national", "army",
                  "navy", "patent", "pharmacopeia", "pharmacopoeia", "postal",
                  "state", "states", "district", "court", "census", "code"}
+#: Words an outline item starts with: "C. All subjects", "M. Individual
+#: stopping rules". A letter, a full stop and one of these is a heading.
+_OUTLINE_WORDS = frozenset("""all any each every individual individuals other others
+    subject subjects patient patients participant participants total overall general
+    specific additional prior previous current new primary secondary exploratory key
+    unbound bound free mean median maximum minimum number the this these that those
+    in on of for with without if when where after before during within use used using
+    women men female male children adult adults healthy normal abnormal laboratory
+    samples sample results evaluation evaluations criteria""".split())
 
 
 #: Capitalised words a protocol puts in front of an acronym: "Phase III",
@@ -581,7 +590,7 @@ def _initial_names(text: str) -> Iterable[tuple[str, int, int]]:
         rf"(?<![\w.])((?:[A-Z]\.\s?){{1,2}}(?=[A-Z][a-z]{{2}}){_NAME_WORD})", text
     ):
         last = m.group(1).split()[-1].split(".")[-1].lower()
-        if last in _INITIAL_STOP | _HEADING_WORDS | _NAME_STOP:
+        if last in _INITIAL_STOP | _HEADING_WORDS | _NAME_STOP | _OUTLINE_WORDS:
             continue
         yield m.group(1), m.start(1), m.end(1)
 
@@ -1939,9 +1948,10 @@ def residual(out_paths: Iterable[Path], terms: Iterable[str]) -> int:
 def _made_by_masking(term: str, replacements: set[str]) -> bool:
     """A flag the replacements themselves raised: a label ("DRUG A"), part
     of one, or text with a label in it -- "DRUG AI DRUG AG" reads like a
-    company ending in AG, "P-gp DRUG BD" like a name. With the labels taken
-    out, nothing that could name anything may be left: "DRUG A Acme
-    Oncology Inc." is still flagged."""
+    company ending in AG, "P-gp DRUG BD" and "Unbound PLACE K" like a name
+    with its surname in capitals. With the labels taken out, at most one
+    word may be left -- one word alone is never proposed as a name -- so
+    "SPONSOR A Acme Oncology Inc." is still flagged."""
     low = term.lower()
     if low in replacements or any(low in r for r in replacements):
         return True
@@ -1949,7 +1959,8 @@ def _made_by_masking(term: str, replacements: set[str]) -> bool:
     for r in sorted((r for r in replacements if r), key=len, reverse=True):
         rest, n = re.subn(_boundary(r), " ", rest)
         hit = hit or n > 0
-    return hit and not re.search(r"[a-z\u4e00-\u9fa5]{3,}", rest)
+    words = re.findall(r"[a-z\u4e00-\u9fa5][a-z\u4e00-\u9fa5'’.-]{2,}", rest)
+    return hit and len(words) <= 1
 
 
 def apply(

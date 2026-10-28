@@ -673,6 +673,12 @@ def test_a_flag_the_replacements_raised_is_not_a_leak():
     assert not pr._made_by_masking("Acme Oncology", labels)
     assert not pr._made_by_masking("DRUG AIX", labels)
     assert not pr._made_by_masking("SPONSOR A Acme Oncology Inc.", labels)
+    assert pr._made_by_masking("Unbound PLACE K", labels | {"place k"})
+
+
+def test_an_outline_letter_is_not_an_initial():
+    found = [n for n, *_ in pr._initial_names("C. All subjects will be followed. M. Individual stopping rules. J. Smith")]
+    assert found == ["J. Smith"]
 
 
 def test_ind_and_study_numbers_in_the_next_cell_or_line(tmp_path, vault):
