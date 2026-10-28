@@ -65,7 +65,6 @@ CATEGORIES = {
     "study_id": "protocol / registry number",
     "person": "person",
     "contact": "e-mail, phone, web address",
-    "place": "address or place name",
     "site": "hospital, university, CRO",
 }
 
@@ -247,8 +246,7 @@ _INN = (
     r"pramine|triptyline|profen|fenac|coxib|[aeio]tidine|barbital|ampin|ampicin|"
     r"butin|apentine|cistat|nidazole|bendazole|olone|sone|semide|"
     r"thiazide|afil|oquine|otecan|trexate|fosfamide|phosphamide|citabine|"
-    r"uracil|poetin|grastim|limus|sporin|sporine|vudine|darone|cainide|ytoin|"
-    r"bopag|quidar|cridar"
+    r"uracil|poetin|grastim|limus|sporin|sporine|vudine|darone|cainide|ytoin"
 )
 _PHARMA = (
     r"Boehringer[ -]Ingelheim|Eli Lilly(?: and Company)?|Lilly|Pfizer|Merck(?: Sharp & Dohme)?|"
@@ -371,9 +369,7 @@ _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
     # Unlabelled, by shape alone. Each is specific enough that a date, a
     # version or a protocol number does not fit it.
     ("contact", "high", re.compile(  # +86 21 6123 4567, +1 (617) 555-0142
-        r"(?<![\w+])(\+\s?\d{1,3}[\s.-]?(?:\(?\d{1,4}\)?[\s.-]?){2,5}\d{2,4})(?!\d)")),
-    ("contact", "high", re.compile(  # 01 58 10 08 81, 01.58.10.08.81 (France)
-        r"(?<![\d.+-])(0[1-9](?:[\s.]\d{2}){4})(?![\d.])")),
+        r"(?<![\w+])(\+\d{1,3}[\s.-]?(?:\(?\d{1,4}\)?[\s.-]?){2,5}\d{2,4})(?!\d)")),
     ("contact", "high", re.compile(  # 138 1234 5678, 138-1234-5678
         r"(?<![\d-])(1[3-9]\d[\s-]?\d{4}[\s-]?\d{4})(?![\d-])")),
     ("contact", "high", re.compile(  # 021-61234567, (021) 6123-4567, 010 12345678
@@ -526,15 +522,6 @@ _LEAD_WORDS = {"contact", "questions", "please", "call", "email", "ask", "by",
 _INITIAL_STOP = {"food", "drug", "department", "government", "national", "army",
                  "navy", "patent", "pharmacopeia", "pharmacopoeia", "postal",
                  "state", "states", "district", "court", "census", "code"}
-#: Words an outline item starts with: "C. All subjects", "M. Individual
-#: stopping rules". A letter, a full stop and one of these is a heading.
-_OUTLINE_WORDS = frozenset("""all any each every individual individuals other others
-    subject subjects patient patients participant participants total overall general
-    specific additional prior previous current new primary secondary exploratory key
-    unbound bound free mean median maximum minimum number the this these that those
-    in on of for with without if when where after before during within use used using
-    women men female male children adult adults healthy normal abnormal laboratory
-    samples sample results evaluation evaluations criteria""".split())
 
 
 #: Capitalised words a protocol puts in front of an acronym: "Phase III",
@@ -567,29 +554,22 @@ def _caps_surname_names(text: str) -> Iterable[tuple[str, int, int]]:
     surname in capitals, with no role or title needed -- the capitals are
     the cue. A word that only ever stands before an acronym (Phase III,
     Visit EOT) is not a first name, and an acronym is not a surname."""
-    # One line at a time, and a rejected match is tried again from its next
-    # word: "Contact" / "Marie-Claire DUBOIS" in a table read as one match
-    # starting at the heading, and the name inside it was never looked at.
     pat = re.compile(
-        rf"(?<![A-Za-z])({_NAME_WORD}(?:[ \t]+(?:{_NAME_WORD}|[A-Z]\.))?[ \t]+{_CAPS_SURNAME})"
+        rf"(?<![A-Za-z])({_NAME_WORD}(?:\s+(?:{_NAME_WORD}|[A-Z]\.))?\s+{_CAPS_SURNAME})"
     )
-    pos = 0
-    while True:
-        m = pat.search(text, pos)
-        if not m:
-            return
+    for m in pat.finditer(text):
         words = m.group(1).split()
         given, surname = words[0], words[-1]
-        parts = re.split(r"['’-]", surname)
-        if (len(given) < 2 or given.lower() in _NOT_GIVEN | _HEADING_WORDS | _NAME_STOP
-                or any(w.lower() in _NOT_GIVEN | _HEADING_WORDS for w in words[1:-1])
-                or any(p in _NOT_SURNAME for p in parts) or surname in _NOT_SURNAME
-                # FDCB, CRP: an acronym has no vowel more often than not
-                or not re.search(r"[AEIOUY]", surname)):
-            pos = m.start(1) + len(given)
+        if len(given) < 2 or given.lower() in _NOT_GIVEN | _HEADING_WORDS | _NAME_STOP:
             continue
+        if any(w.lower() in _NOT_GIVEN | _HEADING_WORDS for w in words[1:-1]):
+            continue
+        parts = re.split(r"['’-]", surname)
+        if any(p in _NOT_SURNAME for p in parts) or surname in _NOT_SURNAME:
+            continue
+        if not re.search(r"[AEIOUY]", surname):
+            continue  # FDCB, CRP: an acronym has no vowel more often than not
         yield m.group(1), m.start(1), m.end(1)
-        pos = m.end(1)
 
 
 def _initial_names(text: str) -> Iterable[tuple[str, int, int]]:
@@ -599,7 +579,7 @@ def _initial_names(text: str) -> Iterable[tuple[str, int, int]]:
         rf"(?<![\w.])((?:[A-Z]\.\s?){{1,2}}(?=[A-Z][a-z]{{2}}){_NAME_WORD})", text
     ):
         last = m.group(1).split()[-1].split(".")[-1].lower()
-        if last in _INITIAL_STOP | _HEADING_WORDS | _NAME_STOP | _OUTLINE_WORDS:
+        if last in _INITIAL_STOP | _HEADING_WORDS | _NAME_STOP:
             continue
         yield m.group(1), m.start(1), m.end(1)
 
@@ -662,7 +642,7 @@ def _list_names(line: str, found: dict) -> Iterable[tuple[str, int, int, str]]:
         yield n, at + off, at + off + len(n), conf
 
 
-_DRUG_SEP = re.compile(r"\s*(?:,|;|，|、|；|/|[()\[\]（）]|\band\b|\bor\b|&|和|及|与|或)\s*")
+_DRUG_SEP = re.compile(r"\s*(?:,|;|，|、|；|/|\band\b|\bor\b|&|和|及|与|或)\s*")
 _DRUG_LEAD = re.compile(
     r"^.*?(?:[(:：]|\b(?:such as|e\.\s?g\.?,?|eg,|i\.\s?e\.?,?|including|includes?|"
     r"for example|for instance|like)\s+)", re.I)
@@ -684,10 +664,6 @@ _NOT_A_DRUG_WORD = frozenset({
     "table", "appendix", "section", "see", "refer", "list", "following", "include",
     # the study's own product is not one of the drugs in a list of others
     "test", "compound", "investigational", "placebo", "matching", "vehicle",
-    # how and when, not what: "pembrolizumab, lenvatinib, orally"
-    "orally", "oral", "daily", "weekly", "intravenously", "intravenous",
-    "subcutaneously", "alone", "monotherapy", "both", "either", "each",
-    "respectively", "together", "concurrently", "once", "twice", "food", "water",
 })
 
 
@@ -710,40 +686,24 @@ def _list_drugs(line: str, found: dict) -> Iterable[tuple[str, int, int, str]]:
     """Every drug in a list that already holds two found drugs: "strong
     CYP3A4 inhibitors (e.g., ketoconazole, itraconazole, clarithromycin,
     nefazodone, verapamil or St. John's wort)". The stems find some of them;
-    a list masked halfway is worse than either choice made fully.
-
-    A list is a run of items with nothing but names in it: brackets
-    separate items too ("elacridar [GF120918]", "eltrombopag)"), and an
-    item that is a sentence ("within 7 days or 5 half-lives") ends the run.
-    So a whole paragraph can be read at once -- a list running over several
-    printed lines is one list -- without the paragraph's ordinary words
-    being taken for drugs."""
+    a list masked halfway is worse than either choice made fully."""
     parts, pos = [], 0
     for m in _DRUG_SEP.finditer(line):
         parts.append((line[pos:m.start()], pos))
         pos = m.end()
     parts.append((line[pos:], pos))
-
-    def is_known(raw: str) -> bool:
-        k = _key(raw.strip(" \t.。;:"))
-        return k in found and found[k].category in ("drug", "study_id")
-
-    run: list[tuple[str, int, str | None]] = []
-    for raw, at in parts + [("<end of list>", len(line))]:
-        if not raw.strip():
+    if len(parts) < 3:
+        return
+    items = [(raw, at, _drug_item(raw)) for raw, at in parts]
+    known = [n for _, _, n in items
+             if n and _key(n) in found and found[_key(n)].category == "drug"]
+    if len(known) < 2:
+        return
+    for raw, at, n in items:
+        if not n or _key(n) in found:
             continue
-        name = _drug_item(raw)
-        if name or is_known(raw):
-            run.append((raw, at, name))
-            continue
-        drugs = sum(1 for r, _, n in run
-                    if n and _key(n) in found and found[_key(n)].category == "drug")
-        if len(run) >= 3 and drugs >= 2:
-            for r, a, n in run:
-                if n and _key(n) not in found:
-                    off = r.find(n)
-                    yield n, a + off, a + off + len(n), "high" if " " not in n else "medium"
-        run = []
+        off = raw.find(n)
+        yield n, at + off, at + off + len(n), "high" if " " not in n else "medium"
 
 
 #: A label a study number is written after, alone on its line or in its
@@ -779,99 +739,6 @@ def _labelled_ids(lines: list[str]) -> Iterable[tuple[str, str]]:
             yield value, f"{label} {value}"
         elif not ind and _ID_VALUE.fullmatch(value) and not re.fullmatch(r"[\d./-]+", value.replace("-", "")):
             yield value, f"{label} {value}"
-
-
-# ----------------------------------------------------------------------
-# addresses and places
-# ----------------------------------------------------------------------
-_US_STATES = (
-    r"A[LKZR]|C[AOT]|D[EC]|FL|GA|HI|I[DLNA]|K[SY]|LA|M[EDAINSOT]|N[EVHJMYCD]|"
-    r"O[HKR]|PA|RI|S[CD]|T[NX]|UT|V[TA]|W[AVIY]|PR|"
-    # Canadian provinces
-    r"AB|BC|MB|NB|NL|NS|NT|NU|ON|PE|QC|SK|YT"
-)
-_POSTCODE = r"\d{5}(?:-\d{4})?|[A-Z]\d[A-Z][ \t]?\d[A-Z]\d"
-_STREET_SUFFIX = (
-    r"(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Drive|Dr\.?|"
-    r"Lane|Ln\.?|Way|Parkway|Pkwy\.?|Place|Pl\.?|Court|Ct\.?|Square|Sq\.?|"
-    r"Terrace|Highway|Hwy\.?|Circle|Plaza|Row|Crescent|Close)(?![A-Za-z])"
-)
-_CITY = r"[A-Z][a-z]+(?:[ -](?:[A-Z][a-z]+|am|an|der|de|la|le|sur|upon)){0,3}"
-#: 525 Market Street, Suite 2800, San Francisco, CA 94105, USA
-_ADDRESS = re.compile(
-    rf"\b(?P<street>\d{{1,6}}[A-Za-z]?(?:-\d{{1,6}})?[ \t]+(?:[A-Z][A-Za-z.'’-]*[ \t]+){{1,4}}{_STREET_SUFFIX}"
-    rf"|(?:\d{{1,6}}[ \t]*[–-][ \t]*)?\d{{1,4}}(?:st|nd|rd|th)[ \t]+{_STREET_SUFFIX})"
-    r"(?:[ \t]+(?:NW|NE|SW|SE|N|S|E|W)(?![A-Za-z]))?"
-    r"(?:,?[ \t]+(?:Suite|Ste\.?|Floor|Fl\.?|Unit|Building|Bldg\.?|Room|Rm\.?)[ \t]*[\w-]+)?"
-    rf"(?:,[ \t]*(?P<city>{_CITY}))?"
-    rf"(?:,?[ \t]*(?:{_US_STATES})(?![A-Za-z]))?"
-    rf"(?:,?[ \t]*(?:{_POSTCODE}))?"
-)
-#: San Francisco, CA 94105 -- without the street
-_CITY_STATE_ZIP = re.compile(
-    rf"\b(?P<city>{_CITY}),[ \t]*(?:{_US_STATES})[ \t]+(?:{_POSTCODE})\b"
-)
-#: 11 rue Watt 75013 Paris, 12 avenue de la République, 69002 Lyon
-_FR_ADDRESS = re.compile(
-    r"\b\d{1,4}(?:[ \t]?(?:bis|ter))?,?[ \t]+(?:rue|avenue|av\.|boulevard|bd|place|quai|allée|"
-    r"chemin|impasse|cours|route)[ \t]+(?:(?:de|du|des|la|le|l['’]|d['’])[ \t]*)*"
-    r"[A-ZÉÈ][\w'’-]*(?:[ \t]+(?:de|du|des|la|le|[A-ZÉÈ][\w'’-]*)){0,3},?[ \t]+(?:F-)?\d{5}"
-    rf"[ \t]+(?P<city>{_CITY})"
-)
-#: Luis A. de Herrera 1248/1806, 11300 Montevideo -- the number after the
-#: street, then a postcode and the city
-_NUMBER_AFTER = re.compile(
-    r"\b(?:[A-Z][\w'’.-]*|de|del|la|los|las|da|do|di|van|von)"
-    r"(?:[ \t]+(?:[A-Z][\w'’.-]*|de|del|la|los|las|da|do|di|van|von)){0,4}"
-    r"[ \t]+\d{1,5}(?:/\d{1,5})?,[ \t]*(?:[A-Z]{1,2}-)?\d{4,5}"
-    rf"[ \t]+(?P<city>{_CITY})"
-)
-#: Binger Straße 173, 55216 Ingelheim am Rhein
-_STRASSE = re.compile(
-    r"\b[A-ZÄÖÜ][a-zäöüß]+(?:-[A-ZÄÖÜ][a-zäöüß]+)*[ -]?(?:[Ss]traße|[Ss]trasse|weg|platz|allee|gasse|ring|damm)"
-    rf"[ \t]+\d{{1,4}}[a-z]?(?:,[ \t]*(?:D-)?\d{{4,5}}[ \t]+(?P<city>{_CITY}))?"
-)
-#: 北京市朝阳区建国路88号, 上海市浦东新区张江路100号
-_ZH_ADDRESS = re.compile(
-    r"[\u4e00-\u9fa5]{2,8}?(?:省|市|自治区)[\u4e00-\u9fa5]{0,12}?(?:市|区|县)?"
-    r"[\u4e00-\u9fa5\d]{1,16}?(?:路|街|大道|道|巷)[\d\-]+号(?:[\u4e00-\u9fa5\d]{0,10}(?:楼|室|层|座))?"
-)
-#: Places the name model finds that are not worth masking: a country or a
-#: region says nothing about who ran the study.
-_NOT_A_PLACE = frozenset(x.strip() for x in """
-    united states, usa, us, u.s., u.s.a., america, north america, south america,
-    latin america, europe, european union, eu, asia, asia-pacific, africa,
-    middle east, oceania, china, japan, korea, south korea, canada, mexico,
-    brazil, argentina, chile, australia, new zealand, india, uk, united kingdom,
-    great britain, britain, england, scotland, wales, germany, france, italy,
-    spain, portugal, poland, russia, ukraine, netherlands, belgium, switzerland,
-    austria, sweden, norway, denmark, finland, ireland, israel, turkey, greece,
-    hungary, czech republic, czechia, romania, bulgaria, taiwan, singapore,
-    thailand, vietnam, malaysia, philippines, indonesia, south africa, egypt,
-    saudi arabia, west, east, north, south""".split(","))
-
-
-def _places(text: str) -> Iterable[tuple[str, int, int]]:
-    """Addresses, and the city in each: the address is replaced as a whole,
-    the city on its own wherever else it is written."""
-    for pat in (_ADDRESS, _CITY_STATE_ZIP, _STRASSE, _FR_ADDRESS, _NUMBER_AFTER, _ZH_ADDRESS):
-        for m in pat.finditer(text):
-            whole = m.group(0).rstrip(" ,")
-            yield whole, m.start(), m.start() + len(whole)
-            city = m.groupdict().get("city")
-            if city and city.lower() not in _NOT_A_PLACE and city.lower() not in _HEADING_WORDS:
-                yield city, m.start("city"), m.end("city")
-
-
-def _ner_place(frag: str) -> bool:
-    """A place the name model found: a city, a street, a state -- not a
-    country, a region, or a capitalised protocol word."""
-    frag = frag.strip()
-    low = frag.lower()
-    if len(frag) < 3 or not frag[0].isupper() or low in _NOT_A_PLACE:
-        return False
-    return not any(w in _HEADING_WORDS or w in _NAME_STOP or w in _NOT_A_NAME
-                   for w in low.split())
 
 
 def _pinyin_names(text: str) -> Iterable[tuple[str, int, int]]:
@@ -979,14 +846,6 @@ def scan(
         term = re.sub(r"\s+", " ", term).strip(
             " \t,.;:：，。" if category == "contact" else " \t,.;:：，。()（）"
         )
-        if category in ("sponsor", "site"):
-            # "Sponsor: Medivation, Inc., 525 Market Street, San Francisco":
-            # the company, then its address -- a place of its own
-            for pat in (_ADDRESS, _CITY_STATE_ZIP, _STRASSE, _FR_ADDRESS, _NUMBER_AFTER,
-                        _ZH_ADDRESS):
-                cut = pat.search(term)
-                if cut and cut.start() > 0:
-                    term = term[:cut.start()].rstrip(" \t,;:：，")
         if re.search(r"[\u4e00-\u9fa5]", term) and category in ("site", "sponsor", "drug"):
             cut = _ZH_CUT.match(term)
             if cut and 0 < cut.end() and len(term) - cut.end() >= 3:
@@ -995,11 +854,8 @@ def scan(
         if category == "person" and not re.search(r"[\u4e00-\u9fa5]", term):
             # "Xiaofeng" found, "Xiaofeng Li" written: a surname after the
             # match belongs to it, or the masked line reads "PERSON B Li".
-            # On the same line only: in a table the next cell follows the
-            # name after a line break ("Jean-Pierre MARTIN" / "Senior
-            # Clinical Project Coordinator").
             tail = re.match(
-                rf"(?:[ \t]+(?:{_PARTICLE}[ \t]+){{0,2}}(?:{_NAME_WORD}|(?!(?:MD|PHD|RN|NP|DO|MS|MBA|MPH|"
+                rf"(?:{_NSEP}(?:{_NAME_WORD}|(?!(?:MD|PHD|RN|NP|DO|MS|MBA|MPH|"
                 r"PI|CRA|CEO|CMO|VP|USA|UK|PRC)\b)[A-Z]{2,}(?:['’-][A-Z]{2,})*)){1,2}\b",
                 text[end:],
             )
@@ -1018,9 +874,6 @@ def scan(
             term = " ".join(words)
         if len(term) < 2 or term.lower() in _NOT_A_NAME:
             return
-        if category == "person" and not re.search(r"[\u4e00-\u9fa5]", term) and any(
-                w.lower().strip(".,'’") in _NAME_STOP | _HEADING_WORDS for w in term.split()):
-            return  # "Coordinator, Project": a job title in "Surname, Given" shape
         key = _key(term)
         if key in found:
             if _rank(confidence) > _rank(found[key].confidence):
@@ -1074,18 +927,13 @@ def scan(
             add(term, "person", "medium", "pattern", text, start, end)
         for term, start, end in _caps_surname_names(text):
             add(term, "person", "high", "pattern", text, start, end)
-        for term, start, end in _places(text):
-            add(term, "place", "high", "pattern", text, start, end)
         if detector is not None and text.strip():
             for f in detector.detect(text):
                 cat = {"PERSON": "person", "EMAIL_ADDRESS": "contact",
-                       "PHONE_NUMBER": "contact", "URL": "contact",
-                       "LOCATION": "place", "GPE": "place"}.get(f.entity_type)
+                       "PHONE_NUMBER": "contact", "URL": "contact"}.get(f.entity_type)
                 if cat:
                     frag = text[f.start:f.end]
                     if cat == "person" and not _ner_person(frag):
-                        continue
-                    if cat == "place" and not _ner_place(frag):
                         continue
                     add(frag, cat, "medium", "ner", text, f.start, f.end)
 
@@ -1121,21 +969,6 @@ def scan(
             add(line, "person", "high", "signature block", near + " " + line,
                 len(near) + 1, len(near) + 1 + len(line))
 
-    # The same, one line at a time: a PDF table often comes out as one block
-    # per row or per column ("Valerie Rossi" / "Director, Quality Assurance").
-    flat_lines = [ln.strip() for text in texts for ln in text.splitlines() if ln.strip()]
-    for i, line in enumerate(flat_lines):
-        if (not re.fullmatch(_PNAME, line) or line.lower() in _NOT_A_NAME
-                or _ROLE_NEAR.search(line)
-                or any(w.lower().strip("'’") in _HEADING_WORDS | _NAME_STOP | _OUTLINE_WORDS
-                       for w in line.split())):
-            continue
-        near = " ".join(t for t in flat_lines[max(0, i - 2):i] + flat_lines[i + 1:i + 3]
-                        if len(t) <= 80)
-        if _ROLE_NEAR.search(near):
-            add(line, "person", "high", "table row", near + " " + line,
-                len(near) + 1, len(near) + 1 + len(line))
-
     # A list of people: "Investigators: John Smith, Mary Jones and Wei Zhang",
     # "研究者：张伟、李娜、王芳". The patterns above find the name the cue sits
     # next to and stop; every other item in the same list is a name too.
@@ -1154,9 +987,9 @@ def scan(
 
     # A list of drugs, in a sentence or one per bullet or table cell.
     for text in texts:
-        para = re.sub(r"\s*\n\s*", " ", text)
-        for term, start, end, conf in _list_drugs(para, found):
-            add(term, "drug", conf, "list", para, start, end)
+        for line in text.splitlines():
+            for term, start, end, conf in _list_drugs(line, found):
+                add(term, "drug", conf, "list", line, start, end)
     run: list[str] = []
     for text in texts + [""]:
         item = _drug_item(text) if len(text) <= 60 else None
@@ -1199,19 +1032,14 @@ def scan(
             if d.term.upper().startswith(tok) and tok != d.term.upper():
                 add(tok, "drug", "high", "abbreviation", joined, x.start(), x.end())
                 aliases[tok.lower()] = d.term.lower()
-        # The drug name in any case, the brand with its capital: under one
-        # case-blind flag "inhibitors (boceprevir" made "inhibitors" a brand
-        # of boceprevir, and every "inhibitors (" in the protocol DRUG A.
-        name = f"(?i:{_boundary(d.term)})"
+        name = _boundary(d.term)
         for pat in (
             rf"\b([A-Z][A-Za-z]{{3,}})\s*[®™]?\s*\(\s*{name}",
             rf"{name}\s*\(\s*([A-Z][A-Za-z]{{3,}}|[A-Z]{{1,5}}[- ]?\d{{3,6}}[A-Z]?)\s*[®™]?\s*\)",
         ):
-            for x in re.finditer(pat, joined):
+            for x in re.finditer(pat, joined, flags=re.I):
                 brand = x.group(1)
-                low = brand.lower()
-                if (low in _NOT_A_BRAND or low == d.term.lower()
-                        or low in _NOT_A_DRUG_WORD or low in _HEADING_WORDS):
+                if brand.lower() in _NOT_A_BRAND or brand.lower() == d.term.lower():
                     continue
                 add(brand, "drug", "high", "brand", joined, x.start(1), x.end(1))
                 aliases[brand.lower()] = d.term.lower()
@@ -1266,8 +1094,6 @@ def propose(t: Term, vault: Vault, labels: dict[str, str] | None = None) -> str:
         return vault.label_map("person", [key.upper()], prefix="PERSON")[key.upper()]
     if t.category == "study_id":
         return vault.surrogate_for("studyid", key, preserve_format=True)
-    if t.category == "place":
-        return vault.label_map("place", [key.upper()], prefix="PLACE")[key.upper()]
     return dummy_value(key, vault)  # contact details: same shape, no content
 
 
@@ -1961,10 +1787,9 @@ def residual(out_paths: Iterable[Path], terms: Iterable[str]) -> int:
 def _made_by_masking(term: str, replacements: set[str]) -> bool:
     """A flag the replacements themselves raised: a label ("DRUG A"), part
     of one, or text with a label in it -- "DRUG AI DRUG AG" reads like a
-    company ending in AG, "P-gp DRUG BD" and "Unbound PLACE K" like a name
-    with its surname in capitals. With the labels taken out, at most one
-    word may be left -- one word alone is never proposed as a name -- so
-    "SPONSOR A Acme Oncology Inc." is still flagged."""
+    company ending in AG, "P-gp DRUG BD" like a name. With the labels taken
+    out, nothing that could name anything may be left: "DRUG A Acme
+    Oncology Inc." is still flagged."""
     low = term.lower()
     if low in replacements or any(low in r for r in replacements):
         return True
@@ -1972,8 +1797,7 @@ def _made_by_masking(term: str, replacements: set[str]) -> bool:
     for r in sorted((r for r in replacements if r), key=len, reverse=True):
         rest, n = re.subn(_boundary(r), " ", rest)
         hit = hit or n > 0
-    words = re.findall(r"[a-z\u4e00-\u9fa5][a-z\u4e00-\u9fa5'’.-]{2,}", rest)
-    return hit and len(words) <= 1
+    return hit and not re.search(r"[a-z\u4e00-\u9fa5]{3,}", rest)
 
 
 def apply(
