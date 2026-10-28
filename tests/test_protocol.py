@@ -673,3 +673,39 @@ def test_a_flag_the_replacements_raised_is_not_a_leak():
     assert not pr._made_by_masking("Acme Oncology", labels)
     assert not pr._made_by_masking("DRUG AIX", labels)
     assert not pr._made_by_masking("SPONSOR A Acme Oncology Inc.", labels)
+
+
+def test_ind_and_study_numbers_in_the_next_cell_or_line(tmp_path, vault):
+    pm = pytest.importorskip("pymupdf")
+    d = docx.Document()
+    t = d.add_table(rows=3, cols=2)
+    for i, (label, value) in enumerate([("IND #", "123456"), ("EudraCT Number", "2018-001234-56"),
+                                        ("Sponsor Protocol No.", "ABC-123")]):
+        t.cell(i, 0).text, t.cell(i, 1).text = label, value
+    d.add_paragraph("IND #: 456,789 and US IND 115,343")
+    d.add_paragraph("Protocol")
+    d.add_paragraph("2.0")
+    d.add_paragraph("Study")
+    d.add_paragraph("Day 15")
+    src = tmp_path / "p.docx"
+    d.save(src)
+    p = tmp_path / "p.pdf"
+    doc = pm.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "IND Number")
+    page.insert_text((72, 86), "765432")
+    doc.save(str(p))
+
+    terms = pr.scan([src, p], vault)
+    got = {t.term: t.category for t in terms}
+    for value in ("123456", "2018-001234-56", "ABC-123", "456,789", "115,343", "765432"):
+        assert got.get(value) == "study_id", value
+    assert "2.0" not in got and "Day 15" not in got
+    for t in terms:
+        t.decision = "OK"
+    res = pr.apply([src, p], terms, vault, tmp_path / "out", approved_by="tester")
+    assert res["manifest"]["residual_occurrences"] == 0
+    text = " ".join(b for f in res["files"]
+                    for b in pr.read_text(tmp_path / "out" / f["output"]))
+    for value in ("123456", "456,789", "115,343", "765432", "ABC-123"):
+        assert value not in text, value

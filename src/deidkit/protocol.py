@@ -304,7 +304,7 @@ _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
     ("study_id", "high", re.compile(r"\b(?:19|20)\d{2}-5\d{5}-\d{2}(?:-\d{2})?\b")),  # CTIS
     ("study_id", "high", re.compile(r"\b(?:19|20)\d{2}-\d{6}-\d{2}\b")),  # EudraCT
     ("study_id", "high", re.compile(
-        r"(?i:\bIND\s*(?:No\.?|Number|#)?\s*[:：]?\s*)(\d{5,6})\b")),
+        r"(?i:\bIND\s*(?:No\.?|Number|#)?\s*[:：#]?\s*)(\d{2,3},\d{3}|\d{5,6})(?![\d,])")),
     ("study_id", "high", re.compile(
         r"(?i:protocol\s*(?:no\.?|number|id|code|编号)?\s*[:：#]?\s*)"
         r"([A-Z0-9][A-Z0-9_./-]*\d[A-Z0-9_./-]*)")),
@@ -706,6 +706,41 @@ def _list_drugs(line: str, found: dict) -> Iterable[tuple[str, int, int, str]]:
         yield n, at + off, at + off + len(n), "high" if " " not in n else "medium"
 
 
+#: A label a study number is written after, alone on its line or in its
+#: table cell, with the number on the next line or in the next cell:
+#: "IND #" | "123456", "EudraCT Number" | "2018-001234-56".
+_ID_LABEL = re.compile(
+    r"(?i)^\s*(?:(?:US\s+|FDA\s+)?IND|EudraCT|CTIS|EU\s*CT|NCT|ClinicalTrials\.gov|"
+    r"Registry|Registration|(?:(?:Sponsor|Company)\s+)?(?:Protocol|Study|Trial))"
+    r"(?:\s*(?:No\.?|Number|#|ID|Identifier|Code|Registration\s+(?:No\.?|Number)))?"
+    r"\s*[:：#]?\s*$"
+)
+_ID_QUALIFIED = re.compile(r"(?i)(?:No\.?|Number|#|ID|Identifier|Code)\s*[:：#]?\s*$")
+_IND_VALUE = re.compile(r"\d{2,3},\d{3}|\d{5,6}")
+_ID_VALUE = re.compile(r"(?=[A-Za-z0-9_./-]*[A-Za-z-])(?=[A-Za-z0-9_./-]*\d)[A-Za-z0-9][A-Za-z0-9_./-]{4,39}")
+
+
+def _labelled_ids(lines: list[str]) -> Iterable[tuple[str, str]]:
+    """Study numbers written in the cell or on the line after their label.
+    Yields (value, context). IND takes a bare 5-6 digit number (123,456
+    too); the others need letters or a hyphen with the digits, so a
+    "Protocol" heading followed by "2.0" is not a number."""
+    lines = [ln.strip() for ln in lines]
+    for i, label in enumerate(lines):
+        m = _ID_LABEL.match(label)
+        if not m:
+            continue
+        head = label.split()[0].upper() if label.split() else ""
+        if head in ("PROTOCOL", "STUDY", "TRIAL", "SPONSOR", "COMPANY") and not _ID_QUALIFIED.search(label):
+            continue
+        value = next((ln for ln in lines[i + 1:i + 3] if ln), "")
+        ind = re.search(r"(?i)\bIND\b", label)
+        if ind and _IND_VALUE.fullmatch(value):
+            yield value, f"{label} {value}"
+        elif not ind and _ID_VALUE.fullmatch(value) and not re.fullmatch(r"[\d./-]+", value.replace("-", "")):
+            yield value, f"{label} {value}"
+
+
 def _pinyin_names(text: str) -> Iterable[tuple[str, int, int]]:
     """Chinese names romanised: Zhang Wei, Wei Zhang, WANG Jianguo,
     Jian-Guo Wang -- a pinyin surname beside a given name made of pinyin
@@ -941,6 +976,14 @@ def scan(
         for line in text.splitlines():
             for term, start, end, conf in _list_names(line, found):
                 add(term, "person", conf, "list", line, start, end)
+
+    # A study number in the cell or on the line after its label.
+    flat = [ln for text in texts for ln in text.splitlines()]
+    for value, ctx in _labelled_ids(flat):
+        key = _key(value)
+        if key in found and found[key].category == "drug" and found[key].source == "pattern":
+            found[key].category = "study_id"   # ABC-123 after "Protocol No.": not a compound
+        add(value, "study_id", "high", "label", ctx, len(ctx) - len(value), len(ctx))
 
     # A list of drugs, in a sentence or one per bullet or table cell.
     for text in texts:
