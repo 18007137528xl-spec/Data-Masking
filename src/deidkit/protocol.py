@@ -246,7 +246,8 @@ _INN = (
     r"pramine|triptyline|profen|fenac|coxib|[aeio]tidine|barbital|ampin|ampicin|"
     r"butin|apentine|cistat|nidazole|bendazole|olone|sone|semide|"
     r"thiazide|afil|oquine|otecan|trexate|fosfamide|phosphamide|citabine|"
-    r"uracil|poetin|grastim|limus|sporin|sporine|vudine|darone|cainide|ytoin"
+    r"uracil|poetin|grastim|limus|sporin|sporine|vudine|darone|cainide|ytoin|"
+    r"bopag|quidar|cridar"
 )
 _PHARMA = (
     r"Boehringer[ -]Ingelheim|Eli Lilly(?: and Company)?|Lilly|Pfizer|Merck(?: Sharp & Dohme)?|"
@@ -642,7 +643,7 @@ def _list_names(line: str, found: dict) -> Iterable[tuple[str, int, int, str]]:
         yield n, at + off, at + off + len(n), conf
 
 
-_DRUG_SEP = re.compile(r"\s*(?:,|;|，|、|；|/|\band\b|\bor\b|&|和|及|与|或)\s*")
+_DRUG_SEP = re.compile(r"\s*(?:,|;|，|、|；|/|[()\[\]（）]|\band\b|\bor\b|&|和|及|与|或)\s*")
 _DRUG_LEAD = re.compile(
     r"^.*?(?:[(:：]|\b(?:such as|e\.\s?g\.?,?|eg,|i\.\s?e\.?,?|including|includes?|"
     r"for example|for instance|like)\s+)", re.I)
@@ -664,6 +665,10 @@ _NOT_A_DRUG_WORD = frozenset({
     "table", "appendix", "section", "see", "refer", "list", "following", "include",
     # the study's own product is not one of the drugs in a list of others
     "test", "compound", "investigational", "placebo", "matching", "vehicle",
+    # how and when, not what: "pembrolizumab, lenvatinib, orally"
+    "orally", "oral", "daily", "weekly", "intravenously", "intravenous",
+    "subcutaneously", "alone", "monotherapy", "both", "either", "each",
+    "respectively", "together", "concurrently", "once", "twice", "food", "water",
 })
 
 
@@ -686,24 +691,40 @@ def _list_drugs(line: str, found: dict) -> Iterable[tuple[str, int, int, str]]:
     """Every drug in a list that already holds two found drugs: "strong
     CYP3A4 inhibitors (e.g., ketoconazole, itraconazole, clarithromycin,
     nefazodone, verapamil or St. John's wort)". The stems find some of them;
-    a list masked halfway is worse than either choice made fully."""
+    a list masked halfway is worse than either choice made fully.
+
+    A list is a run of items with nothing but names in it: brackets
+    separate items too ("elacridar [GF120918]", "eltrombopag)"), and an
+    item that is a sentence ("within 7 days or 5 half-lives") ends the run.
+    So a whole paragraph can be read at once -- a list running over several
+    printed lines is one list -- without the paragraph's ordinary words
+    being taken for drugs."""
     parts, pos = [], 0
     for m in _DRUG_SEP.finditer(line):
         parts.append((line[pos:m.start()], pos))
         pos = m.end()
     parts.append((line[pos:], pos))
-    if len(parts) < 3:
-        return
-    items = [(raw, at, _drug_item(raw)) for raw, at in parts]
-    known = [n for _, _, n in items
-             if n and _key(n) in found and found[_key(n)].category == "drug"]
-    if len(known) < 2:
-        return
-    for raw, at, n in items:
-        if not n or _key(n) in found:
+
+    def is_known(raw: str) -> bool:
+        k = _key(raw.strip(" \t.。;:"))
+        return k in found and found[k].category in ("drug", "study_id")
+
+    run: list[tuple[str, int, str | None]] = []
+    for raw, at in parts + [("<end of list>", len(line))]:
+        if not raw.strip():
             continue
-        off = raw.find(n)
-        yield n, at + off, at + off + len(n), "high" if " " not in n else "medium"
+        name = _drug_item(raw)
+        if name or is_known(raw):
+            run.append((raw, at, name))
+            continue
+        drugs = sum(1 for r, _, n in run
+                    if n and _key(n) in found and found[_key(n)].category == "drug")
+        if len(run) >= 3 and drugs >= 2:
+            for r, a, n in run:
+                if n and _key(n) not in found:
+                    off = r.find(n)
+                    yield n, a + off, a + off + len(n), "high" if " " not in n else "medium"
+        run = []
 
 
 #: A label a study number is written after, alone on its line or in its
@@ -987,9 +1008,9 @@ def scan(
 
     # A list of drugs, in a sentence or one per bullet or table cell.
     for text in texts:
-        for line in text.splitlines():
-            for term, start, end, conf in _list_drugs(line, found):
-                add(term, "drug", conf, "list", line, start, end)
+        para = re.sub(r"\s*\n\s*", " ", text)
+        for term, start, end, conf in _list_drugs(para, found):
+            add(term, "drug", conf, "list", para, start, end)
     run: list[str] = []
     for text in texts + [""]:
         item = _drug_item(text) if len(text) <= 60 else None
@@ -1513,11 +1534,21 @@ def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
             # term wrapped onto the next line ("Example" / "Biologics, Inc")
             # is still found -- and redacted on both lines.
             chars: list[dict[str, Any]] = []
-            for li, line in enumerate(block.get("lines", [])):
+            for li, segs in enumerate(_visual_lines(block.get("lines", []))):
                 if chars:
                     chars.append({"c": "\n", "bbox": None})
-                own = [{**ch, "span": span, "line": (bi, li)}
-                       for span in line["spans"] for ch in span["chars"]]
+                own: list[dict[str, Any]] = []
+                for line in segs:
+                    seg = [{**ch, "span": span, "line": (bi, li)}
+                           for span in line["spans"] for ch in span["chars"]]
+                    if own and seg and not own[-1]["c"].isspace() and not seg[0]["c"].isspace():
+                        # the gap between two pieces of one line is a space
+                        a, b = own[-1], seg[0]
+                        own.append({"c": " ", "span": a["span"], "line": (bi, li),
+                                    "origin": (a["bbox"][2], a["origin"][1]),
+                                    "bbox": (a["bbox"][2], a["bbox"][1],
+                                             max(a["bbox"][2], b["bbox"][0]), a["bbox"][3])})
+                    own += seg
                 for k, ch in enumerate(own):
                     ch["k"] = k
                 lines_of[(bi, li)] = own
@@ -1630,6 +1661,27 @@ def _draw_run(pm, page, origin, text: str, span: dict[str, Any], width: float | 
     )
 
 
+def _visual_lines(lines: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """A block's lines, with the pieces of one printed line put back
+    together. Justified text often comes out as a line per word or phrase,
+    each with its own position; planned one piece at a time, a replacement
+    longer than its term pushed its piece into the next one ("DRUG BE,or",
+    "ofDRUG BJ"), which did not move."""
+    out: list[list[dict[str, Any]]] = []
+    for line in lines:
+        if not line.get("spans"):
+            continue
+        if out:
+            prev = out[-1][-1]
+            pb, lb = prev["bbox"], line["bbox"]
+            same_row = abs(pb[3] - lb[3]) <= 0.35 * max(1.0, pb[3] - pb[1])
+            if same_row and lb[0] >= pb[2] - 1 and prev.get("dir", (1, 0)) == line.get("dir", (1, 0)):
+                out[-1].append(line)
+                continue
+        out.append([line])
+    return out
+
+
 def _plan_line(pm, page, chars: list[dict[str, Any]], hits: list[tuple[int, int, str]],
                drawings: list[dict[str, Any]]) -> dict[str, Any]:
     """What to redact and what to write for one line with replacements."""
@@ -1684,10 +1736,11 @@ def _plan_line(pm, page, chars: list[dict[str, Any]], hits: list[tuple[int, int,
             j += 1
         run = "".join(c["c"] for c in chars[i:j])
         if run.strip():
-            # skip leading spaces: the run starts where its first glyph was
+            # skip leading spaces: the run starts where its first glyph was,
+            # and is as wide as its glyphs, not the gap after them
             lead = len(run) - len(run.lstrip())
             k = i + lead
-            r = box(k, j)
+            r = box(k, j - (len(run) - len(run.rstrip())))
             span = chars[k]["span"]
             text = run.strip()
             fit = r.width / (need(text, span) or 1)

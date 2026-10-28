@@ -709,3 +709,51 @@ def test_ind_and_study_numbers_in_the_next_cell_or_line(tmp_path, vault):
                     for b in pr.read_text(tmp_path / "out" / f["output"]))
     for value in ("123456", "456,789", "115,343", "765432", "ABC-123"):
         assert value not in text, value
+
+
+def test_a_drug_list_over_several_pdf_lines_is_masked_whole(tmp_path, vault):
+    pm = pytest.importorskip("pymupdf")
+    lines = [
+        "Use of P-gp inhibitors (amiodarone, carvedilol, clarithromycin, dronedarone,",
+        "itraconazole, lapatinib, lopinavir and ritonavir, propafenone, quinidine,",
+        "ranolazine, saquinavir, tipranavir, valspodar, verapamil, elacridar",
+        "[GF120918], and eltrombopag) within 7 days or 5 half-lives of the first dose.",
+        "",
+        "Patients receive pembrolizumab, lenvatinib, orally, until progression.",
+    ]
+    src = tmp_path / "p.pdf"
+    doc = pm.open()
+    page = doc.new_page()
+    tw = pm.TextWriter(page.rect)
+    y = 72
+    for ln in lines:
+        if ln:
+            tw.append((72, y), ln, fontsize=9)
+        y += 12 if ln else 24
+    tw.write_text(page)
+    doc.save(str(src))
+    found = {t.term.lower(): t for t in pr.scan([src], vault)}
+    for drug in ("amiodarone", "carvedilol", "propafenone", "quinidine", "ranolazine",
+                 "valspodar", "elacridar", "eltrombopag", "gf120918", "lopinavir"):
+        assert drug in found, drug
+    assert "orally" not in found and "within 7 days" not in found
+
+
+def test_a_line_printed_in_pieces_keeps_its_spaces(tmp_path):
+    pm = pytest.importorskip("pymupdf")
+    src = tmp_path / "seg.pdf"
+    doc = pm.open()
+    page = doc.new_page()
+    x = 72
+    for w in ["Use", "of", "ritonavir,", "or", "saquinavir", "of", "nelfinavir"]:
+        page.insert_text((x, 100), w, fontname="tiro", fontsize=10)
+        x += pm.get_text_length(w, fontname="tiro", fontsize=10) + 9
+    doc.save(str(src))
+    out = tmp_path / "out.pdf"
+    pr._write_pdf(src, out, {"ritonavir": "DRUG BE", "saquinavir": "DRUG AL",
+                             "nelfinavir": "DRUG BJ"})
+    with pm.open(str(out)) as d:
+        words = d[0].get_text("words")
+    boxes = sorted((w[0], w[2], w[4]) for w in words)
+    for (a0, a1, a), (b0, b1, b) in zip(boxes, boxes[1:]):
+        assert b0 - a1 >= 2, f"{a!r} runs into {b!r}"
