@@ -814,3 +814,47 @@ def test_addresses_and_their_cities_are_masked(tmp_path, vault):
     for gone in ("Market Street", "San Francisco", "94105", "Boston", "Binger", "张江路"):
         assert gone not in text, gone
     assert "PLACE" in text and "United States" in text
+
+
+def test_a_team_table_keeps_its_cells(tmp_path, vault):
+    pm = pytest.importorskip("pymupdf")
+    src = tmp_path / "team.pdf"
+    doc = pm.open()
+    page = doc.new_page()
+    rows = [("TRIO - 11 rue Watt 75013 Paris", "", ""),
+            ("Name", "Position", "Contact"),
+            ("Jean-Pierre MARTIN", "Senior Clinical Project", "+ 33 1 58 10 08 92"),
+            ("", "Coordinator, Project", ""),
+            ("Valerie Rossi", "Director, Quality Assurance", "+ 33 1 58 10 08 86"),
+            ("Karen WILSON", "Director, Clinical Operations", ""),
+            ("TRIO - Suite 1100, 9925 - 109th Street NW, Edmonton, AB T5K2J8", "", ""),
+            ("TRIO - Luis A. de Herrera 1248/1806, 11300 Montevideo", "", "")]
+    y = 80
+    for a, b, c in rows:
+        for x, txt in ((74, a), (204, b), (384, c)):
+            if txt:
+                page.insert_text((x, y), txt, fontsize=9)
+        y += 14
+    for x in (70, 200, 380, 540):                       # the table's borders
+        page.draw_line((x, 68), (x, y - 8))
+    doc.save(str(src))
+
+    terms = pr.scan([src], vault)
+    got = {t.term: t.category for t in terms}
+    for name in ("Jean-Pierre MARTIN", "Valerie Rossi", "Karen WILSON"):
+        assert got.get(name) == "person", name
+    assert not any("Senior" in t or "Coordinator" in t for t in got)
+    for phone in ("+ 33 1 58 10 08 92", "+ 33 1 58 10 08 86"):
+        assert got.get(phone) == "contact", phone
+    for place in ("11 rue Watt 75013 Paris", "9925 - 109th Street NW, Edmonton, AB T5K2J8",
+                  "Luis A. de Herrera 1248/1806, 11300 Montevideo"):
+        assert got.get(place) == "place", place
+    for t in terms:
+        t.decision = "OK"
+    res = pr.apply([src], terms, vault, tmp_path / "out", approved_by="tester")
+    text = " ".join(pr.read_text(tmp_path / "out" / res["files"][0]["output"]))
+    for kept in ("Senior Clinical Project", "Coordinator, Project", "Director, Quality Assurance"):
+        assert kept in text, kept
+    for gone in ("MARTIN", "Rossi", "WILSON", "58 10 08", "Watt", "Edmonton", "Herrera"):
+        assert gone not in text, gone
+    assert not res["still_flagged"]

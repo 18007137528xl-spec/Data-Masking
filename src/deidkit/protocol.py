@@ -371,7 +371,9 @@ _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
     # Unlabelled, by shape alone. Each is specific enough that a date, a
     # version or a protocol number does not fit it.
     ("contact", "high", re.compile(  # +86 21 6123 4567, +1 (617) 555-0142
-        r"(?<![\w+])(\+\d{1,3}[\s.-]?(?:\(?\d{1,4}\)?[\s.-]?){2,5}\d{2,4})(?!\d)")),
+        r"(?<![\w+])(\+\s?\d{1,3}[\s.-]?(?:\(?\d{1,4}\)?[\s.-]?){2,5}\d{2,4})(?!\d)")),
+    ("contact", "high", re.compile(  # 01 58 10 08 81, 01.58.10.08.81 (France)
+        r"(?<![\d.+-])(0[1-9](?:[\s.]\d{2}){4})(?![\d.])")),
     ("contact", "high", re.compile(  # 138 1234 5678, 138-1234-5678
         r"(?<![\d-])(1[3-9]\d[\s-]?\d{4}[\s-]?\d{4})(?![\d-])")),
     ("contact", "high", re.compile(  # 021-61234567, (021) 6123-4567, 010 12345678
@@ -565,22 +567,29 @@ def _caps_surname_names(text: str) -> Iterable[tuple[str, int, int]]:
     surname in capitals, with no role or title needed -- the capitals are
     the cue. A word that only ever stands before an acronym (Phase III,
     Visit EOT) is not a first name, and an acronym is not a surname."""
+    # One line at a time, and a rejected match is tried again from its next
+    # word: "Contact" / "Marie-Claire DUBOIS" in a table read as one match
+    # starting at the heading, and the name inside it was never looked at.
     pat = re.compile(
-        rf"(?<![A-Za-z])({_NAME_WORD}(?:\s+(?:{_NAME_WORD}|[A-Z]\.))?\s+{_CAPS_SURNAME})"
+        rf"(?<![A-Za-z])({_NAME_WORD}(?:[ \t]+(?:{_NAME_WORD}|[A-Z]\.))?[ \t]+{_CAPS_SURNAME})"
     )
-    for m in pat.finditer(text):
+    pos = 0
+    while True:
+        m = pat.search(text, pos)
+        if not m:
+            return
         words = m.group(1).split()
         given, surname = words[0], words[-1]
-        if len(given) < 2 or given.lower() in _NOT_GIVEN | _HEADING_WORDS | _NAME_STOP:
-            continue
-        if any(w.lower() in _NOT_GIVEN | _HEADING_WORDS for w in words[1:-1]):
-            continue
         parts = re.split(r"['’-]", surname)
-        if any(p in _NOT_SURNAME for p in parts) or surname in _NOT_SURNAME:
+        if (len(given) < 2 or given.lower() in _NOT_GIVEN | _HEADING_WORDS | _NAME_STOP
+                or any(w.lower() in _NOT_GIVEN | _HEADING_WORDS for w in words[1:-1])
+                or any(p in _NOT_SURNAME for p in parts) or surname in _NOT_SURNAME
+                # FDCB, CRP: an acronym has no vowel more often than not
+                or not re.search(r"[AEIOUY]", surname)):
+            pos = m.start(1) + len(given)
             continue
-        if not re.search(r"[AEIOUY]", surname):
-            continue  # FDCB, CRP: an acronym has no vowel more often than not
         yield m.group(1), m.start(1), m.end(1)
+        pos = m.end(1)
 
 
 def _initial_names(text: str) -> Iterable[tuple[str, int, int]]:
@@ -777,8 +786,11 @@ def _labelled_ids(lines: list[str]) -> Iterable[tuple[str, str]]:
 # ----------------------------------------------------------------------
 _US_STATES = (
     r"A[LKZR]|C[AOT]|D[EC]|FL|GA|HI|I[DLNA]|K[SY]|LA|M[EDAINSOT]|N[EVHJMYCD]|"
-    r"O[HKR]|PA|RI|S[CD]|T[NX]|UT|V[TA]|W[AVIY]|PR"
+    r"O[HKR]|PA|RI|S[CD]|T[NX]|UT|V[TA]|W[AVIY]|PR|"
+    # Canadian provinces
+    r"AB|BC|MB|NB|NL|NS|NT|NU|ON|PE|QC|SK|YT"
 )
+_POSTCODE = r"\d{5}(?:-\d{4})?|[A-Z]\d[A-Z]\s?\d[A-Z]\d"
 _STREET_SUFFIX = (
     r"(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Drive|Dr\.?|"
     r"Lane|Ln\.?|Way|Parkway|Pkwy\.?|Place|Pl\.?|Court|Ct\.?|Square|Sq\.?|"
@@ -787,15 +799,32 @@ _STREET_SUFFIX = (
 _CITY = r"[A-Z][a-z]+(?:[ -](?:[A-Z][a-z]+|am|an|der|de|la|le|sur|upon)){0,3}"
 #: 525 Market Street, Suite 2800, San Francisco, CA 94105, USA
 _ADDRESS = re.compile(
-    rf"\b(?P<street>\d{{1,6}}[A-Za-z]?(?:-\d{{1,6}})?\s+(?:[A-Z][A-Za-z.'’-]*\s+){{1,4}}{_STREET_SUFFIX})"
+    rf"\b(?P<street>\d{{1,6}}[A-Za-z]?(?:-\d{{1,6}})?\s+(?:[A-Z][A-Za-z.'’-]*\s+){{1,4}}{_STREET_SUFFIX}"
+    rf"|(?:\d{{1,6}}\s*[–-]\s*)?\d{{1,4}}(?:st|nd|rd|th)\s+{_STREET_SUFFIX})"
+    r"(?:\s+(?:NW|NE|SW|SE|N|S|E|W)(?![A-Za-z]))?"
     r"(?:,?\s+(?:Suite|Ste\.?|Floor|Fl\.?|Unit|Building|Bldg\.?|Room|Rm\.?)\s*[\w-]+)?"
     rf"(?:,\s*(?P<city>{_CITY}))?"
     rf"(?:,?\s*(?:{_US_STATES})(?![A-Za-z]))?"
-    r"(?:,?\s*\d{5}(?:-\d{4})?)?"
+    rf"(?:,?\s*(?:{_POSTCODE}))?"
 )
 #: San Francisco, CA 94105 -- without the street
 _CITY_STATE_ZIP = re.compile(
-    rf"\b(?P<city>{_CITY}),\s*(?:{_US_STATES})\s+\d{{5}}(?:-\d{{4}})?\b"
+    rf"\b(?P<city>{_CITY}),\s*(?:{_US_STATES})\s+(?:{_POSTCODE})\b"
+)
+#: 11 rue Watt 75013 Paris, 12 avenue de la République, 69002 Lyon
+_FR_ADDRESS = re.compile(
+    r"\b\d{1,4}(?:\s?(?:bis|ter))?,?\s+(?:rue|avenue|av\.|boulevard|bd|place|quai|allée|"
+    r"chemin|impasse|cours|route)\s+(?:(?:de|du|des|la|le|l['’]|d['’])\s*)*"
+    r"[A-ZÉÈ][\w'’-]*(?:\s+(?:de|du|des|la|le|[A-ZÉÈ][\w'’-]*)){0,3},?\s+(?:F-)?\d{5}"
+    rf"\s+(?P<city>{_CITY})"
+)
+#: Luis A. de Herrera 1248/1806, 11300 Montevideo -- the number after the
+#: street, then a postcode and the city
+_NUMBER_AFTER = re.compile(
+    r"\b(?:[A-Z][\w'’.-]*|de|del|la|los|las|da|do|di|van|von)"
+    r"(?:\s+(?:[A-Z][\w'’.-]*|de|del|la|los|las|da|do|di|van|von)){0,4}"
+    r"\s+\d{1,5}(?:/\d{1,5})?,\s*(?:[A-Z]{1,2}-)?\d{4,5}"
+    rf"\s+(?P<city>{_CITY})"
 )
 #: Binger Straße 173, 55216 Ingelheim am Rhein
 _STRASSE = re.compile(
@@ -825,7 +854,7 @@ _NOT_A_PLACE = frozenset(x.strip() for x in """
 def _places(text: str) -> Iterable[tuple[str, int, int]]:
     """Addresses, and the city in each: the address is replaced as a whole,
     the city on its own wherever else it is written."""
-    for pat in (_ADDRESS, _CITY_STATE_ZIP, _STRASSE, _ZH_ADDRESS):
+    for pat in (_ADDRESS, _CITY_STATE_ZIP, _STRASSE, _FR_ADDRESS, _NUMBER_AFTER, _ZH_ADDRESS):
         for m in pat.finditer(text):
             whole = m.group(0).rstrip(" ,")
             yield whole, m.start(), m.start() + len(whole)
@@ -953,7 +982,8 @@ def scan(
         if category in ("sponsor", "site"):
             # "Sponsor: Medivation, Inc., 525 Market Street, San Francisco":
             # the company, then its address -- a place of its own
-            for pat in (_ADDRESS, _CITY_STATE_ZIP, _STRASSE, _ZH_ADDRESS):
+            for pat in (_ADDRESS, _CITY_STATE_ZIP, _STRASSE, _FR_ADDRESS, _NUMBER_AFTER,
+                        _ZH_ADDRESS):
                 cut = pat.search(term)
                 if cut and cut.start() > 0:
                     term = term[:cut.start()].rstrip(" \t,;:：，")
@@ -965,8 +995,11 @@ def scan(
         if category == "person" and not re.search(r"[\u4e00-\u9fa5]", term):
             # "Xiaofeng" found, "Xiaofeng Li" written: a surname after the
             # match belongs to it, or the masked line reads "PERSON B Li".
+            # On the same line only: in a table the next cell follows the
+            # name after a line break ("Jean-Pierre MARTIN" / "Senior
+            # Clinical Project Coordinator").
             tail = re.match(
-                rf"(?:{_NSEP}(?:{_NAME_WORD}|(?!(?:MD|PHD|RN|NP|DO|MS|MBA|MPH|"
+                rf"(?:[ \t]+(?:{_PARTICLE}[ \t]+){{0,2}}(?:{_NAME_WORD}|(?!(?:MD|PHD|RN|NP|DO|MS|MBA|MPH|"
                 r"PI|CRA|CEO|CMO|VP|USA|UK|PRC)\b)[A-Z]{2,}(?:['’-][A-Z]{2,})*)){1,2}\b",
                 text[end:],
             )
@@ -985,6 +1018,9 @@ def scan(
             term = " ".join(words)
         if len(term) < 2 or term.lower() in _NOT_A_NAME:
             return
+        if category == "person" and not re.search(r"[\u4e00-\u9fa5]", term) and any(
+                w.lower().strip(".,'’") in _NAME_STOP | _HEADING_WORDS for w in term.split()):
+            return  # "Coordinator, Project": a job title in "Surname, Given" shape
         key = _key(term)
         if key in found:
             if _rank(confidence) > _rank(found[key].confidence):
@@ -1083,6 +1119,21 @@ def scan(
         near = " ".join(near_blocks)
         if _ROLE_NEAR.search(near) or re.search(r"[\w.+-]+@[\w-]+\.", near):
             add(line, "person", "high", "signature block", near + " " + line,
+                len(near) + 1, len(near) + 1 + len(line))
+
+    # The same, one line at a time: a PDF table often comes out as one block
+    # per row or per column ("Valerie Rossi" / "Director, Quality Assurance").
+    flat_lines = [ln.strip() for text in texts for ln in text.splitlines() if ln.strip()]
+    for i, line in enumerate(flat_lines):
+        if (not re.fullmatch(_PNAME, line) or line.lower() in _NOT_A_NAME
+                or _ROLE_NEAR.search(line)
+                or any(w.lower().strip("'’") in _HEADING_WORDS | _NAME_STOP | _OUTLINE_WORDS
+                       for w in line.split())):
+            continue
+        near = " ".join(t for t in flat_lines[max(0, i - 2):i] + flat_lines[i + 1:i + 3]
+                        if len(t) <= 80)
+        if _ROLE_NEAR.search(near):
+            add(line, "person", "high", "table row", near + " " + line,
                 len(near) + 1, len(near) + 1 + len(line))
 
     # A list of people: "Investigators: John Smith, Mary Jones and Wei Zhang",
@@ -1631,12 +1682,14 @@ def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
         lines_of: dict[tuple[int, int], list[dict[str, Any]]] = {}
         wrapped: list[tuple[list[list[Any]], str]] = []
         raw = page.get_text("rawdict")
+        drawings = page.get_drawings()
+        rules = _rules(drawings)
         for bi, block in enumerate(raw.get("blocks", [])):
             # The block's lines joined with a newline that has no box, so a
             # term wrapped onto the next line ("Example" / "Biologics, Inc")
             # is still found -- and redacted on both lines.
             chars: list[dict[str, Any]] = []
-            for li, segs in enumerate(_visual_lines(block.get("lines", []))):
+            for li, segs in enumerate(_visual_lines(block.get("lines", []), rules)):
                 if chars:
                     chars.append({"c": "\n", "bbox": None})
                 own: list[dict[str, Any]] = []
@@ -1679,7 +1732,6 @@ def _write_pdf(src: Path, dst: Path, mapping: dict[str, str]) -> dict[str, int]:
         if not line_hits and not wrapped:
             continue
 
-        drawings = page.get_drawings()
         plans, underlines = [], []
         for key, hits in line_hits.items():
             plan = _plan_line(pm, page, lines_of[key], sorted(hits), drawings)
@@ -1769,7 +1821,33 @@ def _draw_run(pm, page, origin, text: str, span: dict[str, Any], width: float | 
     )
 
 
-def _visual_lines(lines: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+def _rules(drawings: list[dict[str, Any]]) -> list[tuple[float, float, float]]:
+    """The vertical lines on a page -- table borders -- as (x, top, bottom)."""
+    out = []
+    for d in drawings:
+        for item in d.get("items", []):
+            if item[0] == "l":
+                a, b = item[1], item[2]
+                if abs(a.x - b.x) < 1 and abs(a.y - b.y) > 3:
+                    out.append((a.x, min(a.y, b.y), max(a.y, b.y)))
+            elif item[0] == "re":
+                r = item[1]
+                if r.width < 2 and r.height > 3:
+                    out.append(((r.x0 + r.x1) / 2, r.y0, r.y1))
+                elif d.get("color") is not None and r.height > 3:
+                    out += [(r.x0, r.y0, r.y1), (r.x1, r.y0, r.y1)]
+    return out
+
+
+def _inner(pm, r):
+    """A text box without the top and bottom of its line height: a glyph box
+    reaches into the lines above and below in tight leading, and redaction
+    takes every character its box touches -- "roject" was "Project"."""
+    return pm.Rect(r.x0, r.y0 + r.height * 0.2, r.x1, r.y1 - r.height * 0.2)
+
+
+def _visual_lines(lines: list[dict[str, Any]],
+                  rules: list[tuple[float, float, float]] = ()) -> list[list[dict[str, Any]]]:
     """A block's lines, with the pieces of one printed line put back
     together. Justified text often comes out as a line per word or phrase,
     each with its own position; planned one piece at a time, a replacement
@@ -1783,7 +1861,11 @@ def _visual_lines(lines: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
             prev = out[-1][-1]
             pb, lb = prev["bbox"], line["bbox"]
             same_row = abs(pb[3] - lb[3]) <= 0.35 * max(1.0, pb[3] - pb[1])
-            if same_row and lb[0] >= pb[2] - 1 and prev.get("dir", (1, 0)) == line.get("dir", (1, 0)):
+            # ...but two table cells are two lines: a border between them
+            border = any(pb[2] - 0.5 <= x <= lb[0] + 0.5 and top < lb[3] and bottom > lb[1]
+                         for x, top, bottom in rules)
+            if (same_row and not border and lb[0] >= pb[2] - 1
+                    and prev.get("dir", (1, 0)) == line.get("dir", (1, 0))):
                 out[-1].append(line)
                 continue
         out.append([line])
@@ -1807,7 +1889,7 @@ def _plan_line(pm, page, chars: list[dict[str, Any]], hits: list[tuple[int, int,
     if total <= 0.5:
         # Every replacement fits where its term was: write each in place.
         return {
-            "redact": [box(a, b) for a, b, _ in hits],
+            "redact": [_inner(pm, box(a, b)) for a, b, _ in hits],
             "draw": [(chars[a]["origin"], t, chars[a]["span"], box(a, b).width)
                      for a, b, t in hits],
             "underlines": [],
@@ -1820,8 +1902,7 @@ def _plan_line(pm, page, chars: list[dict[str, Any]], hits: list[tuple[int, int,
     room = max(0.0, page.rect.x1 - 18 - line_end)
     factor = 1.0 if total <= room else room / total
     first = hits[0][0]
-    tail = box(first, len(chars))
-    tail = pm.Rect(tail.x0, tail.y0 + tail.height * 0.15, tail.x1, tail.y1 - tail.height * 0.15)
+    tail = _inner(pm, box(first, len(chars)))
     draw: list[tuple[Any, ...]] = []
     shift, i, hi = 0.0, first, 0
     shifts: list[tuple[float, float]] = []  # (original x, shift from there on)
