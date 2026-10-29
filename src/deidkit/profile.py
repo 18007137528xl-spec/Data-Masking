@@ -565,8 +565,28 @@ def suggest(
         return FieldRule(column=col, treatment=t, **kw)
 
     # --- structural / bookkeeping ------------------------------------
-    if named({"DOMAIN", "STUDYID"}):
+    if named({"DOMAIN"}):
         return Suggestion(rule(Treatment.RETAIN), "high", "structural column")
+
+    # --- the study's own number ----------------------------------------
+    # One fixed surrogate per study number, from the same vault space the
+    # protocol masking uses, so STUDYID in SDTM, Study in raw EDC and the
+    # protocol number in the protocol all read the same. Before this, STUDY
+    # was taken for a study day (it ends in DY) and published as written.
+    if named(_STUDY_ID_NAMES):
+        return Suggestion(
+            rule(
+                Treatment.SURROGATE_ID,
+                entity="studyid",
+                prefix="STUDY",
+                # in the number's own shape where it has room for one
+                preserve_format=profile.shapeable,
+                note="the study / protocol number: one fixed surrogate per study, "
+                "the same one the protocol gets",
+            ),
+            "high",
+            "study number",
+        )
 
     # --- identifiers --------------------------------------------------
     if raw_edc and re.fullmatch(r"PT", up) and _pt_kind(profile) != "term":
@@ -1718,7 +1738,14 @@ _EDC_STRUCTURAL = re.compile(
 )
 #: The whole column name is a structural key (searching for PROJECT inside
 #: a name would catch too much).
-_EDC_STRUCTURAL_EXACT = {"PROJECT", "FOLDER", "FORM", "PAGE", "INSTANCE",
+#: Names the study's own number goes by. Rave's "Project" is the study
+#: name, not bookkeeping.
+_STUDY_ID_NAMES = frozenset({
+    "STUDYID", "STUDY", "STUDYNO", "STUDYNUM", "STUDYNUMBER", "STUDYCODE",
+    "STUDYNAME", "PROTOCOL", "PROTOCOLID", "PROTOCOLNO", "PROTOCOLNUMBER",
+    "PROTNO", "PROJECT", "PROJECTNAME", "TRIALID", "TRIAL",
+})
+_EDC_STRUCTURAL_EXACT = {"FOLDER", "FORM", "PAGE", "INSTANCE",
                          "ENVIRONMENT", "STUDYVERSION", "PROTOCOLVERSION"}
 
 #: Subject-key names seen in raw EDC exports, in the order they are trusted.

@@ -80,7 +80,7 @@ def test_parameters_survive_the_round_trip(drafted):
     _, contract, sheet = drafted
     rule = next(
         f for d in contract.domains for f in d.fields
-        if f.treatment is Treatment.SURROGATE_ID
+        if f.treatment is Treatment.SURROGATE_ID and f.entity == "subject"
     )
     text = dec.encode_params(rule)
     assert "entity=subject" in text
