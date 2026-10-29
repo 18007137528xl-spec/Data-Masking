@@ -50,3 +50,30 @@ def test_the_same_number_gets_the_same_surrogate_in_data_and_protocol(vault):
     term = pr.Term("MDV3800-01", "study_id")
     assert pr.propose(term, vault) == data_side
     assert data_side != "MDV3800-01" and len(data_side) == len("MDV3800-01")
+
+
+def test_raw_cm_columns_frequency_indication_full_text_and_drug_names():
+    n = 8
+    cm = pd.DataFrame({
+        "Subject": [f"1001-00{i}" for i in range(n)], "SiteNumber": ["1001"] * n,
+        "CMTRT": ["ibuprofen", "paracetamol", "omeprazole", "aspirin", "metformin",
+                  "insulin", "ibuprofen", "amlodipine"],
+        "CMTRT_FUL": ["ibuprofen 200mg", "paracetamol", "omeprazole", "aspirin",
+                      "metformin", "insulin glargine", "ibuprofen", "amlodipine"],
+        "DRUG_SYN_TMS": ["IBUPROFEN", "PARACETAMOL", "OMEPRAZOLE", "ACETYLSALICYLIC ACID",
+                         "METFORMIN", "INSULIN GLARGINE", "IBUPROFEN", "AMLODIPINE"],
+        "OTH_FRQ_FUL": ["every other day", "", "", "", "once weekly", "", "", ""],
+        "CMDOSFRQ": ["QD", "BID", "QD", "QD", "BID", "QD", "PRN", "QD"],
+        "XX_INDC": ["pain", "fever", "GERD", "prophylaxis", "diabetes", "diabetes",
+                    "pain", "hypertension"],
+        "DRUGSTDAT": ["01/JAN/2021"] * n,
+    })
+    _, sug = pf.draft_contract({"CM": cm}, source="x", raw_edc=True, blind_treatment=True)
+    s = sug["CM"]
+    assert s["CMTRT_FUL"].rule.treatment is s["CMTRT"].rule.treatment
+    assert s["DRUG_SYN_TMS"].rule.treatment is Treatment.LABEL_MAP
+    assert s["DRUG_SYN_TMS"].rule.entity == "treatment_product"
+    for col in ("OTH_FRQ_FUL", "CMDOSFRQ", "XX_INDC"):
+        assert s[col].rule.treatment is Treatment.RETAIN, col
+        assert s[col].confidence == "high", col
+    assert s["DRUGSTDAT"].rule.treatment is Treatment.DATE_SHIFT_RAW

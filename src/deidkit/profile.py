@@ -546,7 +546,8 @@ def suggest(
         # Medidata Rave exports each field several ways: AESEV (the label as
         # shown), AESEV_STD (the coded value), AESTDAT_RAW (as typed),
         # AESTDAT_INT (a SAS number). Recognise the field under its own name.
-        tag = re.match(r"^(.+?)[_ ](RAW|INT|STD|DEC)$", up)
+        # _FUL is the full-text copy of a field (CMTRT_FUL is CMTRT).
+        tag = re.match(r"^(.+?)[_ ](RAW|INT|STD|DEC|FUL|FULL)$", up)
         if tag:
             up, rave_tag = tag.group(1), tag.group(2)
     if raw_edc:
@@ -567,6 +568,55 @@ def suggest(
     # --- structural / bookkeeping ------------------------------------
     if named({"DOMAIN"}):
         return Suggestion(rule(Treatment.RETAIN), "high", "structural column")
+
+    # --- dose frequency and indication -----------------------------------
+    # CMDOSFRQ, XX_FREQ, OTH_FRQ_FUL: how often a dose is taken -- QD, BID,
+    # "every other day". CMINDC, XX_INDC: what it was taken for. Clinical
+    # content the program needs, not identifiers.
+    kind = (
+        "dose frequency" if re.search(r"(FREQ|FRQ|FREQUENCY)$", up)
+        else "indication" if re.search(r"(INDC|INDIC|INDICATION)$", up)
+        else None
+    )
+    if kind:
+        risky = bool(_identifier_hits(profile.top_values))
+        return Suggestion(
+            rule(Treatment.RETAIN, note=f"{kind}: clinical content, kept"
+                 + ("; REVIEW: some values look like names or numbers"
+                    if risky else "")),
+            "medium" if risky else "high",
+            kind,
+        )
+
+    # --- drug names ------------------------------------------------------
+    # DRUG_SYN_TMS, DRUGNAME, DRUG_NAME_FUL: a column named for a drug holds
+    # drug names. Relabelled DRUG A, DRUG B in the namespace the protocol
+    # uses, so a drug is the same label in both -- unless the column is the
+    # drug's date, dose, unit, route or a flag.
+    if (
+        raw_edc
+        and up.startswith("DRUG")
+        and not re.search(
+            r"(DAT|DT|DTC|DTM|DATE|TIM|TM|TIME|DY|DOS|DOSE|DOSU|UNIT|UNITS|U|ROUTE|"
+            r"ROUT|RTE|YN|FL|FLAG|SEQ|NUM|NO|ID|AMT|VOL|STAT|STATUS|ONGO|ONG|CONT|"
+            r"ADM|GIVEN|TAKEN|CHANGE|CHG)$", up)
+        and profile.numeric_rate < 0.5
+        and max(profile.date_like_rate, profile.raw_date_rate) < 0.5
+        and not (profile.top_values and all(_answer_like(v) for v in profile.top_values)
+                 and len(profile.top_values) <= 5)
+    ):
+        return Suggestion(
+            rule(
+                Treatment.LABEL_MAP,
+                entity="treatment_product",
+                prefix="DRUG",
+                keep_values=["Placebo"],
+                note="named for a drug, so it holds drug names: relabelled DRUG A, "
+                "DRUG B in the same namespace as the protocol, placebo kept",
+            ),
+            "high",
+            "drug name (masked)",
+        )
 
     # --- the study's own number ----------------------------------------
     # One fixed surrogate per study number, from the same vault space the
@@ -1507,7 +1557,7 @@ _DATE_PART_SUFFIXES = ("YYYY", "MONTH", "YEAR", "MON", "DAY", "DD", "MO", "MM", 
 #: Rendering tags: how a value is written, not what it means.
 _TOKEN_TAGS = frozenset(
     "RAW INT STD DEC CD C CODE CODED TXT TEXT NAME NM LBL LABEL DESC DECODE "
-    "VAL VALUE N NUM X DISP".split()
+    "VAL VALUE N NUM X DISP FUL FULL".split()
 )
 _TOKEN_DICTIONARY = frozenset(
     "LLT PT HLT HLGT SOC ATC ATC1 ATC2 ATC3 ATC4 PREFTERM MEDDRA WHODRUG".split()
